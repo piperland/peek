@@ -227,7 +227,7 @@ fn upsert_relations(
             i64::from(source.ordinal()),
             relation.target_name.as_str(),
             target.map(|t| t.path().as_str()),
-            target.map(&row::kind_to_sql).transpose()?,
+            target.map(|t| row::kind_to_sql(t.kind())).transpose()?,
             target.map(|t| t.qualified_name()),
             target.map(|t| i64::from(t.ordinal())),
             i64::from(relation.span.start_byte),
@@ -424,7 +424,7 @@ impl ScopeParams {
     }
 
     /// The scope bindings wrapped for `execute`.
-    fn scope_params(&self) -> impl rusqlite::Params<'static> {
+    fn scope_params(&self) -> impl rusqlite::Params {
         rusqlite::params_from_iter(self.scope())
     }
 
@@ -439,7 +439,7 @@ impl ScopeParams {
     fn with_payload_params(
         &self,
         payload: &Value,
-    ) -> impl rusqlite::Params<'static> {
+    ) -> impl rusqlite::Params {
         rusqlite::params_from_iter(self.with_payload(payload))
     }
 }
