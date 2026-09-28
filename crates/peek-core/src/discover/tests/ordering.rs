@@ -74,6 +74,12 @@ fn results_are_sorted_by_path() {
 #[test]
 fn output_paths_preserve_case() {
     let root = TempTree::new("case-preserved");
+    if !root.filesystem_is_case_sensitive() {
+        eprintln!(
+            "skipping: this filesystem is case-insensitive, so Foo.rs and foo.rs cannot both exist"
+        );
+        return;
+    }
     root.file("src/Foo.rs", "fn a() {}");
     root.file("src/foo.rs", "fn b() {}");
     root.file("src/MixedCase/DeepFile.py", "VALUE = 1");
@@ -114,6 +120,10 @@ fn output_paths_preserve_case() {
 #[test]
 fn sorting_does_not_fold_case() {
     let root = TempTree::new("sort-case");
+    if !root.filesystem_is_case_sensitive() {
+        eprintln!("skipping: this filesystem is case-insensitive, so a case fold cannot be observed");
+        return;
+    }
     root.file("src/b.rs", "fn b() {}");
     root.file("src/A.rs", "fn a() {}");
     root.file("src/a.rs", "fn a() {}");

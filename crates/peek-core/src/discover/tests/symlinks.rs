@@ -115,6 +115,10 @@ fn a_symlink_escaping_the_root_is_refused() {
 #[test]
 fn a_relative_symlink_escaping_the_root_is_refused() {
     let root = TempTree::new("symlink-relative-escape");
+    if !root.can_create_symlinks() {
+        eprintln!("skipping: this environment cannot create symlinks (Windows needs Developer Mode)");
+        return;
+    }
     root.file("src/main.rs", "fn main() {}");
 
     // From `src/`, `../..` reaches the parent of the tree — the system temp directory, which

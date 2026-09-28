@@ -87,6 +87,36 @@ impl TempTree {
         platform_symlink(&target, &path)
     }
 
+    /// Whether this environment can create a symlink at all.
+    ///
+    /// Windows refuses `CreateSymbolicLink` without Developer Mode or the SeCreateSymbolicLink
+    /// privilege, so a CI runner frequently cannot. A symlink test that *fails* there reports a
+    /// platform limitation as a product defect, which is worse than useless — it trains a reader
+    /// to ignore red. This reports loudly on stdout and returns `false` instead.
+    pub fn can_create_symlinks(&self) -> bool {
+        let probe_link = self.path.join(".symlink-probe");
+        let probe_target = self.path.join(".symlink-probe-target");
+        fs::write(&probe_target, b"probe").expect("write symlink probe target");
+        let created = platform_symlink(&probe_target, &probe_link).is_ok();
+        let _ = fs::remove_file(&probe_link);
+        let _ = fs::remove_file(&probe_target);
+        created
+    }
+
+    /// Whether this filesystem distinguishes `Foo` from `foo`.
+    ///
+    /// macOS and Windows are case-insensitive by default, so `Foo.rs` and `foo.rs` cannot both
+    /// exist there. A test whose premise is "two files differing only in case survive" is
+    /// unachievable on those platforms and must say so rather than fail.
+    pub fn filesystem_is_case_sensitive(&self) -> bool {
+        let upper = self.path.join("CaseProbe");
+        let lower = self.path.join("caseprobe");
+        fs::write(&upper, b"a").expect("write case probe");
+        let distinct = !lower.exists();
+        let _ = fs::remove_file(&upper);
+        distinct
+    }
+
     /// Create a symlink at `link` pointing at an absolute path outside this tree.
     pub fn escape_link(&self, link: &str, target: &Path) -> io::Result<()> {
         let path = self.path.join(link);

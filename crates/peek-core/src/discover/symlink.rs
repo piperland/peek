@@ -118,9 +118,22 @@ impl SymlinkPolicy {
             }
         };
 
+        // The root is canonicalised **here**, not trusted from the caller. Comparing a
+        // canonicalised target against a merely-constructed root is fragile in a way that shows up
+        // only on some platforms: on Windows `fs::canonicalize` returns a verbatim `\\?\` path,
+        // so a root that was built by joining components and never canonicalised does not
+        // compare equal to one that was, and the containment test answers the wrong way. Both
+        // sides are now produced by the same function, so they cannot disagree about spelling.
+        // A root that cannot be canonicalised (it was removed between configuration and the walk)
+        // is treated as containing nothing, which refuses the link — the safe direction.
+        let canonical_root = fs::canonicalize(root).ok();
+        let inside_root = canonical_root
+            .as_ref()
+            .is_some_and(|root| target.starts_with(root));
+
         // The containment test comes before the type test on purpose. A link out of the
         // repository is refused whether it points at a file, a directory, or a device.
-        if !target.starts_with(root) {
+        if !inside_root {
             return Resolution::Escapes { target };
         }
 
