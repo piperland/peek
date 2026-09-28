@@ -1,0 +1,1 @@
+// Lives in a hidden directory but is indexable, and not in the default set.

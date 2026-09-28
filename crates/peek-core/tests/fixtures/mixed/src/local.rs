@@ -1,0 +1,1 @@
+// Not covered by src/nested/.gitignore.

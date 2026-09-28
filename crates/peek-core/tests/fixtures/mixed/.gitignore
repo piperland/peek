@@ -1,0 +1,27 @@
+# Fixture ignore file for `peek_core::discover` tests.
+#
+# Every rule below is named and asserted in `src/discover/tests/ignore_files.rs`. Changing a rule
+# without changing its test fails the suite, which is the reason these fixtures are committed
+# files rather than trees built inline in a test body: the rule and its proof sit side by side.
+#
+# This tree is deliberately NOT a git repository and has no `.git` directory. Discovery sets
+# `require_git(false)`, so ignore files apply outside a checkout, and this file is the evidence.
+
+# 1. Directory-only rule, anchored at the root. Matches `scratch/` and nothing at any other depth,
+#    and never matches a *file* called `scratch`.
+#    Asserted against: scratch/scratch.py (ignored) and src/scratch/helper.py (indexed).
+/scratch/
+
+# 2. A file glob matching at any depth, and then a negation of one instance of it. The last
+#    matching rule wins, which is the only way `!` is meaningful.
+#    Asserted against: src/api.generated.rs (ignored) and keep.generated.rs (indexed).
+*.generated.rs
+!keep.generated.rs
+
+# 3. A pattern with no slash, which git matches against the file name at any depth.
+#    Asserted against: deep/anywhere.py (ignored) and deep/anywhere_helper.py (indexed).
+anywhere.py
+
+# 4. A pattern anchored to the root, so the same name deeper down survives.
+#    Asserted against: toponly.rs (ignored) and deep/touponly.rs (indexed).
+/toponly.rs
