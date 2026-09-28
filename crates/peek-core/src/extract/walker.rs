@@ -554,7 +554,7 @@ impl<'a> Walker<'a> {
                 && let Some(callee_node) = node.child_by_field_name(rule.callee_field)
             {
                 let callee = self.callee(callee_node);
-                self.emit_call(source, node, &callee);
+                self.emit_call(source.clone(), node, &callee);
             }
 
             if let Some(rule) = self.spec.import_rule(node.kind()) {
@@ -825,7 +825,10 @@ impl<'a> Walker<'a> {
     }
 
     /// The first child of the given kind.
-    fn child_with_kind(&self, node: Node<'_>, kind: &str) -> Option<Node<'_>> {
+    ///
+    /// The returned node borrows the tree, not `self`, so the signature names the tree's
+    /// lifetime explicitly.
+    fn child_with_kind<'t>(&self, node: Node<'t>, kind: &str) -> Option<Node<'t>> {
         node.named_children(&mut node.walk())
             .find(|child| child.kind() == kind)
     }
