@@ -276,10 +276,7 @@ impl<'a> Walker<'a> {
                     ) {
                         return self.text(current);
                     }
-                    let Some(child) = current.named_child(0) else {
-                        return None;
-                    };
-                    current = child;
+                    current = current.named_child(0)?;
                 }
                 None
             }
