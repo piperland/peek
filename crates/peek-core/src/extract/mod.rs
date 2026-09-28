@@ -5,6 +5,9 @@
 
 pub mod grammar;
 pub mod registry;
+pub mod source;
 pub mod spec;
+pub mod walker;
 
 pub use spec::{LanguageSpec, NameStrategy};
+pub use walker::{extract, extract_with, Degradation, ExtractedFile};
