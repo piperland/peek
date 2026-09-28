@@ -185,7 +185,10 @@ fn names_are_stored_lowercased() {
     let custom = ExcludeSet::default().with(["Custom_Dir"]);
     let names: BTreeSet<&str> = custom.names().collect();
 
-    assert!(names.contains("custom_dir"), "names must be lowercased: {names:?}");
+    assert!(
+        names.contains("custom_dir"),
+        "names must be lowercased: {names:?}"
+    );
     assert!(
         !names.contains("Custom_Dir"),
         "the original spelling must not survive: {names:?}"

@@ -153,8 +153,11 @@ impl ExcludeSet {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.names
-            .extend(names.into_iter().map(|name| name.as_ref().to_ascii_lowercase()));
+        self.names.extend(
+            names
+                .into_iter()
+                .map(|name| name.as_ref().to_ascii_lowercase()),
+        );
         self
     }
 

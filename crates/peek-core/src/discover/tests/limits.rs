@@ -77,14 +77,8 @@ fn one_non_utf8_file_does_not_abort_the_repository() {
     let root = TempTree::new("non-utf8");
     root.raw_file("src/good.rs", "fn good() {}");
     root.raw_file("src/also_good.py", "VALUE = 1");
-    root.raw_file(
-        "src/corrupt.rs",
-        b"fn main() { // \xff\xfe not utf-8\n}\n",
-    );
-    root.raw_file(
-        "src/binary.go",
-        [0x00, 0x01, 0x02, 0xff, 0xfe, 0x03],
-    );
+    root.raw_file("src/corrupt.rs", b"fn main() { // \xff\xfe not utf-8\n}\n");
+    root.raw_file("src/binary.go", [0x00, 0x01, 0x02, 0xff, 0xfe, 0x03]);
 
     let discovery = FileDiscovery::new(root.path(), DiscoveryOptions::default())
         .discover()

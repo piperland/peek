@@ -28,7 +28,11 @@ fn two_walks_of_an_unchanged_tree_agree() {
         .expect("second walk")
         .into_report();
 
-    assert_eq!(first.files(), second.files(), "two walks must agree exactly");
+    assert_eq!(
+        first.files(),
+        second.files(),
+        "two walks must agree exactly"
+    );
     assert_eq!(first.stats(), second.stats());
 }
 
@@ -55,7 +59,10 @@ fn results_are_sorted_by_path() {
     let mut sorted = found.clone();
     sorted.sort_unstable();
 
-    assert_eq!(found, sorted, "output must already be in path order: {found:?}");
+    assert_eq!(
+        found, sorted,
+        "output must already be in path order: {found:?}"
+    );
     // Byte order, not a locale collation, so the order is the same on every machine.
     assert_eq!(found[0], "src/Middle.rs");
     assert_eq!(found[found.len() - 1], "src/zebra.rs");
@@ -83,10 +90,7 @@ fn output_paths_preserve_case() {
         contains(discovery.files(), "src/foo.rs"),
         "a lower-case name must survive too"
     );
-    assert!(contains(
-        discovery.files(),
-        "src/MixedCase/DeepFile.py"
-    ));
+    assert!(contains(discovery.files(), "src/MixedCase/DeepFile.py"));
 
     for file in discovery.files() {
         assert_eq!(
@@ -146,7 +150,10 @@ fn duplicate_detection_follows_the_filesystem() {
             "a case-insensitive volume holds one of the two spellings, not both"
         );
     } else {
-        assert!(second_written, "a case-sensitive volume must accept both spellings");
+        assert!(
+            second_written,
+            "a case-sensitive volume must accept both spellings"
+        );
         assert!(contains(discovery.files(), "src/thing.rs"));
         assert_eq!(
             discovery.stats().duplicates,

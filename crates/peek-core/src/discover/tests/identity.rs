@@ -87,7 +87,10 @@ fn repository_with_worktree() -> Option<Repository> {
     run_git(&main, &["init", "--quiet"]);
     // A fixed identity keeps the commit from depending on the machine's global git config, which
     // may have no user configured at all.
-    run_git(&main, &["config", "user.email", "discovery@example.invalid"]);
+    run_git(
+        &main,
+        &["config", "user.email", "discovery@example.invalid"],
+    );
     run_git(&main, &["config", "user.name", "Discovery Test"]);
     std::fs::write(main.join("lib.rs"), "pub fn shared() {}\n").expect("write source");
     run_git(&main, &["add", "lib.rs"]);
@@ -171,7 +174,9 @@ fn the_common_directory_identifies_the_repository() {
         "a worktree shares the repository's common directory"
     );
 
-    let common = main.common_dir().expect("a repository must have a common directory");
+    let common = main
+        .common_dir()
+        .expect("a repository must have a common directory");
     assert!(
         common.ends_with(".git"),
         "the resolved common directory is the repository's .git: {}",
@@ -193,7 +198,10 @@ fn the_same_checkout_always_gets_the_same_id() {
     };
 
     let root = fs_canonical(&repository.main);
-    assert_eq!(RepoIdentity::identify(&root).id(), RepoIdentity::identify(&root).id());
+    assert_eq!(
+        RepoIdentity::identify(&root).id(),
+        RepoIdentity::identify(&root).id()
+    );
 }
 
 /// A path that is not a repository falls back to a root-only hash and **says so**, because the
@@ -225,7 +233,11 @@ fn a_non_repository_falls_back_to_a_path_hash_and_reports_it() {
 fn the_id_tag_and_the_reported_source_agree() {
     for (common_dir, expected_tag, expected_source) in [
         (None, "p", RepoIdSource::Path),
-        (Some(PathBuf::from("/repo/.git")), "g", RepoIdSource::GitCommonDir),
+        (
+            Some(PathBuf::from("/repo/.git")),
+            "g",
+            RepoIdSource::GitCommonDir,
+        ),
     ] {
         let id = RepoId::new(Path::new("/repo"), common_dir.as_deref());
         assert_eq!(id.source(), expected_source);
@@ -265,7 +277,11 @@ fn the_id_is_a_fixed_width_self_describing_string() {
     root.file("main.rs", "fn main() {}");
     let id = RepoId::new(&fs_canonical(root.path()), None);
 
-    assert_eq!(id.as_str().len(), 18, "one tag character, a colon, and 16 hex digits");
+    assert_eq!(
+        id.as_str().len(),
+        18,
+        "one tag character, a colon, and 16 hex digits"
+    );
     assert!(id.as_str().starts_with("p:"));
     assert!(
         id.as_str()[2..].chars().all(|c| c.is_ascii_hexdigit()),
@@ -295,7 +311,10 @@ fn a_walk_reports_the_identity_it_used() {
         .discover()
         .expect("discover");
 
-    assert_eq!(discovery.repo().id(), RepoIdentity::identify(&canonical).id());
+    assert_eq!(
+        discovery.repo().id(),
+        RepoIdentity::identify(&canonical).id()
+    );
     assert_eq!(
         discovery.report().root(),
         canonical.as_path(),

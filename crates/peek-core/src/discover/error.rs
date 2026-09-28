@@ -33,7 +33,11 @@ impl fmt::Display for DiscoveryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DiscoveryError::RootUnreadable { path, source } => {
-                write!(f, "repository root {} could not be read: {source}", path.display())
+                write!(
+                    f,
+                    "repository root {} could not be read: {source}",
+                    path.display()
+                )
             }
             DiscoveryError::RootNotADirectory { path } => {
                 write!(f, "repository root {} is not a directory", path.display())

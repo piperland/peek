@@ -38,7 +38,10 @@ fn an_empty_walk_is_its_own_variant() {
         .expect("discover");
 
     assert!(discovery.is_empty());
-    assert_eq!(discovery.empty_reason(), Some(EmptyReason::NoIndexableExtensions));
+    assert_eq!(
+        discovery.empty_reason(),
+        Some(EmptyReason::NoIndexableExtensions)
+    );
     // The report is still reachable through either variant, so a caller never has to match twice
     // to get at the numbers.
     assert_eq!(discovery.stats().files_examined, 1);
@@ -116,7 +119,9 @@ fn the_report_carries_the_canonical_root() {
 
     assert_eq!(discovery.report().root(), canonical.as_path());
     assert_eq!(
-        discovery.report().absolute(&crate::model::RepoPath::new("src/main.rs").expect("path")),
+        discovery
+            .report()
+            .absolute(&crate::model::RepoPath::new("src/main.rs").expect("path")),
         canonical.join("src/main.rs"),
         "`absolute` must join against the canonical root"
     );
@@ -137,8 +142,7 @@ fn a_non_canonical_root_is_resolved() {
     // A path that is not already in canonical form.
     let roundabout = root.path().join("src").join("..");
     assert_ne!(
-        roundabout,
-        canonical,
+        roundabout, canonical,
         "the fixture must actually need canonicalising for this test to mean anything"
     );
 

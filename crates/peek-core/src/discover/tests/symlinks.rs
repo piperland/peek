@@ -75,7 +75,10 @@ fn a_followed_symlink_carries_the_targets_content() {
 fn a_symlink_escaping_the_root_is_refused() {
     let root = TempTree::new("symlink-escape");
     let outside = TempTree::new("symlink-outside");
-    outside.file("secret.rs", "// not part of the repository\npub fn secret() {}");
+    outside.file(
+        "secret.rs",
+        "// not part of the repository\npub fn secret() {}",
+    );
 
     root.file("src/main.rs", "fn main() {}");
     root.escape_link("src/leak.rs", &outside.path().join("secret.rs"))

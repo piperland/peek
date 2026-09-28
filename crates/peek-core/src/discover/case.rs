@@ -121,9 +121,7 @@ fn probe(path: &Path) -> Option<CaseSensitivity> {
 
     match (fs::canonicalize(path), fs::canonicalize(&candidate)) {
         // The volume reports the same entry under both spellings.
-        (Ok(original), Ok(mirrored)) if original == mirrored => {
-            Some(CaseSensitivity::Insensitive)
-        }
+        (Ok(original), Ok(mirrored)) if original == mirrored => Some(CaseSensitivity::Insensitive),
         // Either the flipped spelling does not resolve at all, or it resolves to a genuinely
         // different entry because the volume holds both. Both mean the volume tells them apart.
         (Ok(_), _) => Some(CaseSensitivity::Sensitive),

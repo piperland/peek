@@ -72,7 +72,6 @@ pub mod options;
 pub mod stats;
 pub mod symlink;
 
-
 #[cfg(test)]
 mod tests;
 
@@ -383,10 +382,11 @@ impl FileDiscovery {
     }
 
     fn canonical_root(&self) -> Result<PathBuf, DiscoveryError> {
-        let metadata = fs::metadata(&self.root).map_err(|source| DiscoveryError::RootUnreadable {
-            path: self.root.clone(),
-            source,
-        })?;
+        let metadata =
+            fs::metadata(&self.root).map_err(|source| DiscoveryError::RootUnreadable {
+                path: self.root.clone(),
+                source,
+            })?;
         if !metadata.is_dir() {
             return Err(DiscoveryError::RootNotADirectory {
                 path: self.root.clone(),
@@ -406,7 +406,8 @@ impl FileDiscovery {
 /// Mutable state for a single walk. Private: a caller can never observe a half-finished walk.
 struct WalkState<'a> {
     root: PathBuf,
-    options: &'a DiscoveryOptions,    case_sensitivity: CaseSensitivity,
+    options: &'a DiscoveryOptions,
+    case_sensitivity: CaseSensitivity,
     candidates: Vec<DiscoveredFile>,
     stats: DiscoveryStats,
     issues: Vec<WalkIssue>,
@@ -535,7 +536,12 @@ impl<'a> WalkState<'a> {
             Ok(metadata) => metadata,
             Err(error) => {
                 self.stats.unreadable += 1;
-                self.issue(path.as_str(), WalkIssueReason::Unreadable { detail: error.to_string() });
+                self.issue(
+                    path.as_str(),
+                    WalkIssueReason::Unreadable {
+                        detail: error.to_string(),
+                    },
+                );
                 return;
             }
         };
@@ -551,7 +557,12 @@ impl<'a> WalkState<'a> {
             Ok(contents) => contents,
             Err(error) => {
                 self.stats.unreadable += 1;
-                self.issue(path.as_str(), WalkIssueReason::Unreadable { detail: error.to_string() });
+                self.issue(
+                    path.as_str(),
+                    WalkIssueReason::Unreadable {
+                        detail: error.to_string(),
+                    },
+                );
                 return;
             }
         };

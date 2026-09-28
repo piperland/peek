@@ -82,8 +82,14 @@ impl Classification {
     ];
 
     /// Directory names whose contents are machine-generated.
-    pub const GENERATED_DIRECTORIES: &'static [&'static str] =
-        &["generated", "gen", "__generated__", "autogen", "proto_gen", "protos_gen"];
+    pub const GENERATED_DIRECTORIES: &'static [&'static str] = &[
+        "generated",
+        "gen",
+        "__generated__",
+        "autogen",
+        "proto_gen",
+        "protos_gen",
+    ];
 
     /// Directory names whose contents are test code.
     pub const TEST_DIRECTORIES: &'static [&'static str] = &[
@@ -153,18 +159,12 @@ impl Classification {
     /// Suffix patterns for test file names, including the extension. Matched
     /// case-insensitively.
     pub const TEST_NAME_SUFFIXES: &'static [&'static str] = &[
-        "_test.",
-        "_tests.",
-        "_spec.",
-        "_specs.",
-        ".test.",
-        ".tests.",
-        ".spec.",
-        ".specs.",
+        "_test.", "_tests.", "_spec.", "_specs.", ".test.", ".tests.", ".spec.", ".specs.",
     ];
 
     /// Whole file names that are test code regardless of directory, compared case-insensitively.
-    pub const TEST_FILE_NAMES: &'static [&'static str] = &["conftest.py", "conftest.js", "setup.py"];
+    pub const TEST_FILE_NAMES: &'static [&'static str] =
+        &["conftest.py", "conftest.js", "setup.py"];
 
     /// How many leading bytes of a file are scanned for a generated-code marker.
     ///
@@ -264,7 +264,11 @@ fn has_component(path: &RepoPath, names: &[&str]) -> bool {
     directories
         .split('/')
         .filter(|component| !component.is_empty())
-        .any(|component| names.iter().any(|name| component.eq_ignore_ascii_case(name)))
+        .any(|component| {
+            names
+                .iter()
+                .any(|name| component.eq_ignore_ascii_case(name))
+        })
 }
 
 /// Whether `haystack`, already lowercased where relevant, contains any of `markers`.

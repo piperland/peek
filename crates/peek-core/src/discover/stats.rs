@@ -166,13 +166,21 @@ impl fmt::Display for WalkIssue {
                 write!(f, "{}: path is not valid UTF-8", self.path)
             }
             WalkIssueReason::SymlinkEscapes { target } => {
-                write!(f, "{}: symlink escapes the repository to {target}", self.path)
+                write!(
+                    f,
+                    "{}: symlink escapes the repository to {target}",
+                    self.path
+                )
             }
             WalkIssueReason::UnresolvableSymlink { detail } => {
                 write!(f, "{}: {detail}", self.path)
             }
             WalkIssueReason::Duplicate => {
-                write!(f, "{}: duplicate under the filesystem's case sensitivity", self.path)
+                write!(
+                    f,
+                    "{}: duplicate under the filesystem's case sensitivity",
+                    self.path
+                )
             }
         }
     }
