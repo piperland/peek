@@ -276,7 +276,7 @@ pub fn refresh(
 fn ingest(
     file: &DiscoveredFile,
     absolute: &Path,
-    mut update: IndexUpdate,
+    update: IndexUpdate,
     outcome: &mut IndexOutcome,
 ) -> IndexUpdate {
     let Some(spec) = crate::extract::registry::get(file.language) else {
@@ -312,7 +312,7 @@ fn ingest(
 /// would leave rows for symbols that no longer exist.
 fn absorb_file(
     extracted: ExtractedFile,
-    mut update: IndexUpdate,
+    update: IndexUpdate,
     outcome: &mut IndexOutcome,
 ) -> IndexUpdate {
     outcome.report.files_indexed += 1;
