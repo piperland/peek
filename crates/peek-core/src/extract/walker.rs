@@ -168,23 +168,18 @@ struct Walker<'a> {
 
 impl<'a> Walker<'a> {
     fn new(spec: &'static LanguageSpec, path: RepoPath, text: &'a str) -> Self {
+        let file_id = EntityId::new(
+            path.clone(),
+            EntityKind::File,
+            path.file_name().to_owned(),
+            0,
+        );
         Self {
             spec,
             source: SourceText::new(text),
-            file_id: EntityId::new(
-                path.clone(),
-                EntityKind::File,
-                path.file_name().to_owned(),
-                0,
-            ),
-            path,
+            file_id: file_id.clone(),
             entities: vec![Entity {
-                id: EntityId::new(
-                    path.clone(),
-                    EntityKind::File,
-                    path.file_name().to_owned(),
-                    0,
-                ),
+                id: file_id,
                 name: path.file_name().to_owned(),
                 signature: None,
                 doc: None,
@@ -193,6 +188,7 @@ impl<'a> Walker<'a> {
                 is_test: false,
                 structural_fingerprint: None,
             }],
+            path,
             relations: Vec::new(),
             scope: Vec::new(),
             ordinals: HashMap::new(),
@@ -604,7 +600,7 @@ impl<'a> Walker<'a> {
         }
 
         if let Some(rule) = self.spec.import_rule(node.kind()) {
-            self.emit_import(subject, node, rule.path_field);
+            self.emit_import(subject.clone(), node, rule.path_field);
         }
 
         if let Some(style) = self.spec.inheritance {
@@ -619,7 +615,6 @@ impl<'a> Walker<'a> {
             self.emit_reference(subject, node);
         }
     }
-
     /// Whether a node's parent excludes its children from reference extraction.
     ///
     /// Without this, every declaration's own name is emitted as a reference to itself.
