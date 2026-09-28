@@ -103,7 +103,7 @@ fn output_paths_preserve_case() {
         discovery
             .files()
             .iter()
-            .any(|file| file.path.as_str().chars().any(char::is_ascii_uppercase)),
+            .any(|file| file.path.as_str().chars().any(|c| c.is_ascii_uppercase())),
         "at least one yielded path must contain an upper-case letter, or this test proves nothing"
     );
 }
