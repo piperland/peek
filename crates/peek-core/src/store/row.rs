@@ -49,6 +49,14 @@ pub struct RelationRow {
 ///
 /// Goes through serde rather than a hand-written `as_str` lookup so the stored text and the
 /// serialised text cannot diverge: there is one definition of each variant's name.
+/// The wire form of a language, kind, or relation kind.
+///
+/// These go through the type's own `as_str()` rather than `serde`, because serde's
+/// `rename_all = "snake_case"` produces a *different* spelling for some variants than the
+/// canonical name does — `Language::ObjectiveC` serialises as `objective_c` while `as_str()`
+/// says `objectivec`. Two spellings of one value is two sources of truth, and a migration that
+/// reads one and writes the other silently changes the stored value. The canonical
+/// `as_str()`/`FromStr` pair is the contract, and `model::Language` already round-trips it.
 pub fn enum_to_sql<T: Serialize>(value: &T) -> Result<String, StoreError> {
     let json = serde_json::to_value(value)
         .map_err(|e| StoreError::Query(format!("cannot encode a stored value: {e}")))?;
@@ -69,12 +77,17 @@ pub fn enum_from_sql<T: DeserializeOwned>(text: &str) -> Result<T, StoreError> {
 
 /// [`enum_to_sql`] specialised to [`EntityKind`], for use in a `params!` list.
 pub fn kind_to_sql(kind: EntityKind) -> Result<String, StoreError> {
-    enum_to_sql(&kind)
+    Ok(kind.as_str().to_owned())
 }
 
 /// [`enum_to_sql`] specialised to [`RelationKind`], for use in a `params!` list.
 pub fn relation_kind_to_sql(kind: RelationKind) -> Result<String, StoreError> {
-    enum_to_sql(&kind)
+    Ok(kind.as_str().to_owned())
+}
+
+/// [`enum_to_sql`] specialised to [`Language`], for use in a `params!` list.
+pub fn language_to_sql(language: Language) -> Result<String, StoreError> {
+    Ok(language.as_str().to_owned())
 }
 
 /// The discriminator stored in `resolution_state`.
@@ -222,7 +235,11 @@ pub fn entity_from_row(row: &Row<'_>) -> Result<Entity, StoreError> {
     let doc = optional_text(row, 6)?;
     let span = span_from_columns(row, 7)?;
     let language = match optional_text(row, 13)? {
-        Some(stored) => Some(enum_from_sql::<Language>(&stored)?),
+        Some(stored) => Some(
+            stored
+                .parse::<Language>()
+                .map_err(|e| StoreError::Query(format!("cannot decode stored language {stored:?}: {e}")))?,
+        ),
         None => None,
     };
     let is_test = int(row, 14)? != 0;
@@ -401,7 +418,7 @@ mod tests {
     #[test]
     fn enum_wire_forms_round_trip() {
         for kind in [EntityKind::Method, EntityKind::Trait, EntityKind::TypeAlias] {
-            let text = enum_to_sql(&kind).expect("encode");
+            let text = kind_to_sql(kind).expect("encode");
             let back: EntityKind = enum_from_sql(&text).expect("decode");
             assert_eq!(back, kind, "round trip changed {kind}");
         }
@@ -411,9 +428,48 @@ mod tests {
             assert_eq!(back, kind, "round trip changed {kind}");
         }
         for language in [Language::Rust, Language::TypeScript, Language::CSharp] {
-            let text = enum_to_sql(&language).expect("encode");
-            let back: Language = enum_from_sql(&text).expect("decode");
+            let text = language_to_sql(language).expect("encode");
+            let back: Language = text.parse().expect("decode");
             assert_eq!(back, language);
+        }
+    }
+
+    #[test]
+    fn the_stored_spelling_and_the_printed_spelling_never_diverge() {
+        // This is the guard for the bug that made `Language::ObjectiveC` store as
+        // `objective_c` while `Language::as_str()` printed `objectivec`: two spellings of one
+        // value, so a migration that read one and wrote the other silently changed stored data.
+        // Serialising through `as_str()` and printing through `as_str()` cannot drift.
+        for language in Language::ALL {
+            assert_eq!(
+                language_to_sql(*language).expect("encode"),
+                language.as_str(),
+                "{language:?} stores and prints differently"
+            );
+        }
+        for kind in [
+            EntityKind::Method,
+            EntityKind::Trait,
+            EntityKind::TypeAlias,
+            EntityKind::TypeParameter,
+            EntityKind::Static,
+        ] {
+            assert_eq!(
+                kind_to_sql(kind).expect("encode"),
+                kind.as_str(),
+                "{kind:?} stores and prints differently"
+            );
+        }
+        for kind in [
+            RelationKind::UsesType,
+            RelationKind::ConfiguredBy,
+            RelationKind::TestedBy,
+        ] {
+            assert_eq!(
+                relation_kind_to_sql(kind).expect("encode"),
+                kind.as_str(),
+                "{kind:?} stores and prints differently"
+            );
         }
     }
 

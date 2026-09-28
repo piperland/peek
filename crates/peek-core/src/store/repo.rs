@@ -178,7 +178,12 @@ mod tests {
         let first = RepoId::discover(dir.path()).expect("discover");
         let second = RepoId::discover(dir.path()).expect("discover");
         assert_eq!(first, second);
-        assert_eq!(first.as_str().len(), 32, "128 bits, hex encoded");
+        assert_eq!(
+            first.as_str().len(),
+            64,
+            "four 64-bit lanes, hex encoded — a store key is hashed from a path, so it is widened \
+             well past a single lane's 32 bits of birthday resistance"
+        );
         assert!(
             first.as_str().chars().all(|c| c.is_ascii_hexdigit()),
             "identity must be hex: {}",

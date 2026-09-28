@@ -304,7 +304,8 @@ fn remove_scope(
     stats: &mut UpdateStats,
 ) -> Result<(), StoreError> {
     let bound = ScopeParams::new(removal);
-    let scope = |column: &str| scope_clause(column, removal);
+    // The scope is the first placeholder in every statement here, so it starts at `?1`.
+    let scope = |column: &str| scope_clause(column, removal, 1);
 
     // Counted before deleting, because afterwards the rows are gone and reporting a wrong number
     // would be reporting a number nobody could check.
@@ -357,19 +358,18 @@ fn demote_incoming(
     let payload = row::resolution_payload(&ResolutionState::Unresolved {
         reason: UnresolvedReason::NoCandidate,
     })?;
-    // The payload's parameter number follows the scope clause's: SQLite numbers placeholders in
-    // the order they appear, so a subtree removal binds it as `?3` and a file removal as `?2`.
-    // Hard-coding one number would silently bind the payload to the wrong value.
-    let slot = bound.scope_len() + 1;
+    // The payload is the **first** placeholder in the statement text, so it binds `?1` and the
+    // scope clause shifts down by one. Numbering these the other way round silently binds the
+    // path to the payload and the payload to the path, which matches nothing and demotes nothing.
     let sql = format!(
         "UPDATE relation SET target_path = NULL, target_kind = NULL, \
          target_qualified_name = NULL, target_ordinal = NULL, \
-         resolution_state = 'unresolved', resolution_json = ?{slot} \
+         resolution_state = 'unresolved', resolution_json = ?1 \
          WHERE EXISTS (SELECT 1 FROM entity e \
            WHERE e.path = relation.target_path AND e.kind = relation.target_kind \
-             AND e.qualified_name = relation.target_qualified_name \
+             AND e.qualified_name = relation.qualified_name_target \
              AND e.entity_ordinal = relation.target_ordinal AND {})",
-        scope_clause("e.path", removal)
+        scope_clause("e.path", removal, 2)
     );
     let carried = Value::Text(payload);
     tx.execute(&sql, bound.with_payload_params(&carried))
@@ -467,10 +467,19 @@ fn count<P: rusqlite::Params>(
 ///
 /// `LIKE` needs `ESCAPE` because `_` and `%` are ordinary characters in a filename, and a file
 /// called `src/we_ird.rs` must not be swept up by a removal of `src/we`.
-fn scope_clause(column: &str, removal: &Removal) -> String {
+///
+/// `first` is the `?n` number of the scope's first placeholder. SQLite numbers placeholders in
+/// the order they appear in the **statement text**, not in the order the bindings are supplied, so
+/// a statement that puts another placeholder before the scope clause must pass the real number.
+/// Getting this wrong binds the two values to each other and fails in a way that looks like a
+/// logic bug rather than a numbering one.
+fn scope_clause(column: &str, removal: &Removal, first: usize) -> String {
     match removal.includes_subdirectories() {
-        false => format!("{column} = ?1"),
-        true => format!("({column} = ?1 OR {column} LIKE ?2 ESCAPE '\\')"),
+        false => format!("{column} = ?{first}"),
+        true => format!(
+            "({column} = ?{first} OR {column} LIKE ?{} ESCAPE '\\')",
+            first + 1
+        ),
     }
 }
 
@@ -544,15 +553,30 @@ mod tests {
     #[test]
     fn a_file_removal_matches_exactly_one_path() {
         let removal = Removal::RemoveFile(path("src/a.rs"));
-        assert_eq!(scope_clause("path", &removal), "path = ?1");
+        assert_eq!(scope_clause("path", &removal, 1), "path = ?1");
     }
 
     #[test]
     fn a_subtree_removal_matches_the_path_and_its_contents() {
         let removal = Removal::RemoveSubtree(path("src"));
         assert_eq!(
-            scope_clause("path", &removal),
+            scope_clause("path", &removal, 1),
             "(path = ?1 OR path LIKE ?2 ESCAPE '\\')"
+        );
+    }
+
+    #[test]
+    fn a_scope_clause_shifts_when_another_placeholder_precedes_it() {
+        // SQLite numbers `?n` by position in the statement text. `demote_incoming` writes the
+        // resolution payload before the scope clause, so the scope has to start at 2. Pinning
+        // this is what stops the two being bound to each other.
+        let removal = Removal::RemoveFile(path("src/a.rs"));
+        assert_eq!(scope_clause("e.path", &removal, 2), "e.path = ?2");
+
+        let subtree = Removal::RemoveSubtree(path("src"));
+        assert_eq!(
+            scope_clause("e.path", &subtree, 2),
+            "(e.path = ?2 OR e.path LIKE ?3 ESCAPE '\\')"
         );
     }
 

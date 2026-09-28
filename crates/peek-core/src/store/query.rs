@@ -334,17 +334,21 @@ impl Store {
     /// exactly that. A plan containing `SCAN relation` where an index was expected is the precise
     /// signature of the Cortex O(V×E) bug returning.
     ///
-    /// The statement is only *planned*, never run, so it takes no parameters. That is why this is
-    /// a diagnostic and not a general explain: a caller who wants a plan for a parameterised
-    /// query passes its SQL with the parameters inlined, which is safe precisely because nothing
-    /// executes.
+    /// The statement is only *planned*, never run, so the parameter **values** do not matter —
+    /// but SQLite still validates the parameter **count** at prepare time, so they are bound as
+    /// NULLs. Passing an empty list fails with "Wrong number of parameters passed to query", which
+    /// is a confusing way to learn that planning still counts.
     pub fn query_plan(&self, sql: &str) -> Result<Vec<String>, StoreError> {
         let mut stmt = self
             .conn()
             .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
             .map_err(|e| StoreError::Query(format!("cannot explain {sql}: {e}")))?;
+        let blanks: Vec<Option<rusqlite::types::Value>> =
+            vec![None; stmt.parameter_count()];
         let details = stmt
-            .query_map([], |row| row.get::<_, String>(3))
+            .query_map(rusqlite::params_from_iter(blanks), |row| {
+                row.get::<_, String>(3)
+            })
             .map_err(|e| StoreError::Query(format!("cannot explain {sql}: {e}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| StoreError::Query(format!("cannot explain {sql}: {e}")))?;
