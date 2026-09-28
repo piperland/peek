@@ -284,12 +284,12 @@ impl Entity {
         match self.span {
             Some(span) => format!(
                 "{} {} — {}:{}",
-                self.kind,
+                self.kind(),
                 self.id.qualified_name(),
                 self.path(),
                 span.start_line
             ),
-            None => format!("{} {}", self.kind, self.id.qualified_name()),
+            None => format!("{} {}", self.kind(), self.id.qualified_name()),
         }
     }
 }
