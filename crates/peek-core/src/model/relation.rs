@@ -252,6 +252,15 @@ impl UnresolvedReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ResolutionState {
+    /// Extracted from source but not yet run through the resolver.
+    ///
+    /// Extraction and resolution are separate stages, and a relation has to cross between them
+    /// carrying whatever evidence the extractor gathered: the module and alias of an import
+    /// binding, the receiver text of a method call, the enclosing scope of a reference. Folding
+    /// that evidence into a later stage would mean re-parsing the file; dropping it would mean
+    /// guessing later. Cortex's central failure was precisely that `Edge.reason` was
+    /// informationally empty, so this variant exists to make the hand-off impossible to lose.
+    Pending { evidence: Evidence },
     /// Proven. Exactly one target, with evidence that supports it.
     Resolved { by: Evidence },
     /// More than one candidate fits and none was proven correct. **The relation is reported, not
@@ -279,6 +288,11 @@ impl ResolutionState {
         )
     }
 
+    /// Whether the relation has been extracted but not yet resolved.
+    pub fn is_pending(&self) -> bool {
+        matches!(self, ResolutionState::Pending { .. })
+    }
+
     /// Whether a consumer must handle the possibility of several targets.
     pub fn is_ambiguous(&self) -> bool {
         matches!(self, ResolutionState::Ambiguous { .. })
@@ -292,9 +306,9 @@ impl ResolutionState {
     /// The evidence class, when there is any.
     pub fn evidence_class(&self) -> Option<&'static str> {
         match self {
-            ResolutionState::Resolved { by } | ResolutionState::Inferred { by, .. } => {
-                Some(by.class())
-            }
+            ResolutionState::Pending { evidence }
+            | ResolutionState::Resolved { by: evidence }
+            | ResolutionState::Inferred { by: evidence, .. } => Some(evidence.class()),
             ResolutionState::Ambiguous { .. } | ResolutionState::Unresolved { .. } => None,
         }
     }
@@ -302,6 +316,7 @@ impl ResolutionState {
     /// A one-line, human-readable rendering for CLI and MCP output.
     pub fn describe(&self) -> String {
         match self {
+            ResolutionState::Pending { evidence } => format!("pending ({evidence})"),
             ResolutionState::Resolved { by } => format!("resolved ({by})"),
             ResolutionState::Inferred { by, basis } => format!("inferred ({by}): {basis}"),
             ResolutionState::Ambiguous { candidates } => {
@@ -336,6 +351,25 @@ pub struct Relation {
 }
 
 impl Relation {
+    /// A relation freshly extracted from source, carrying the evidence the extractor found but
+    /// not yet resolved to a target.
+    pub fn pending(
+        kind: RelationKind,
+        source: EntityId,
+        target_name: impl Into<String>,
+        span: Span,
+        evidence: Evidence,
+    ) -> Self {
+        Self {
+            kind,
+            source,
+            target_name: target_name.into(),
+            target: None,
+            span,
+            resolution: ResolutionState::Pending { evidence },
+        }
+    }
+
     /// A relation whose target is proven.
     pub fn resolved(
         kind: RelationKind,
@@ -582,6 +616,12 @@ mod tests {
     fn resolution_states_round_trip_through_serde() {
         // The distinction only matters if it survives persistence, which is where Cortex lost it.
         let cases = vec![
+            ResolutionState::Pending {
+                evidence: Evidence::ImportBinding {
+                    module: "../payments".to_owned(),
+                    alias: Some("Svc".to_owned()),
+                },
+            },
             ResolutionState::Resolved {
                 by: Evidence::ImportBinding {
                     module: "../payments".to_owned(),
@@ -604,6 +644,71 @@ mod tests {
             let json = serde_json::to_string(&state).expect("serialise");
             let back: ResolutionState = serde_json::from_str(&json).expect("deserialise");
             assert_eq!(back, state, "round trip changed the resolution state");
+        }
+    }
+
+    #[test]
+    fn pending_and_resolved_are_distinguishable_after_round_trip() {
+        // The extractor→resolver hand-off is only safe if "extracted but unresolved" survives
+        // persistence as something other than "resolved". Cortex's `reason` string made these
+        // two records byte-identical, which is why it could never tell them apart.
+        let evidence = Evidence::ReceiverType {
+            receiver: "PaymentService".to_owned(),
+        };
+        let pending = Relation::pending(
+            RelationKind::Calls,
+            id("main"),
+            "retry",
+            span(),
+            evidence.clone(),
+        );
+        let resolved = Relation::resolved(
+            RelationKind::Calls,
+            id("main"),
+            id("retry"),
+            "retry",
+            span(),
+            evidence,
+        );
+
+        assert!(pending.resolution.is_pending());
+        assert!(!pending.resolution.is_resolved());
+        assert!(!pending.is_followable());
+        assert!(resolved.resolution.is_resolved());
+        assert!(!resolved.resolution.is_pending());
+
+        let json = serde_json::to_string(&pending).expect("serialise");
+        let back: Relation = serde_json::from_str(&json).expect("deserialise");
+        assert!(back.resolution.is_pending());
+        assert_eq!(back.resolution.evidence_class(), Some("receiver_type"));
+    }
+
+    #[test]
+    fn pending_carries_the_extractor_evidence() {
+        // An import binding's module and alias must survive to the resolver. Cortex's
+        // `ExtractedRelation` had no alias field at all, so the mapping was destroyed at
+        // extraction time and the resolver had nothing to work with.
+        let relation = Relation::pending(
+            RelationKind::Imports,
+            id("main"),
+            "Svc",
+            span(),
+            Evidence::ImportBinding {
+                module: "../payments/service".to_owned(),
+                alias: None,
+            },
+        );
+        assert!(relation.target.is_none());
+        assert_eq!(relation.target_name, "Svc");
+        match &relation.resolution {
+            ResolutionState::Pending { evidence } => match evidence {
+                Evidence::ImportBinding { module, alias } => {
+                    assert_eq!(module, "../payments/service");
+                    assert!(alias.is_none());
+                }
+                other => panic!("expected an import binding, got {other:?}"),
+            },
+            other => panic!("expected pending, got {other:?}"),
         }
     }
 
