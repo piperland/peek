@@ -1,0 +1,27 @@
+/target
+# Local agent state — never public
+/.agent
+# Local scratch
+/.cache
+/.tmp
+/.peek
+/.peek-*
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+Desktop.ini
+# Editors
+/.idea
+/.vscode
+# Env
+.env
+.env.local
+# Benchmark scratch repos / workspaces
+/benchmarks/workspace
+/benchmarks/repos
+/benchmarks/tmp
