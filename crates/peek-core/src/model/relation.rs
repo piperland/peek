@@ -676,6 +676,7 @@ mod tests {
             "retry",
             span(),
             evidence.clone(),
+            "call to `retry`",
         );
         let resolved = Relation::resolved(
             RelationKind::Calls,
@@ -712,6 +713,7 @@ mod tests {
                 module: "../payments/service".to_owned(),
                 alias: None,
             },
+            "import of `Svc`",
         );
         assert!(relation.target.is_none());
         assert_eq!(relation.target_name, "Svc");

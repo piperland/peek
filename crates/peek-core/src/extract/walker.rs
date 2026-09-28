@@ -857,13 +857,15 @@ impl<'a> Walker<'a> {
         if let Some(name) = self.text(node)
             && !name.is_empty()
         {
+            // `name` is moved into the relation, so the basis is built first.
+            let basis = format!("reference to `{name}`");
             self.relations.push(Relation::pending(
                 RelationKind::References,
                 source,
                 name,
                 self.span(node),
                 Evidence::NameOnly,
-                format!("reference to `{name}`"),
+                basis,
             ));
         }
     }
