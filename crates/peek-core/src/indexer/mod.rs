@@ -390,14 +390,12 @@ fn absorb_discovery(outcome: &mut IndexOutcome, stats: &DiscoveryStats, issues: 
                 bytes: *bytes,
                 cap: *cap,
             },
-            WalkIssueReason::NotUtf8 { offset } => {
-                SkipReason::NotUtf8 { offset: *offset }
-            }
+            WalkIssueReason::NotUtf8 { offset } => SkipReason::NotUtf8 { offset: *offset },
             WalkIssueReason::Unreadable { detail } => SkipReason::Unreadable(detail.clone()),
             WalkIssueReason::OutsideRepository => SkipReason::OutsideRoot,
-            WalkIssueReason::NonUtf8Path => SkipReason::Unreadable(
-                "the path itself is not valid UTF-8".to_owned(),
-            ),
+            WalkIssueReason::NonUtf8Path => {
+                SkipReason::Unreadable("the path itself is not valid UTF-8".to_owned())
+            }
             WalkIssueReason::SymlinkEscapes { target } => {
                 SkipReason::Unreadable(format!("symlink resolves to {target}, outside the root"))
             }

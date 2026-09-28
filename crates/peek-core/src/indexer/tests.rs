@@ -20,26 +20,38 @@ use crate::store::{RepoId, Store};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// A temporary directory that removes itself, so a failing test leaves nothing behind.
-struct TempTree(PathBuf);
+struct TempTree {
+    /// The repository under test.
+    root: PathBuf,
+    /// The index, deliberately **outside** the tree.
+    ///
+    /// D-0006 puts the real cache in `~/.cache/piper/peek/<repo-id>/`, and a test that puts the
+    /// database inside the tree is not testing the deployed layout: it makes discovery walk the
+    /// `.db`, the `-wal` and the `-shm` sidecars and report three unsupported files that exist
+    /// only because the test put them there.
+    db: PathBuf,
+}
 
 impl TempTree {
     fn new(label: &str) -> Self {
         let unique = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "peek-indexer-{}-{label}-{unique}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).expect("create temporary tree");
-        Self(path)
+        let base = format!("peek-indexer-{}-{label}-{unique}", std::process::id());
+        let root = std::env::temp_dir().join(format!("{base}-tree"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create temporary tree");
+        let db = std::env::temp_dir().join(format!("{base}-index/index.db"));
+        if let Some(parent) = db.parent() {
+            fs::create_dir_all(parent).expect("create the index directory");
+        }
+        Self { root, db }
     }
 
     fn path(&self) -> &Path {
-        &self.0
+        &self.root
     }
 
     fn write(&self, relative: &str, contents: &str) -> PathBuf {
-        let path = self.0.join(relative);
+        let path = self.root.join(relative);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create parent directory");
         }
@@ -48,7 +60,7 @@ impl TempTree {
     }
 
     fn write_bytes(&self, relative: &str, contents: &[u8]) -> PathBuf {
-        let path = self.0.join(relative);
+        let path = self.root.join(relative);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create parent directory");
         }
@@ -59,14 +71,16 @@ impl TempTree {
 
 impl Drop for TempTree {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let _ = fs::remove_dir_all(&self.root);
+        if let Some(parent) = self.db.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
     }
 }
 
 fn open_store(tree: &TempTree) -> Store {
     let repo = RepoId::discover(tree.path()).expect("derive a repository id");
-    let db = tree.path().join(".peek-index.db");
-    Store::open(&db, &repo).expect("open the store")
+    Store::open(&tree.db, &repo).expect("open the store")
 }
 
 fn id(path: &str, kind: EntityKind, qualified: &str) -> EntityId {
@@ -195,18 +209,27 @@ fn a_file_with_no_extraction_rules_is_reported_as_unsupported_not_as_empty() {
     // supported while extracting nothing.
     let tree = TempTree::new("unsupported");
     tree.write("src/notes.rst", "Title\n=====\n");
+    tree.write("src/no_extension", "just text\n");
     tree.write("src/real.rs", "fn real() {}\n");
 
     let mut store = open_store(&tree);
     let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
 
-    assert!(outcome.report().files_unsupported >= 1);
+    assert_eq!(outcome.report().files_unsupported, 2, "both have no rules");
+    assert_eq!(outcome.report().files_indexed, 1, "only the Rust file is indexed");
+    let named: Vec<&str> = outcome
+        .skipped
+        .iter()
+        .map(|skipped| skipped.path.as_str())
+        .collect();
+    assert!(named.contains(&"src/notes.rst"), "{named:?}");
+    assert!(named.contains(&"src/no_extension"), "{named:?}");
     assert!(
-        outcome
-            .skipped
-            .iter()
-            .any(|skipped| matches!(skipped.reason, SkipReason::UnsupportedLanguage(_))),
-        "the reason must say the language is unsupported: {:?}",
+        outcome.skipped.iter().all(|skipped| matches!(
+            skipped.reason,
+            SkipReason::UnsupportedExtension(_)
+        )),
+        "the reason must name the missing rules: {:?}",
         outcome.skipped
     );
 }
@@ -436,8 +459,7 @@ fn a_rejected_write_surfaces_as_an_error_rather_than_a_successful_looking_report
     tree.write("src/lib.rs", "fn a() {}\n");
 
     let repo = RepoId::discover(tree.path()).expect("repo id");
-    // Open the store, then replace the database with a directory so SQLite cannot open it.
-    let db = tree.path().join(".peek-index.db");
+    let db = tree.db.clone();
     {
         let _store = Store::open(&db, &repo).expect("open");
     }

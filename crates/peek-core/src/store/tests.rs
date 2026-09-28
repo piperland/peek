@@ -121,11 +121,14 @@ fn bare_entity(file: &str, kind: EntityKind, qualified_name: &str) -> Entity {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_fresh_store_declares_v1_and_starts_before_its_first_commit() {
+fn a_fresh_store_declares_the_current_schema_and_starts_before_its_first_commit() {
     let dir = TempDir::new("fresh");
     let store = open(&dir);
     assert_eq!(store.schema_version(), SCHEMA_VERSION);
-    assert_eq!(store.schema_version(), 1);
+    // Pinned as a literal as well as against the constant, so that bumping `SCHEMA_VERSION`
+    // without noticing this test fails. A silent version bump is how a store starts refusing
+    // every existing index and nobody knows why until a user reports it.
+    assert_eq!(store.schema_version(), 2, "v2 allows the pending resolution state");
     assert_eq!(
         store.generation(),
         0,
@@ -1436,7 +1439,7 @@ fn stats_report_real_counts_and_real_sizes() {
     assert_eq!(stats.inferred_relations, 1);
     assert_eq!(stats.orphan_relations, 0);
     assert_eq!(stats.generation, 1);
-    assert_eq!(stats.schema_version, 1);
+    assert_eq!(stats.schema_version, SCHEMA_VERSION);
     assert!(
         stats.file_size_bytes > 0,
         "an open database is not zero bytes"

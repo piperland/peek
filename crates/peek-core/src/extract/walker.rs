@@ -817,6 +817,13 @@ impl<'a> Walker<'a> {
     /// The subject is a *name*, not an `EntityId`, because inheritance clauses name a type that
     /// this file may not declare. The resolver turns the name into an entity or records why it
     /// could not.
+    ///
+    /// The state is [`ResolutionState::Pending`], not [`ResolutionState::Inferred`]. `Inferred`
+    /// means the target is known *by inference*, and it therefore still has one — the difference
+    /// is how we know, not whether we know. A clause naming a type this file does not declare has
+    /// no target at all yet, which is exactly what `Pending` means. Emitting `Inferred` here
+    /// produced a relation that claimed a resolution it did not have, and the store's own CHECK
+    /// constraint rejected the extractor's normal output — which is the constraint working.
     fn emit_named(
         &mut self,
         kind: RelationKind,
@@ -833,17 +840,14 @@ impl<'a> Walker<'a> {
             .current_entity()
             .cloned()
             .unwrap_or_else(|| self.file_id.clone());
-        self.relations.push(Relation {
+        self.relations.push(Relation::pending(
             kind,
-            source: anchor,
-            target_name: bound.to_owned(),
-            target: None,
+            anchor,
+            bound,
             span,
-            resolution: ResolutionState::Inferred {
-                by: Evidence::NameOnly,
-                basis: format!("{basis} relation on `{subject}`"),
-            },
-        });
+            Evidence::NameOnly,
+            format!("{basis} relation on `{subject}`"),
+        ));
     }
 
     fn emit_reference(&mut self, source: EntityId, node: Node<'_>) {
@@ -1315,7 +1319,7 @@ mod tests {
             .expect("the call to retry");
 
         match &call.resolution {
-            ResolutionState::Pending { evidence } => match evidence {
+            ResolutionState::Pending { evidence, .. } => match evidence {
                 crate::model::Evidence::ReceiverType { receiver } => {
                     assert_eq!(receiver, "service", "the receiver must survive extraction");
                 }
@@ -1392,7 +1396,7 @@ mod tests {
             .find(|r| r.target_name == "Svc")
             .expect("the aliased import");
         match &aliased.resolution {
-            ResolutionState::Pending { evidence } => match evidence {
+            ResolutionState::Pending { evidence, .. } => match evidence {
                 crate::model::Evidence::ImportBinding { module, alias } => {
                     assert_eq!(module, "crate::inner::Service");
                     assert_eq!(alias.as_deref(), Some("Svc"));

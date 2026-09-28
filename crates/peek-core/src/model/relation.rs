@@ -260,7 +260,15 @@ pub enum ResolutionState {
     /// that evidence into a later stage would mean re-parsing the file; dropping it would mean
     /// guessing later. Cortex's central failure was precisely that `Edge.reason` was
     /// informationally empty, so this variant exists to make the hand-off impossible to lose.
-    Pending { evidence: Evidence },
+    Pending {
+        evidence: Evidence,
+        /// How the relation was seen, in one sentence — "`impl` relation on `Stripe`". Carried
+        /// here for the same reason [`ResolutionState::Inferred`] carries one: `peek explain`
+        /// must be able to say *why* an edge exists without re-parsing the file. Folding it into
+        /// the evidence enum would mean a new variant per syntax form, which is how a type turns
+        /// into a taxonomy that has to be extended with every grammar.
+        basis: String,
+    },
     /// Proven. Exactly one target, with evidence that supports it.
     Resolved { by: Evidence },
     /// More than one candidate fits and none was proven correct. **The relation is reported, not
@@ -306,7 +314,7 @@ impl ResolutionState {
     /// The evidence class, when there is any.
     pub fn evidence_class(&self) -> Option<&'static str> {
         match self {
-            ResolutionState::Pending { evidence }
+            ResolutionState::Pending { evidence, .. }
             | ResolutionState::Resolved { by: evidence }
             | ResolutionState::Inferred { by: evidence, .. } => Some(evidence.class()),
             ResolutionState::Ambiguous { .. } | ResolutionState::Unresolved { .. } => None,
@@ -316,7 +324,9 @@ impl ResolutionState {
     /// A one-line, human-readable rendering for CLI and MCP output.
     pub fn describe(&self) -> String {
         match self {
-            ResolutionState::Pending { evidence } => format!("pending ({evidence})"),
+            ResolutionState::Pending { evidence, basis } => {
+                format!("pending ({evidence}): {basis}")
+            }
             ResolutionState::Resolved { by } => format!("resolved ({by})"),
             ResolutionState::Inferred { by, basis } => format!("inferred ({by}): {basis}"),
             ResolutionState::Ambiguous { candidates } => {
@@ -359,6 +369,7 @@ impl Relation {
         target_name: impl Into<String>,
         span: Span,
         evidence: Evidence,
+        basis: impl Into<String>,
     ) -> Self {
         Self {
             kind,
@@ -366,7 +377,10 @@ impl Relation {
             target_name: target_name.into(),
             target: None,
             span,
-            resolution: ResolutionState::Pending { evidence },
+            resolution: ResolutionState::Pending {
+                evidence,
+                basis: basis.into(),
+            },
         }
     }
 
@@ -621,6 +635,7 @@ mod tests {
                     module: "../payments".to_owned(),
                     alias: Some("Svc".to_owned()),
                 },
+                basis: "import of `payments::Svc`".to_owned(),
             },
             ResolutionState::Resolved {
                 by: Evidence::ImportBinding {
@@ -701,7 +716,7 @@ mod tests {
         assert!(relation.target.is_none());
         assert_eq!(relation.target_name, "Svc");
         match &relation.resolution {
-            ResolutionState::Pending { evidence } => match evidence {
+            ResolutionState::Pending { evidence, .. } => match evidence {
                 Evidence::ImportBinding { module, alias } => {
                     assert_eq!(module, "../payments/service");
                     assert!(alias.is_none());
