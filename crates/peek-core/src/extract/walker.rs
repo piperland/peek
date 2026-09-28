@@ -660,6 +660,7 @@ impl<'a> Walker<'a> {
                 callee.name.clone(),
                 span,
                 evidence,
+                format!("call to `{}`", callee.name),
             ));
         }
     }
@@ -675,6 +676,7 @@ impl<'a> Walker<'a> {
         let mut bindings = Vec::new();
         collect_use_bindings(text.as_str(), argument, "", &mut bindings);
         for binding in bindings {
+            let imported = binding.local.clone();
             self.relations.push(Relation::pending(
                 RelationKind::Imports,
                 source.clone(),
@@ -684,6 +686,7 @@ impl<'a> Walker<'a> {
                     module: binding.module,
                     alias: binding.alias,
                 },
+                format!("import of `{}`", imported),
             ));
         }
     }
@@ -860,6 +863,7 @@ impl<'a> Walker<'a> {
                 name,
                 self.span(node),
                 Evidence::NameOnly,
+                format!("reference to `{name}`"),
             ));
         }
     }

@@ -128,7 +128,11 @@ fn a_fresh_store_declares_the_current_schema_and_starts_before_its_first_commit(
     // Pinned as a literal as well as against the constant, so that bumping `SCHEMA_VERSION`
     // without noticing this test fails. A silent version bump is how a store starts refusing
     // every existing index and nobody knows why until a user reports it.
-    assert_eq!(store.schema_version(), 2, "v2 allows the pending resolution state");
+    assert_eq!(
+        store.schema_version(),
+        2,
+        "v2 allows the pending resolution state"
+    );
     assert_eq!(
         store.generation(),
         0,

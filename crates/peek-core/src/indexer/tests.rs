@@ -216,7 +216,11 @@ fn a_file_with_no_extraction_rules_is_reported_as_unsupported_not_as_empty() {
     let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
 
     assert_eq!(outcome.report().files_unsupported, 2, "both have no rules");
-    assert_eq!(outcome.report().files_indexed, 1, "only the Rust file is indexed");
+    assert_eq!(
+        outcome.report().files_indexed,
+        1,
+        "only the Rust file is indexed"
+    );
     let named: Vec<&str> = outcome
         .skipped
         .iter()
@@ -225,10 +229,10 @@ fn a_file_with_no_extraction_rules_is_reported_as_unsupported_not_as_empty() {
     assert!(named.contains(&"src/notes.rst"), "{named:?}");
     assert!(named.contains(&"src/no_extension"), "{named:?}");
     assert!(
-        outcome.skipped.iter().all(|skipped| matches!(
-            skipped.reason,
-            SkipReason::UnsupportedExtension(_)
-        )),
+        outcome
+            .skipped
+            .iter()
+            .all(|skipped| matches!(skipped.reason, SkipReason::UnsupportedExtension(_))),
         "the reason must name the missing rules: {:?}",
         outcome.skipped
     );
