@@ -244,6 +244,7 @@ impl GrammarFacts {
             }
             InheritanceStyle::TraitBounds {
                 trait_decl_node,
+                bounds_field,
                 bounds_node,
                 impl_node,
                 impl_trait_field,
@@ -258,6 +259,9 @@ impl GrammarFacts {
                 }
                 if !self.has_node_type(bounds_node) {
                     problems.push(self.missing_node(language, bounds_node, "trait bounds"));
+                }
+                if !self.has_field(bounds_field) {
+                    problems.push(self.missing_field(language, bounds_field, "trait bounds"));
                 }
                 if !self.has_node_type(impl_node) {
                     problems.push(self.missing_node(language, impl_node, "impl block"));

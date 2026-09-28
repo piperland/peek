@@ -131,8 +131,14 @@ pub enum InheritanceStyle {
     BaseList { node_type: &'static str },
     /// Trait bounds on a trait declaration's `:` clause, plus an `impl Trait for Type` block.
     /// Rust.
+    ///
+    /// `bounds_field` is a **field name** (used with `child_by_field_name`) and `bounds_node` is
+    /// a **node type** (used for validation). They are different strings and conflating them is
+    /// an easy mistake with a silent result: asking for a field named `trait_bounds` when the
+    /// grammar names it `bounds` returns `None`, and every supertrait edge is quietly lost.
     TraitBounds {
         trait_decl_node: &'static str,
+        bounds_field: &'static str,
         bounds_node: &'static str,
         impl_node: &'static str,
         impl_trait_field: &'static str,

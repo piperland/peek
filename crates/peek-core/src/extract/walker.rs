@@ -689,10 +689,11 @@ impl<'a> Walker<'a> {
         match style {
             InheritanceStyle::TraitBounds {
                 trait_decl_node,
-                bounds_node,
+                bounds_field,
                 impl_node,
                 impl_trait_field,
                 impl_type_field,
+                ..
             } => {
                 // `impl Trait for Type` -> implements.
                 if node.kind() == impl_node {
@@ -734,7 +735,7 @@ impl<'a> Walker<'a> {
                         .child_by_field_name("name")
                         .and_then(|child| self.text(child));
                     if let (Some(name), Some(bounds)) =
-                        (name, node.child_by_field_name(bounds_node))
+                        (name, node.child_by_field_name(bounds_field))
                     {
                         let span = self.span(node);
                         for bound in self.bound_names(bounds) {
