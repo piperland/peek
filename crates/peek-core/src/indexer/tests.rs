@@ -89,7 +89,7 @@ fn a_full_build_indexes_the_repository_and_reports_what_it_did() {
     tree.write("README.md", "# not source\n");
 
     let mut store = open_store(&tree);
-    let outcome = build_full(&store, tree.path(), DiscoveryOptions::default()).expect("build");
+    let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
 
     let report = outcome.report();
     assert_eq!(report.files_indexed, 2, "only the two Rust files are source");
@@ -120,7 +120,7 @@ fn a_method_is_indexed_as_a_method_not_a_bare_function() {
     );
 
     let mut store = open_store(&tree);
-    build_full(&store, tree.path(), DiscoveryOptions::default()).expect("build");
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
 
     let methods = store
         .entities_named("charge", 10)
@@ -142,7 +142,7 @@ fn inheritance_is_present_because_it_is_extracted_at_all() {
     );
 
     let mut store = open_store(&tree);
-    let outcome = build_full(&store, tree.path(), DiscoveryOptions::default()).expect("build");
+    let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
 
     let stats = store.stats().expect("stats");
     assert!(
@@ -162,7 +162,7 @@ fn a_non_utf8_file_degrades_alone_and_never_aborts_the_repository() {
     tree.write_bytes("src/bad.rs", b"fn bad() { \xff\xfe }");
 
     let mut store = open_store(&tree);
-    let outcome = build_full(&store, tree.path(), DiscoveryOptions::default()).expect("build");
+    let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
 
     assert_eq!(
         outcome.report().files_indexed, 2,
@@ -192,7 +192,7 @@ fn a_file_with_no_extraction_rules_is_reported_as_unsupported_not_as_empty() {
     tree.write("src/real.rs", "fn real() {}\n");
 
     let mut store = open_store(&tree);
-    let outcome = build_full(&store, tree.path(), DiscoveryOptions::default()).expect("build");
+    let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
 
     assert!(outcome.report().files_unsupported >= 1);
     assert!(
@@ -214,7 +214,7 @@ fn a_refresh_touches_only_the_file_that_changed() {
     tree.write("src/change.rs", "fn before() {}\n");
 
     let mut store = open_store(&tree);
-    build_full(&store, tree.path(), DiscoveryOptions::default()).expect("first build");
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first build");
     let after_first = store.stats().expect("stats").entity_count;
 
     tree.write("src/change.rs", "fn before() {}\nfn after() {}\n");
@@ -260,7 +260,7 @@ fn a_refresh_that_shrinks_a_file_removes_the_symbols_that_left() {
     tree.write("src/shrinks.rs", "fn one() {}\nfn two() {}\n");
 
     let mut store = open_store(&tree);
-    build_full(&store, tree.path(), DiscoveryOptions::default()).expect("first build");
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first build");
     assert!(store.entity(&id("src/shrinks.rs", EntityKind::Function, "two")).expect("q").is_some());
 
     tree.write("src/shrinks.rs", "fn one() {}\n");
@@ -294,7 +294,7 @@ fn deleting_a_file_removes_its_rows_and_leaves_no_orphans() {
     tree.write("src/stays.rs", "fn stays() {}\n");
 
     let mut store = open_store(&tree);
-    build_full(&store, tree.path(), DiscoveryOptions::default()).expect("build");
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
     assert!(store.entity(&id("src/gone.rs", EntityKind::Function, "gone")).expect("q").is_some());
 
     fs::remove_file(tree.path().join("src/gone.rs")).expect("delete the file");
@@ -336,8 +336,8 @@ fn the_generation_is_monotonic_across_rebuilds() {
     tree.write("src/lib.rs", "fn a() {}\n");
 
     let mut store = open_store(&tree);
-    let first = build_full(&store, tree.path(), DiscoveryOptions::default()).expect("first").report().generation;
-    let second = build_full(&store, tree.path(), DiscoveryOptions::default()).expect("second").report().generation;
+    let first = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first").report().generation;
+    let second = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("second").report().generation;
     let third = refresh(
         &mut store,
         tree.path(),
@@ -358,7 +358,7 @@ fn a_refresh_of_nothing_is_not_a_commit() {
     tree.write("src/lib.rs", "fn a() {}\n");
 
     let mut store = open_store(&tree);
-    build_full(&store, tree.path(), DiscoveryOptions::default()).expect("first");
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first");
     let before = store.generation();
 
     let outcome = refresh(&mut store, tree.path(), &[], &DiscoveryOptions::default())
@@ -381,7 +381,7 @@ fn an_oversized_file_is_skipped_and_counted_rather_than_parsed() {
 
     let mut store = open_store(&tree);
     let options = DiscoveryOptions::default().with_max_file_bytes(64);
-    let outcome = build_full(&store, tree.path(), options).expect("build");
+    let outcome = build_full(&mut store, tree.path(), options).expect("build");
 
     assert_eq!(outcome.report().files_indexed, 1, "only the small file is parsed");
     assert!(
@@ -443,7 +443,7 @@ fn the_summary_reports_the_generation_and_the_uncertainty_counts() {
     );
 
     let mut store = open_store(&tree);
-    let outcome = build_full(&store, tree.path(), DiscoveryOptions::default()).expect("build");
+    let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
     let summary = outcome.report().summary();
 
     assert!(summary.contains("generation 1"), "{summary}");
