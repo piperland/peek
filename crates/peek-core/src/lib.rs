@@ -13,6 +13,7 @@
 /// Engine version, surfaced by `peek status` and the MCP `server_info` primitive.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod discover;
 pub mod extract;
 pub mod model;
 
