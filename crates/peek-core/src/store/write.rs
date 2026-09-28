@@ -262,7 +262,9 @@ fn upsert_relations(
                 |found| found.get(0),
             )
             .map_err(|e| {
-                StoreError::Query(format!("a just-written relation could not be found back: {e}"))
+                StoreError::Query(format!(
+                    "a just-written relation could not be found back: {e}"
+                ))
             })?;
 
         // Replace the candidate list wholesale rather than merging. A relation that was
@@ -443,10 +445,7 @@ impl ScopeParams {
     }
 
     /// The scope bindings plus a payload, wrapped for `execute`.
-    fn with_payload_params(
-        &self,
-        payload: &Value,
-    ) -> impl rusqlite::Params {
+    fn with_payload_params(&self, payload: &Value) -> impl rusqlite::Params {
         rusqlite::params_from_iter(self.with_payload(payload))
     }
 }
@@ -463,9 +462,8 @@ fn count<P: rusqlite::Params>(
     let value: i64 = tx
         .query_row(sql, params, |row| row.get(0))
         .map_err(|e| StoreError::Query(format!("counting failed for {sql}: {e}")))?;
-    u64::try_from(value).map_err(|e| {
-        StoreError::Query(format!("a row count came back negative: {value} ({e})"))
-    })
+    u64::try_from(value)
+        .map_err(|e| StoreError::Query(format!("a row count came back negative: {value} ({e})")))
 }
 
 /// The `WHERE` fragment selecting a removal's scope.

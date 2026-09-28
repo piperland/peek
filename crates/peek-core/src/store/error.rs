@@ -39,7 +39,9 @@ pub enum StoreError {
     /// Audit A10: Cortex let two worktrees share one store, and each overwrote the other's
     /// repository record and document set. Keying the store to a repository makes that a loud
     /// error instead of silent data loss.
-    #[error("index store belongs to repository {stored}, not {expected}; refusing to read another repository's index")]
+    #[error(
+        "index store belongs to repository {stored}, not {expected}; refusing to read another repository's index"
+    )]
     WrongRepository { stored: String, expected: String },
 
     /// A read failed, or a stored value could not be decoded back into the model.

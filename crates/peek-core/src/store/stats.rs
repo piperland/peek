@@ -116,7 +116,9 @@ fn count_by_state(conn: &Connection) -> Result<BTreeMap<String, u64>, StoreError
         .prepare("SELECT resolution_state, COUNT(*) FROM relation GROUP BY resolution_state")
         .map_err(|e| StoreError::Query(format!("cannot prepare the state count: {e}")))?;
     let rows = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
         .map_err(|e| StoreError::Query(format!("state count failed: {e}")))?;
     let mut counts = BTreeMap::new();
     for row in rows {
@@ -151,7 +153,10 @@ fn file_size(path: &Path) -> Result<u64, StoreError> {
     match fs::metadata(path) {
         Ok(metadata) => Ok(metadata.len()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(e) => Err(StoreError::Io(format!("cannot stat {}: {e}", path.display()))),
+        Err(e) => Err(StoreError::Io(format!(
+            "cannot stat {}: {e}",
+            path.display()
+        ))),
     }
 }
 

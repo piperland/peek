@@ -263,8 +263,8 @@ impl Store {
             )));
         }
 
-        let on_disk = stats::stored_generation(&self.conn)
-            .map_err(|e| StoreError::Corrupt(e.to_string()))?;
+        let on_disk =
+            stats::stored_generation(&self.conn).map_err(|e| StoreError::Corrupt(e.to_string()))?;
         if on_disk != self.generation {
             return Err(StoreError::Corrupt(format!(
                 "the cached generation is {} but the store records {on_disk}: \

@@ -35,8 +35,10 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 impl TempDir {
     pub(crate) fn new(label: &str) -> Self {
         let unique = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("peek-store-{label}-{}-{unique}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "peek-store-{label}-{}-{unique}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create temp dir");
         Self(path)
@@ -124,7 +126,11 @@ fn a_fresh_store_declares_v1_and_starts_before_its_first_commit() {
     let store = open(&dir);
     assert_eq!(store.schema_version(), SCHEMA_VERSION);
     assert_eq!(store.schema_version(), 1);
-    assert_eq!(store.generation(), 0, "a store that has never committed is at 0");
+    assert_eq!(
+        store.generation(),
+        0,
+        "a store that has never committed is at 0"
+    );
     assert_eq!(store.repo(), &repo(&dir));
     assert_eq!(store.path(), dir.database());
 }
@@ -138,13 +144,11 @@ fn the_generation_advances_by_exactly_one_per_commit() {
     let mut seen = vec![store.generation()];
     for _ in 0..4 {
         let stats = store
-            .apply_update(
-                IndexUpdate::empty().with_entity(bare_entity(
-                    "src/a.rs",
-                    EntityKind::Function,
-                    "f",
-                )),
-            )
+            .apply_update(IndexUpdate::empty().with_entity(bare_entity(
+                "src/a.rs",
+                EntityKind::Function,
+                "f",
+            )))
             .expect("commit");
         seen.push(stats.generation);
     }
@@ -183,7 +187,11 @@ fn the_generation_survives_reopening_and_never_goes_backwards() {
         assert_eq!(store.generation(), 2);
     }
     let mut store = open(&dir);
-    assert_eq!(store.generation(), 2, "reopening must not reset the counter");
+    assert_eq!(
+        store.generation(),
+        2,
+        "reopening must not reset the counter"
+    );
     store
         .apply_update(IndexUpdate::empty().with_entity(bare_entity(
             "src/c.rs",
@@ -199,8 +207,11 @@ fn a_newer_schema_is_refused_with_both_versions_in_the_error() {
     let dir = TempDir::new("too-new");
     drop(open(&dir));
     let raw = Connection::open(dir.database()).expect("raw connection");
-    raw.execute("UPDATE meta SET value = '9999' WHERE key = 'schema_version'", [])
-        .expect("pretend a newer Peek wrote this");
+    raw.execute(
+        "UPDATE meta SET value = '9999' WHERE key = 'schema_version'",
+        [],
+    )
+    .expect("pretend a newer Peek wrote this");
     drop(raw);
 
     match open_err(&dir, &repo(&dir)) {
@@ -233,9 +244,16 @@ fn a_v0_store_is_migrated_and_its_generation_is_carried_forward() {
 
     let store = Store::open(&dir.database(), &identity).expect("v0 must migrate, not fail");
     assert_eq!(store.schema_version(), SCHEMA_VERSION);
-    assert_eq!(store.generation(), 41, "a migration must not reset the counter");
+    assert_eq!(
+        store.generation(),
+        41,
+        "a migration must not reset the counter"
+    );
     let stats = store.stats().expect("stats");
-    assert_eq!(stats.entity_count, 0, "v0 rows of an unknown shape must be discarded");
+    assert_eq!(
+        stats.entity_count, 0,
+        "v0 rows of an unknown shape must be discarded"
+    );
     assert_eq!(stats.relation_count, 0);
 }
 
@@ -294,7 +312,9 @@ fn garbage_written_over_the_file_is_reported_as_corruption_not_as_an_io_error() 
                 "f",
             )))
             .expect("commit");
-        store.checkpoint().expect("checkpoint so the WAL is not replayed");
+        store
+            .checkpoint()
+            .expect("checkpoint so the WAL is not replayed");
     }
     fs::write(dir.database(), vec![b'x'; 4096]).expect("overwrite with garbage");
 
@@ -332,7 +352,8 @@ fn verify_accepts_a_healthy_store_and_rejects_one_whose_metadata_is_damaged() {
     store.verify().expect("a healthy store verifies");
 
     let raw = Connection::open(dir.database()).expect("raw connection");
-    raw.execute_batch("DROP TABLE meta").expect("damage the metadata");
+    raw.execute_batch("DROP TABLE meta")
+        .expect("damage the metadata");
     drop(raw);
 
     match store.verify() {
@@ -357,7 +378,10 @@ fn verify_catches_a_cached_generation_that_no_longer_matches_disk() {
 
     match store.verify() {
         Err(StoreError::Corrupt(detail)) => {
-            assert!(detail.contains("99"), "detail should name both numbers: {detail}");
+            assert!(
+                detail.contains("99"),
+                "detail should name both numbers: {detail}"
+            );
         }
         Ok(()) => panic!("a diverged generation must not verify"),
         Err(other) => panic!("expected Corrupt, got {other}"),
@@ -391,7 +415,10 @@ fn an_entity_round_trips_with_every_field_intact() {
         .apply_update(IndexUpdate::empty().with_entity(original.clone()))
         .expect("commit");
 
-    let read = store.entity(&original.id).expect("query").expect("the entity is there");
+    let read = store
+        .entity(&original.id)
+        .expect("query")
+        .expect("the entity is there");
     assert_eq!(read, original);
     assert_eq!(read.name, "retry");
     assert_eq!(
@@ -401,7 +428,10 @@ fn an_entity_round_trips_with_every_field_intact() {
     assert_eq!(read.span, Some(span(120)));
     assert_eq!(read.language, Some(Language::Rust));
     assert!(read.is_test);
-    assert_eq!(read.structural_fingerprint.as_deref(), Some("blake3:9f2c1a"));
+    assert_eq!(
+        read.structural_fingerprint.as_deref(),
+        Some("blake3:9f2c1a")
+    );
     assert_eq!(read.id().kind(), EntityKind::Method);
     assert_eq!(read.id().qualified_name(), "Service.retry");
 }
@@ -444,7 +474,11 @@ fn entities_differing_only_in_ordinal_are_stored_separately() {
         )
         .expect("commit");
 
-    assert_eq!(store.stats().expect("stats").entity_count, 2, "the ordinal is identity");
+    assert_eq!(
+        store.stats().expect("stats").entity_count,
+        2,
+        "the ordinal is identity"
+    );
     assert!(store.entity(&first.id).expect("query").is_some());
     assert!(store.entity(&second.id).expect("query").is_some());
 }
@@ -570,9 +604,17 @@ fn all_four_resolution_states_round_trip_with_their_evidence_intact() {
         )
         .expect("read");
     let inferred = implements.remove(0);
-    assert!(inferred.resolution.describe().contains("the only helper in src"));
+    assert!(
+        inferred
+            .resolution
+            .describe()
+            .contains("the only helper in src")
+    );
     assert!(inferred.is_followable());
-    assert_eq!(inferred.resolution.evidence_class(), Some("qualified_name_in_scope"));
+    assert_eq!(
+        inferred.resolution.evidence_class(),
+        Some("qualified_name_in_scope")
+    );
 }
 
 #[test]
@@ -584,7 +626,9 @@ fn an_ambiguous_relation_keeps_its_candidate_list_and_its_order() {
     relations_fixture(&mut store);
 
     let caller = id("src/caller.rs", EntityKind::Function, "main", 0);
-    let edges = store.outgoing(&caller, Some(RelationKind::Calls), 32).expect("read");
+    let edges = store
+        .outgoing(&caller, Some(RelationKind::Calls), 32)
+        .expect("read");
     let ambiguous = edges
         .iter()
         .find(|r| r.target_name == "render")
@@ -599,7 +643,10 @@ fn an_ambiguous_relation_keeps_its_candidate_list_and_its_order() {
     let stored = store
         .ambiguous_candidates(&caller, RelationKind::Calls, "render")
         .expect("query");
-    assert_eq!(stored, *candidates, "the candidate list is queryable on its own");
+    assert_eq!(
+        stored, *candidates,
+        "the candidate list is queryable on its own"
+    );
 }
 
 #[test]
@@ -689,8 +736,7 @@ fn an_induced_write_failure_rolls_the_whole_batch_back() {
 
     let stats = store.stats().expect("stats");
     assert_eq!(
-        stats.entity_count,
-        0,
+        stats.entity_count, 0,
         "not even the rows written before the failure survive"
     );
     assert_eq!(stats.relation_count, 0);
@@ -726,7 +772,11 @@ fn an_induced_write_failure_does_not_advance_the_generation() {
             )),
     );
     assert!(failed.is_err(), "the write must fail");
-    assert_eq!(store.generation(), before, "a rolled-back commit is not a commit");
+    assert_eq!(
+        store.generation(),
+        before,
+        "a rolled-back commit is not a commit"
+    );
 }
 
 #[test]
@@ -782,11 +832,21 @@ fn removing_a_file_removes_its_entities_relations_and_candidates() {
 
     let after = store.stats().expect("stats");
     assert_eq!(after.entity_count, 2);
-    assert_eq!(after.relation_count, 1, "the `implements` edge from target.rs survives");
-    assert_eq!(after.candidate_count, 0, "candidates go with their relation");
+    assert_eq!(
+        after.relation_count, 1,
+        "the `implements` edge from target.rs survives"
+    );
+    assert_eq!(
+        after.candidate_count, 0,
+        "candidates go with their relation"
+    );
     assert!(
         store
-            .outgoing(&id("src/caller.rs", EntityKind::Function, "main", 0), None, 32)
+            .outgoing(
+                &id("src/caller.rs", EntityKind::Function, "main", 0),
+                None,
+                32
+            )
             .expect("read")
             .is_empty()
     );
@@ -878,7 +938,11 @@ fn removing_a_referenced_file_demotes_the_edges_that_pointed_into_it() {
         "a demoted edge no longer points anywhere"
     );
     let remaining = store
-        .outgoing(&id("src/caller.rs", EntityKind::Function, "main", 0), None, 32)
+        .outgoing(
+            &id("src/caller.rs", EntityKind::Function, "main", 0),
+            None,
+            32,
+        )
         .expect("read");
     let demoted = remaining
         .iter()
@@ -954,7 +1018,10 @@ fn outgoing_uses_the_source_index_and_builds_no_temporary_btree() {
 fn outgoing_with_a_kind_filter_still_uses_the_source_index() {
     let dir = TempDir::new("plan-outgoing-kind");
     let store = open(&dir);
-    let plan = plan_of(&store, &outgoing_sql(Some(RelationKind::Calls)).expect("sql"));
+    let plan = plan_of(
+        &store,
+        &outgoing_sql(Some(RelationKind::Calls)).expect("sql"),
+    );
     assert!(plan.contains("relation_by_source"), "plan: {plan}");
     assert!(!plan.contains("TEMP B-TREE"), "plan: {plan}");
 }
@@ -982,7 +1049,10 @@ fn the_entity_lookups_use_their_indexes_rather_than_scanning() {
         (ENTITIES_NAMED, "entity_by_name"),
         (ENTITIES_WITH_QUALIFIED_NAME, "entity_by_qualified_name"),
     ] {
-        let plan = plan_of(&store, &format!("SELECT {ENTITY_COLUMNS} FROM entity {template}"));
+        let plan = plan_of(
+            &store,
+            &format!("SELECT {ENTITY_COLUMNS} FROM entity {template}"),
+        );
         assert!(plan.contains(index), "expected {index} in: {plan}");
         assert!(!plan.contains("TEMP B-TREE"), "plan: {plan}");
     }
@@ -1058,16 +1128,14 @@ fn a_three_hop_traversal_over_five_thousand_entities_returns_the_exact_closure()
             .upserted_entities
             .push(bare_entity(&file, EntityKind::Function, &name));
         for target in successors(i) {
-            update
-                .upserted_relations
-                .push(Relation::resolved(
-                    RelationKind::Calls,
-                    graph_id(i),
-                    graph_id(target),
-                    format!("f{target}"),
-                    span((i * 4) as u32),
-                    Evidence::SameFile,
-                ));
+            update.upserted_relations.push(Relation::resolved(
+                RelationKind::Calls,
+                graph_id(i),
+                graph_id(target),
+                format!("f{target}"),
+                span((i * 4) as u32),
+                Evidence::SameFile,
+            ));
         }
     }
     store.apply_update(update).expect("commit the graph");
@@ -1089,7 +1157,10 @@ fn a_three_hop_traversal_over_five_thousand_entities_returns_the_exact_closure()
         reached, expected,
         "the indexed traversal must agree with the reference closure"
     );
-    assert!(!expected.is_empty(), "the fixture must actually reach something");
+    assert!(
+        !expected.is_empty(),
+        "the fixture must actually reach something"
+    );
     assert_eq!(
         same.len(),
         successors(0).len(),
@@ -1178,11 +1249,20 @@ fn adjacency_honours_its_limit_deterministically() {
     let second = store.outgoing(&source.id, None, 3).expect("read again");
     assert_eq!(first.len(), 3, "the limit is a limit");
     assert_eq!(
-        first.iter().map(|r| r.target_name.clone()).collect::<Vec<_>>(),
-        second.iter().map(|r| r.target_name.clone()).collect::<Vec<_>>(),
+        first
+            .iter()
+            .map(|r| r.target_name.clone())
+            .collect::<Vec<_>>(),
+        second
+            .iter()
+            .map(|r| r.target_name.clone())
+            .collect::<Vec<_>>(),
         "the index order makes truncation deterministic"
     );
-    assert_eq!(store.outgoing(&source.id, None, 64).expect("read").len(), 10);
+    assert_eq!(
+        store.outgoing(&source.id, None, 64).expect("read").len(),
+        10
+    );
 }
 
 #[test]
@@ -1195,17 +1275,33 @@ fn the_traversal_primitives_follow_only_proven_edges() {
     relations_fixture(&mut store);
     let caller = id("src/caller.rs", EntityKind::Function, "main", 0);
 
-    let proven = store.callees(&caller, Some(RelationKind::Calls), 32).expect("read");
+    let proven = store
+        .callees(&caller, Some(RelationKind::Calls), 32)
+        .expect("read");
     assert_eq!(proven.len(), 1, "one of three calls is provably resolved");
     assert_eq!(proven[0].path().as_str(), "src/target.rs");
 
-    let all = store.outgoing(&caller, Some(RelationKind::Calls), 32).expect("read");
-    assert_eq!(all.len(), 3, "the ambiguity is still visible to a caller who asks for it");
+    let all = store
+        .outgoing(&caller, Some(RelationKind::Calls), 32)
+        .expect("read");
+    assert_eq!(
+        all.len(),
+        3,
+        "the ambiguity is still visible to a caller who asks for it"
+    );
 
     let callers = store
-        .callers(&id("src/target.rs", EntityKind::Function, "helper", 0), None, 32)
+        .callers(
+            &id("src/target.rs", EntityKind::Function, "helper", 0),
+            None,
+            32,
+        )
         .expect("read");
-    assert_eq!(callers.len(), 1, "the demoted-elsewhere relation is not a caller");
+    assert_eq!(
+        callers.len(),
+        1,
+        "the demoted-elsewhere relation is not a caller"
+    );
     assert_eq!(callers[0].path().as_str(), "src/caller.rs");
 }
 
@@ -1274,9 +1370,17 @@ fn wal_and_foreign_keys_are_actually_enabled_not_merely_requested() {
         .query_row("PRAGMA synchronous", [], |row| row.get(0))
         .expect("synchronous");
     assert_eq!(journal.to_ascii_lowercase(), "wal");
-    assert_eq!(foreign_keys, 1, "the schema's foreign keys must be enforced");
-    assert_eq!(synchronous, 1, "NORMAL, which is what the design asks for under WAL");
-    store.verify().expect("a store with these settings is healthy");
+    assert_eq!(
+        foreign_keys, 1,
+        "the schema's foreign keys must be enforced"
+    );
+    assert_eq!(
+        synchronous, 1,
+        "NORMAL, which is what the design asks for under WAL"
+    );
+    store
+        .verify()
+        .expect("a store with these settings is healthy");
 }
 
 #[test]
@@ -1311,7 +1415,9 @@ fn checkpoint_is_callable_after_a_write_and_empties_the_write_ahead_log() {
     );
 
     // Callable again on a clean store, which is what an idle daemon does.
-    store.checkpoint().expect("a second checkpoint is not an error");
+    store
+        .checkpoint()
+        .expect("a second checkpoint is not an error");
 }
 
 #[test]
@@ -1331,7 +1437,10 @@ fn stats_report_real_counts_and_real_sizes() {
     assert_eq!(stats.orphan_relations, 0);
     assert_eq!(stats.generation, 1);
     assert_eq!(stats.schema_version, 1);
-    assert!(stats.file_size_bytes > 0, "an open database is not zero bytes");
+    assert!(
+        stats.file_size_bytes > 0,
+        "an open database is not zero bytes"
+    );
     assert_eq!(
         stats.entity_count + stats.relation_count + stats.candidate_count,
         9,
@@ -1449,7 +1558,10 @@ fn a_second_upsert_replaces_the_candidate_list_rather_than_appending_to_it() {
         )))
         .expect("commit");
     let stats = store.stats().expect("stats");
-    assert_eq!(stats.candidate_count, 1, "the list is replaced, not appended to");
+    assert_eq!(
+        stats.candidate_count, 1,
+        "the list is replaced, not appended to"
+    );
     assert_eq!(stats.ambiguous_relations, 1);
     assert_eq!(
         store
@@ -1495,7 +1607,10 @@ fn a_relation_that_becomes_resolved_loses_its_candidate_list() {
         )))
         .expect("commit");
     let stats = store.stats().expect("stats");
-    assert_eq!(stats.candidate_count, 0, "a resolved edge has no candidate list");
+    assert_eq!(
+        stats.candidate_count, 0,
+        "a resolved edge has no candidate list"
+    );
     assert_eq!(stats.resolved_relations, 1);
     assert_eq!(stats.ambiguous_relations, 0);
     assert!(

@@ -245,7 +245,10 @@ mod tests {
 
         let main_id = RepoId::discover(main.path()).expect("discover main");
         let work_id = RepoId::discover(work.path()).expect("discover worktree");
-        assert_ne!(main_id, work_id, "a worktree must not inherit its repository's index");
+        assert_ne!(
+            main_id, work_id,
+            "a worktree must not inherit its repository's index"
+        );
     }
 
     #[test]

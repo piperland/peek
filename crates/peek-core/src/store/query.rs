@@ -349,8 +349,7 @@ impl Store {
             .conn()
             .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
             .map_err(|e| StoreError::Query(format!("cannot explain {sql}: {e}")))?;
-        let blanks: Vec<Option<rusqlite::types::Value>> =
-            vec![None; stmt.parameter_count()];
+        let blanks: Vec<Option<rusqlite::types::Value>> = vec![None; stmt.parameter_count()];
         let details = stmt
             .query_map(rusqlite::params_from_iter(blanks), |row| {
                 row.get::<_, String>(3)
@@ -415,10 +414,7 @@ impl Store {
     /// and joining on every adjacency query would tax the resolved path that dominates real
     /// workloads. The `IN` list is bounded by the page size of the original query, so this is
     /// still a bounded number of seeks.
-    fn attach_candidates(
-        &self,
-        rows: Vec<row::RelationRow>,
-    ) -> Result<Vec<Relation>, StoreError> {
+    fn attach_candidates(&self, rows: Vec<row::RelationRow>) -> Result<Vec<Relation>, StoreError> {
         let ambiguous: Vec<i64> = rows
             .iter()
             .filter(|r| row::is_ambiguous(&r.relation.resolution))

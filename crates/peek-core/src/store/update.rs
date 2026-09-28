@@ -156,7 +156,12 @@ mod tests {
         assert!(update.is_empty());
         // The builders consume `self` and return the new value, so each assertion needs its own
         // starting point rather than reusing a value that has already been moved.
-        assert!(!update.clone().with_entity(entity("src/a.rs", "main")).is_empty());
+        assert!(
+            !update
+                .clone()
+                .with_entity(entity("src/a.rs", "main"))
+                .is_empty()
+        );
         assert!(!update.removing_file(path("src/a.rs")).is_empty());
     }
 

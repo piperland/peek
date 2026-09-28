@@ -270,8 +270,8 @@ pub fn write_meta(conn: &Connection, key: &str, value: &str) -> Result<(), Store
 #[cfg(test)]
 mod tests {
     use super::{
-        META_GENERATION, META_REPO_ID, META_SCHEMA_VERSION, OWNED_TABLES, SCHEMA_V0, SCHEMA_VERSION,
-        create_v1, has_table, migrate, read_meta, write_meta,
+        META_GENERATION, META_REPO_ID, META_SCHEMA_VERSION, OWNED_TABLES, SCHEMA_V0,
+        SCHEMA_VERSION, create_v1, has_table, migrate, read_meta, write_meta,
     };
     use rusqlite::Connection;
 
@@ -280,7 +280,10 @@ mod tests {
         let conn = Connection::open_in_memory().expect("in-memory database");
         create_v1(&conn).expect("create v1");
         write_meta(&conn, META_SCHEMA_VERSION, "1").expect("write version");
-        assert_eq!(read_meta(&conn, META_SCHEMA_VERSION).unwrap().as_deref(), Some("1"));
+        assert_eq!(
+            read_meta(&conn, META_SCHEMA_VERSION).unwrap().as_deref(),
+            Some("1")
+        );
     }
 
     #[test]
@@ -288,7 +291,10 @@ mod tests {
         let conn = Connection::open_in_memory().expect("in-memory database");
         create_v1(&conn).expect("create v1");
         for table in OWNED_TABLES {
-            assert!(has_table(&conn, table).expect("sqlite_master"), "missing {table}");
+            assert!(
+                has_table(&conn, table).expect("sqlite_master"),
+                "missing {table}"
+            );
         }
     }
 
@@ -304,7 +310,10 @@ mod tests {
     fn migrating_the_current_version_is_a_no_op() {
         let mut conn = Connection::open_in_memory().expect("in-memory database");
         create_v1(&conn).expect("create v1");
-        assert_eq!(migrate(&mut conn, SCHEMA_VERSION).expect("no-op"), SCHEMA_VERSION);
+        assert_eq!(
+            migrate(&mut conn, SCHEMA_VERSION).expect("no-op"),
+            SCHEMA_VERSION
+        );
     }
 
     #[test]
@@ -317,13 +326,19 @@ mod tests {
         .expect("build a v0 store");
         assert_eq!(read_meta(&conn, META_SCHEMA_VERSION).unwrap(), None);
 
-        assert_eq!(migrate(&mut conn, SCHEMA_V0).expect("migrate"), SCHEMA_VERSION);
+        assert_eq!(
+            migrate(&mut conn, SCHEMA_V0).expect("migrate"),
+            SCHEMA_VERSION
+        );
         assert_eq!(
             read_meta(&conn, META_GENERATION).unwrap().as_deref(),
             Some("41"),
             "the generation counter must survive a migration; it is never reset"
         );
-        assert_eq!(read_meta(&conn, META_REPO_ID).unwrap().as_deref(), Some("abc"));
+        assert_eq!(
+            read_meta(&conn, META_REPO_ID).unwrap().as_deref(),
+            Some("abc")
+        );
     }
 
     #[test]
@@ -332,7 +347,10 @@ mod tests {
         conn.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
             .expect("build a v0 store");
         migrate(&mut conn, SCHEMA_V0).expect("migrate");
-        assert_eq!(read_meta(&conn, META_GENERATION).unwrap().as_deref(), Some("0"));
+        assert_eq!(
+            read_meta(&conn, META_GENERATION).unwrap().as_deref(),
+            Some("0")
+        );
     }
 
     #[test]

@@ -235,11 +235,9 @@ pub fn entity_from_row(row: &Row<'_>) -> Result<Entity, StoreError> {
     let doc = optional_text(row, 6)?;
     let span = span_from_columns(row, 7)?;
     let language = match optional_text(row, 13)? {
-        Some(stored) => Some(
-            stored
-                .parse::<Language>()
-                .map_err(|e| StoreError::Query(format!("cannot decode stored language {stored:?}: {e}")))?,
-        ),
+        Some(stored) => Some(stored.parse::<Language>().map_err(|e| {
+            StoreError::Query(format!("cannot decode stored language {stored:?}: {e}"))
+        })?),
         None => None,
     };
     let is_test = int(row, 14)? != 0;
@@ -276,10 +274,15 @@ pub fn relation_from_row(row: &Row<'_>) -> Result<RelationRow, StoreError> {
     let ordinal_slot = row
         .get::<_, Option<i64>>(10)
         .map_err(|e| StoreError::Query(format!("target ordinal is not readable: {e}")))?;
-    let present = [path_slot.is_some(), kind_slot.is_some(), name_slot.is_some(), ordinal_slot.is_some()]
-        .iter()
-        .filter(|present| **present)
-        .count();
+    let present = [
+        path_slot.is_some(),
+        kind_slot.is_some(),
+        name_slot.is_some(),
+        ordinal_slot.is_some(),
+    ]
+    .iter()
+    .filter(|present| **present)
+    .count();
 
     let target = match present {
         0 => None,
@@ -289,10 +292,7 @@ pub fn relation_from_row(row: &Row<'_>) -> Result<RelationRow, StoreError> {
                 path_from_sql(&slot(path_slot, id)?)?,
                 stored_kind,
                 slot(name_slot, id)?,
-                to_u32(
-                    ordinal_slot.unwrap_or_default(),
-                    "target ordinal",
-                )?,
+                to_u32(ordinal_slot.unwrap_or_default(), "target ordinal")?,
             ))
         }
         other => {
@@ -324,9 +324,9 @@ pub fn relation_from_row(row: &Row<'_>) -> Result<RelationRow, StoreError> {
 /// Unwrap one of the four target columns, which the all-or-nothing check has already proven
 /// present.
 fn target_column(columns: &[Option<String>; 4], index: usize) -> Result<&str, StoreError> {
-    columns[index]
-        .as_deref()
-        .ok_or_else(|| StoreError::Corrupt("target column is NULL after an all-or-nothing check".to_owned()))
+    columns[index].as_deref().ok_or_else(|| {
+        StoreError::Corrupt("target column is NULL after an all-or-nothing check".to_owned())
+    })
 }
 
 /// Rebuild a [`ResolutionState`] from its tag and payload.
@@ -347,14 +347,12 @@ fn resolution_from_sql(
     // has already failed; nothing further needs validating. What still needs checking is that the
     // tag and the payload describe the *same* state.
     let rebuilt = match (tag, &stored) {
-        ("resolved", ResolutionState::Resolved { by }) => ResolutionState::Resolved {
-            by: by.clone(),
-        },
-        ("unresolved", ResolutionState::Unresolved { reason }) => {
-            ResolutionState::Unresolved {
-                reason: reason.clone(),
-            }
+        ("resolved", ResolutionState::Resolved { by }) => {
+            ResolutionState::Resolved { by: by.clone() }
         }
+        ("unresolved", ResolutionState::Unresolved { reason }) => ResolutionState::Unresolved {
+            reason: reason.clone(),
+        },
         ("inferred", ResolutionState::Inferred { by, basis }) => ResolutionState::Inferred {
             by: by.clone(),
             basis: basis.clone(),
@@ -442,7 +440,11 @@ mod tests {
             let back: EntityKind = enum_from_sql(&text).expect("decode");
             assert_eq!(back, kind, "round trip changed {kind}");
         }
-        for kind in [RelationKind::Calls, RelationKind::Implements, RelationKind::UsesType] {
+        for kind in [
+            RelationKind::Calls,
+            RelationKind::Implements,
+            RelationKind::UsesType,
+        ] {
             let text = relation_kind_to_sql(kind).expect("encode");
             let back: RelationKind = enum_from_sql(&text).expect("decode");
             assert_eq!(back, kind, "round trip changed {kind}");
@@ -498,7 +500,10 @@ mod tests {
         // A row a human can read in `sqlite3` is worth more than a few bytes, and someone
         // debugging a bad index should not have to look up an enum discriminant. Crucially the
         // stored spelling is the *printed* spelling — see the divergence guard below.
-        assert_eq!(kind_to_sql(EntityKind::TypeAlias).expect("encode"), "type_alias");
+        assert_eq!(
+            kind_to_sql(EntityKind::TypeAlias).expect("encode"),
+            "type_alias"
+        );
         assert_eq!(
             relation_kind_to_sql(RelationKind::UsesType).expect("encode"),
             "uses_type"
@@ -521,11 +526,15 @@ mod tests {
     #[test]
     fn resolution_tags_are_exactly_the_four_stored_values() {
         assert_eq!(
-            resolution_tag(&ResolutionState::Resolved { by: Evidence::UniqueName }),
+            resolution_tag(&ResolutionState::Resolved {
+                by: Evidence::UniqueName
+            }),
             "resolved"
         );
         assert_eq!(
-            resolution_tag(&ResolutionState::Ambiguous { candidates: Vec::new() }),
+            resolution_tag(&ResolutionState::Ambiguous {
+                candidates: Vec::new()
+            }),
             "ambiguous"
         );
         assert_eq!(
@@ -614,8 +623,12 @@ mod tests {
 
     #[test]
     fn only_the_ambiguous_state_is_treated_as_needing_candidates() {
-        assert!(is_ambiguous(&ResolutionState::Ambiguous { candidates: vec![] }));
-        assert!(!is_ambiguous(&ResolutionState::Resolved { by: Evidence::UniqueName }));
+        assert!(is_ambiguous(&ResolutionState::Ambiguous {
+            candidates: vec![]
+        }));
+        assert!(!is_ambiguous(&ResolutionState::Resolved {
+            by: Evidence::UniqueName
+        }));
         assert!(!is_ambiguous(&ResolutionState::Unresolved {
             reason: UnresolvedReason::NoCandidate
         }));
