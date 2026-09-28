@@ -187,7 +187,7 @@ impl LanguageSpec {
     /// "no extraction rules", never as "no symbols found".
     pub fn for_language(language: Language) -> Option<&'static LanguageSpec> {
         crate::extract::registry::all()
-            .into_iter()
+            .iter()
             .find(|spec| spec.language == language)
     }
 

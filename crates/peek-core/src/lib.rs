@@ -5,6 +5,11 @@
 //!
 //! The [`model`] module is the foundation everything else is written against.
 
+// Production code may not unwrap or expect. Both are denied by the workspace lint set because
+// outside a test they hide a real failure behind a panic. Tests are allowed to use them: a test
+// that cannot state its own precondition directly is harder to read than one that can.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 /// Engine version, surfaced by `peek status` and the MCP `server_info` primitive.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
