@@ -5,16 +5,18 @@
 //! or a non-UTF-8 path all reported "indexed N files" with **zero bytes on disk**. The three
 //! properties below exist to make that unrepresentable.
 //!
-//! 1. **All or nothing.** Everything in an [`IndexUpdate`] is one SQLite transaction. A crash,
-//!   a constraint violation, or a full disk mid-batch leaves the previous generation intact and
-//!   queryable — contract G7.
-//! 2. **Never `Ok` with a fiction.** [`Store::apply_update`] returns statistics only on the
-//!   success path. Every failure becomes [`StoreError::Transaction`] (or [`StoreError::Io`] for
-//!   an I/O error), and the in-memory generation is advanced only after `commit` has returned.
-//! 3. **No dangling state.** Removals demote the relations that point into a removed scope
-//!   before deleting anything, so an edge never quietly changes from `resolved` to something
-//!   else. The schema's `ON DELETE SET NULL` plus its state/target `CHECK` mean that a delete
-//!   which skipped this step would *fail* rather than corrupt — the demotion is not a nicety.
+//! **All or nothing.** Everything in an [`IndexUpdate`] is one SQLite transaction. A crash, a
+//! constraint violation, or a full disk mid-batch leaves the previous generation intact and
+//! queryable — contract G7.
+//!
+//! **Never `Ok` with a fiction.** [`Store::apply_update`] returns statistics only on the success
+//! path. Every failure becomes [`StoreError::Transaction`] (or [`StoreError::Io`] for an I/O
+//! error), and the in-memory generation is advanced only after `commit` has returned.
+//!
+//! **No dangling state.** Removals demote the relations that point into a removed scope before
+//! deleting anything, so an edge never quietly changes from `resolved` to something else. The
+//! schema's `ON DELETE SET NULL` plus its state/target `CHECK` mean that a delete which skipped
+//! this step would *fail* rather than corrupt — the demotion is not a nicety.
 //!
 //! The ordering inside a batch is fixed and load-bearing: removals, then entities, then
 //! relations, then the generation. An entity removed and re-added in one batch therefore ends up
