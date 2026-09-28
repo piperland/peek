@@ -18,7 +18,19 @@ thiserror = "2.0.17"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
+# Parsing. Tree-sitter grammars are C and are compiled by `cc`; no runtime dependency.
+tree-sitter = "0.25.10"
+tree-sitter-language = "0.1.5"
+tree-sitter-rust = "0.24.0"
+
+# Storage
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+
+# Filesystem walking with ignore-file awareness
+ignore = "0.4.23"
+
 [workspace.lints.clippy]
 dbg_macro = "deny"
 todo = "deny"
 unwrap_used = "deny"
+expect_used = "deny"
