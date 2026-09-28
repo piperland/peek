@@ -393,8 +393,8 @@ pub fn candidate_from_bare_row(row: &Row<'_>) -> Result<EntityId, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ENTITY_COLUMNS, RELATION_COLUMNS, enum_from_sql, enum_to_sql, is_ambiguous,
-        path_from_sql, relation_kind_to_sql, resolution_payload, resolution_tag,
+        ENTITY_COLUMNS, RELATION_COLUMNS, enum_from_sql, enum_to_sql, is_ambiguous, kind_to_sql,
+        language_to_sql, path_from_sql, relation_kind_to_sql, resolution_payload, resolution_tag,
     };
     use crate::model::entity::EntityKind;
     use crate::model::language::Language;
