@@ -470,7 +470,8 @@ impl<'a> Walker<'a> {
 
         let declared = self.declare(node);
         if let Some(id) = declared.clone() {
-            let is_type = id.kind().is_type();
+            // A scope is a "type scope" if the spec says so, or if the entity is itself a type.
+            let is_type = self.spec.is_type_scope_node(node.kind()) || id.kind().is_type();
             self.scope.push(ScopeEntry {
                 name: id.name().to_owned(),
                 id,
@@ -1248,8 +1249,11 @@ mod tests {
 
     #[test]
     fn impl_dyn_marker_type_keeps_its_bound() {
-        // `impl dyn Trait {}` hides the bound at `type` -> `dynamic_type` -> `trait`.
-        let file = rust("impl dyn std::fmt::Debug for MyType {}");
+        // `impl dyn Trait {}` has no `impl_item.trait` field at all — the bound lives at
+        // `type` -> `dynamic_type` -> `trait`. Reading only `impl_item.trait` loses it silently.
+        // (Confirmed against the real grammar: `impl dyn X for Y` is not even valid Rust and
+        // parses to an ERROR node, so the bound is only reachable in the marker form.)
+        let file = rust("impl dyn std::fmt::Debug {}");
         let implements: Vec<&str> = file
             .relations
             .iter()
@@ -1498,55 +1502,6 @@ mod tests {
             .find(|r| r.kind == RelationKind::Imports)
             .expect("the import survived");
         assert_eq!(import.source, file_entity.id);
-    }
-
-    #[test]
-    fn diagnostic_dump_grammar_shapes() {
-        // Temporary: panics with the real parse tree for constructs whose shape we are unsure
-        // of, so the extractor is written against observed output rather than assumption.
-        let mut dump = String::new();
-        for source in [
-            "impl dyn std::fmt::Debug for MyType {}",
-            "trait Extended: Base + Send {}",
-            "impl Gateway for Stripe {}",
-        ] {
-            let mut parser = tree_sitter::Parser::new();
-            let spec = registry::get(crate::model::Language::Rust).expect("rust spec");
-            if parser.set_language(&(spec.grammar)()).is_err() {
-                continue;
-            }
-            let Some(tree) = parser.parse(source, None) else {
-                continue;
-            };
-            let mut out = String::new();
-            // Print node kinds and field names only; that is what the extractor depends on.
-            fn print(node: tree_sitter::Node<'_>, depth: usize, out: &mut String) {
-                let field = node.parent().and_then(|parent| {
-                    let mut cursor = parent.walk();
-                    (0..parent.child_count())
-                        .find(|i| parent.child(*i) == Some(node))
-                        .and_then(|i| {
-                            parent
-                                .field_name_for_child(i as u32)
-                                .map(str::to_owned)
-                        })
-                });
-                out.push_str(&format!(
-                    "{}{}{}{}\n",
-                    "  ".repeat(depth),
-                    field.map_or_else(String::new, |f| format!("{f}: ")),
-                    node.kind(),
-                    if node.is_named() { "" } else { " (anon)" }
-                ));
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    print(child, depth + 1, out);
-                }
-            }
-            print(tree.root_node(), 0, &mut out);
-            dump.push_str(&format!("=== {source}\n{out}\n"));
-        }
-        panic!("grammar dump:\n{dump}");
     }
 
     #[test]

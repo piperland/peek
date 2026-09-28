@@ -190,6 +190,10 @@ static RUST: LanguageSpec = LanguageSpec {
         "enum_item",
         "union_item",
     ],
+    // A Rust `impl` block is a scope but is not itself a type, so it cannot be recognised via
+    // `EntityKind::is_type()`. Without this list every method in a Rust codebase was extracted
+    // as a bare function and the graph had no method/type distinction at all.
+    type_scope_nodes: &["impl_item", "trait_item"],
     grammar: || tree_sitter_rust::LANGUAGE.into(),
 };
 

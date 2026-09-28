@@ -180,6 +180,14 @@ pub struct LanguageSpec {
     /// Node types that open a new ownership scope. Entities inside them get a qualified name
     /// prefixed with the enclosing entity's name.
     pub scope_nodes: &'static [&'static str],
+    /// Node types whose scope is a **type**, so a function declared inside one is a method
+    /// rather than a plain function.
+    ///
+    /// This is separate from `scope_nodes` and from `EntityKind::is_type()` because a Rust
+    /// `impl` block is a scope but is not itself a type — it is the *inherent or trait
+    /// implementation of* one. Without this, every method in a Rust codebase was extracted as
+    /// a bare `Function` and no method/type distinction existed in the graph at all.
+    pub type_scope_nodes: &'static [&'static str],
     /// The Tree-sitter grammar for this language.
     pub grammar: fn() -> tree_sitter::Language,
 }
@@ -219,6 +227,11 @@ impl LanguageSpec {
     pub fn is_scope_node(&self, node_type: &str) -> bool {
         self.scope_nodes.contains(&node_type)
     }
+
+    /// Whether this node type opens a *type* scope, so functions inside it are methods.
+    pub fn is_type_scope_node(&self, node_type: &str) -> bool {
+        self.type_scope_nodes.contains(&node_type)
+    }
 }
 
 impl fmt::Display for LanguageSpec {
@@ -257,6 +270,7 @@ mod tests {
             inheritance: None,
             references: None,
             scope_nodes: &["function_item"],
+            type_scope_nodes: &["function_item"],
             grammar: || tree_sitter_rust::LANGUAGE.into(),
         }
     }
@@ -293,6 +307,16 @@ mod tests {
         let spec = spec();
         assert!(spec.is_scope_node("function_item"));
         assert!(!spec.is_scope_node("call_expression"));
+    }
+
+    #[test]
+    fn type_scope_nodes_are_recognised_separately() {
+        let spec = spec();
+        assert!(spec.is_type_scope_node("function_item"));
+        assert!(
+            !spec.is_type_scope_node("call_expression"),
+            "a call is not a type scope"
+        );
     }
 
     #[test]

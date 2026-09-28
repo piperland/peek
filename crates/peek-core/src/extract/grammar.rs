@@ -193,6 +193,12 @@ impl GrammarFacts {
             }
         }
 
+        for node_type in spec.type_scope_nodes {
+            if !self.has_node_type(node_type) {
+                problems.push(self.missing_node(language, node_type, "type scope"));
+            }
+        }
+
         if let Some(references) = spec.references {
             for node_type in references.node_types {
                 if !self.has_node_type(node_type) {
