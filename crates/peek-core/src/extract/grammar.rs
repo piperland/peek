@@ -154,7 +154,7 @@ impl GrammarFacts {
             }
             for parent in references.excluded_parents {
                 if !self.has_node_type(parent) {
-                    problems.push(format(
+                    problems.push(format!(
                         "{language}: reference excluded-parent `{parent}` does not exist in this grammar"
                     ));
                 }
