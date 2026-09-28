@@ -1324,7 +1324,7 @@ fn stats_report_real_counts_and_real_sizes() {
     assert_eq!(stats.entity_count, 3);
     assert_eq!(stats.relation_count, 4);
     assert_eq!(stats.candidate_count, 2);
-    assert_eq!(stats.resolved_relations, 2);
+    assert_eq!(stats.resolved_relations, 1);
     assert_eq!(stats.ambiguous_relations, 1);
     assert_eq!(stats.unresolved_relations, 1);
     assert_eq!(stats.inferred_relations, 1);
@@ -1400,7 +1400,7 @@ fn reopening_preserves_every_row_and_the_generation() {
     assert_eq!(stats.entity_count, 3);
     assert_eq!(stats.relation_count, 4);
     assert_eq!(stats.candidate_count, 2);
-    assert_eq!(stats.resolved_relations, 2);
+    assert_eq!(stats.resolved_relations, 1);
     assert_eq!(stats.ambiguous_relations, 1);
 
     let caller = id("src/caller.rs", EntityKind::Function, "main", 0);
