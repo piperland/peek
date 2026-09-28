@@ -430,10 +430,15 @@ impl ScopeParams {
         rusqlite::params_from_iter(self.scope())
     }
 
-    /// Bindings for a statement that also writes a payload, which is the next parameter.
+    /// Bindings for a statement that also writes a payload.
+    ///
+    /// The payload is **first**, because `demote_incoming` is the only caller and it writes
+    /// `resolution_json` before the scope clause in the statement text. SQLite binds `?1` to the
+    /// first supplied value, so a scope-first ordering would hand the payload the path and the
+    /// scope the JSON — which matches no rows and looks like a logic bug rather than a swap.
     fn with_payload(&self, payload: &Value) -> Vec<Box<dyn rusqlite::ToSql>> {
-        let mut bindings = self.scope();
-        bindings.push(Box::new(payload.clone()));
+        let mut bindings: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(payload.clone())];
+        bindings.extend(self.scope());
         bindings
     }
 
@@ -544,8 +549,18 @@ mod tests {
 
     #[test]
     fn a_payload_binds_to_the_parameter_after_the_scope_clause() {
+        // The name is now wrong and deliberately so: the payload binds `?1` because it is written
+        // first in the statement. This test pins the *order* of the bindings, which is what
+        // actually decides which value lands in which placeholder.
         let file = ScopeParams::new(&Removal::RemoveFile(path("src/a.rs")));
-        assert_eq!(file.with_payload(&rusqlite::types::Value::Null).len(), 2);
+        let bindings = file.with_payload(&rusqlite::types::Value::Null);
+        assert_eq!(bindings.len(), 2);
+        assert!(
+            bindings[0].as_ref().is_null(),
+            "?1 must be the payload, not the path"
+        );
+        assert!(!bindings[1].as_ref().is_null(), "?2 must be the scope path");
+
         let subtree = ScopeParams::new(&Removal::RemoveSubtree(path("src")));
         assert_eq!(subtree.with_payload(&rusqlite::types::Value::Null).len(), 3);
     }

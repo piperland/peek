@@ -265,23 +265,34 @@ pub fn relation_from_row(row: &Row<'_>) -> Result<RelationRow, StoreError> {
 
     // A target is present in all four columns or in none. The schema enforces it; re-checking
     // here means a row written under different rules cannot be half-read.
-    let mut target_columns: [Option<String>; 4] = [None, None, None, None];
-    let mut present = 0;
-    for (offset, slot) in target_columns.iter_mut().enumerate() {
-        *slot = optional_text(row, 7 + offset)?;
-        if slot.is_some() {
-            present += 1;
-        }
-    }
+    //
+    // The ordinal is an INTEGER column, so it is read as an integer. Reading it as text first —
+    // because it sits in the same block as the three TEXT columns — makes `optional_text` fail
+    // with "Invalid column type Integer", which is a confusing way to learn that a column's
+    // SQLite storage class is not the type the reader assumed.
+    let path_slot = optional_text(row, 7)?;
+    let kind_slot = optional_text(row, 8)?;
+    let name_slot = optional_text(row, 9)?;
+    let ordinal_slot = row
+        .get::<_, Option<i64>>(10)
+        .map_err(|e| StoreError::Query(format!("target ordinal is not readable: {e}")))?;
+    let present = [path_slot.is_some(), kind_slot.is_some(), name_slot.is_some(), ordinal_slot.is_some()]
+        .iter()
+        .filter(|present| **present)
+        .count();
+
     let target = match present {
         0 => None,
         4 => {
-            let stored_kind: EntityKind = enum_from_sql(target_column(&target_columns, 1)?)?;
+            let stored_kind: EntityKind = enum_from_sql(&slot(kind_slot, id)?)?;
             Some(EntityId::new(
-                path_from_sql(target_column(&target_columns, 0)?)?,
+                path_from_sql(&slot(path_slot, id)?)?,
                 stored_kind,
-                target_column(&target_columns, 2)?,
-                to_u32(int(row, 10)?, "target ordinal")?,
+                slot(name_slot, id)?,
+                to_u32(
+                    ordinal_slot.unwrap_or_default(),
+                    "target ordinal",
+                )?,
             ))
         }
         other => {
@@ -388,6 +399,15 @@ pub fn candidate_from_row(row: &Row<'_>) -> Result<EntityId, StoreError> {
 /// indexed.
 pub fn candidate_from_bare_row(row: &Row<'_>) -> Result<EntityId, StoreError> {
     entity_id_from_row(row, 0, 1, 2, 3)
+}
+
+/// One of the four target columns, guaranteed present by the caller's arity check.
+fn slot(value: Option<String>, relation: i64) -> Result<String, StoreError> {
+    value.ok_or_else(|| {
+        StoreError::Corrupt(format!(
+            "relation {relation} has a partly-stored target column"
+        ))
+    })
 }
 
 #[cfg(test)]
