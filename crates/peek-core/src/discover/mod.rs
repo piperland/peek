@@ -460,7 +460,16 @@ impl WalkState<'_> {
             self.issue(&relative.to_string_lossy(), WalkIssueReason::NonUtf8Path);
             return None;
         };
-        RepoPath::new(text)
+        match RepoPath::new(text) {
+            Some(path) => Some(path),
+            None => {
+                // Unreachable for a walked path: a component can be neither empty nor `..`, and
+                // neither can contain a NUL. Recorded rather than returned silently, so that if the
+                // invariant ever breaks the cause is visible instead of being a missing file.
+                self.issue(text, WalkIssueReason::OutsideRepository);
+                None
+            }
+        }
     }
 
     fn visit_symlink(&mut self, link: &Path, path: RepoPath) {
