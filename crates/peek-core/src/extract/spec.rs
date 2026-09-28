@@ -160,7 +160,11 @@ pub struct ReferenceRule {
 ///
 /// There is no `Default` and no shared fallback. A language that has not written a spec cannot
 /// be extracted, which is the intended behaviour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Note the deliberate absence of `PartialEq`: the struct carries a `fn` pointer to the grammar,
+/// and comparing function pointers is meaningless because their addresses are not guaranteed to
+/// be distinct. Compare [`Self::language`] instead.
+#[derive(Debug, Clone, Copy)]
 pub struct LanguageSpec {
     pub language: Language,
     /// Declarations this language's grammar can prove.
@@ -232,7 +236,7 @@ impl fmt::Display for LanguageSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::{LanguageSpec, NameStrategy, SymbolRule};
+    use super::{CallRule, ImportRule, LanguageSpec, NameStrategy, SymbolRule};
     use crate::model::EntityKind;
 
     const RULES: &[SymbolRule] = &[SymbolRule::new(
@@ -242,32 +246,55 @@ mod tests {
         NameStrategy::Field,
     )];
 
-    #[test]
-    fn symbol_rules_look_up_by_node_type() {
-        let spec = LanguageSpec {
+    fn spec() -> LanguageSpec {
+        LanguageSpec {
             language: crate::model::Language::Rust,
             symbols: RULES,
-            calls: &[],
-            imports: &[],
+            calls: &[CallRule::new("call_expression", "function")],
+            imports: &[ImportRule::new("use_declaration", Some("argument"), None)],
             inheritance: None,
             references: None,
             scope_nodes: &["function_item"],
             grammar: || tree_sitter_rust::LANGUAGE.into(),
-        };
+        }
+    }
 
+    #[test]
+    fn symbol_rules_look_up_by_node_type() {
+        let spec = spec();
         assert_eq!(
             spec.symbol_rule("function_item").map(|rule| rule.kind),
             Some(EntityKind::Function)
         );
         assert!(spec.symbol_rule("no_such_node").is_none());
-        assert!(spec.is_scope_node("function_item"));
-        assert!(!spec.is_scope_node("call_expression"));
-        assert!(spec.summary_is_sane());
     }
 
-    impl LanguageSpec {
-        fn summary_is_sane(&self) -> bool {
-            !self.to_string().is_empty() && !self.symbols.is_empty()
-        }
+    #[test]
+    fn call_and_import_rules_look_up_by_node_type() {
+        let spec = spec();
+        assert_eq!(
+            spec.call_rule("call_expression").map(|rule| rule.callee_field),
+            Some("function")
+        );
+        assert!(spec.call_rule("no_such_node").is_none());
+        assert_eq!(
+            spec.import_rule("use_declaration").and_then(|rule| rule.path_field),
+            Some("argument")
+        );
+        assert!(spec.import_rule("no_such_node").is_none());
+    }
+
+    #[test]
+    fn scope_nodes_are_recognised() {
+        let spec = spec();
+        assert!(spec.is_scope_node("function_item"));
+        assert!(!spec.is_scope_node("call_expression"));
+    }
+
+    #[test]
+    fn display_summarises_the_spec() {
+        let rendered = spec().to_string();
+        assert!(rendered.starts_with("rust:"), "{rendered}");
+        assert!(rendered.contains("1 symbol rules"), "{rendered}");
     }
 }
