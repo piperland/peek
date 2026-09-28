@@ -1510,42 +1510,39 @@ mod tests {
             "impl Gateway for Stripe {}",
         ] {
             let mut parser = tree_sitter::Parser::new();
-            let grammar: tree_sitter::Language = (registry::get(crate::model::Language::Rust)
-                .expect("rust spec"))
-            .grammar();
-            if parser.set_language(&grammar).is_err() {
+            let spec = registry::get(crate::model::Language::Rust).expect("rust spec");
+            if parser.set_language(&(spec.grammar)()).is_err() {
                 continue;
             }
             let Some(tree) = parser.parse(source, None) else {
                 continue;
             };
-            let mut cursor = tree.walk();
             let mut out = String::new();
-            let mut stack = 0usize;
             // Print node kinds and field names only; that is what the extractor depends on.
-            for node in tree.root_node().descendants(&mut cursor) {
-                let field = node
-                    .parent()
-                    .and_then(|parent| {
-                        let mut c = parent.walk();
-                        (0..parent.child_count())
-                            .find(|i| parent.child(*i) == Some(node))
-                            .and_then(|i| parent.field_name_for_child(i as u32).map(str::to_owned))
-                    })
-                    .unwrap_or_default();
+            let mut print = |node: Node<'_>, depth: usize, out: &mut String| {
+                let field = node.parent().and_then(|parent| {
+                    let mut cursor = parent.walk();
+                    (0..parent.child_count())
+                        .find(|i| parent.child(*i) == Some(node))
+                        .and_then(|i| {
+                            parent
+                                .field_name_for_child(i as u32)
+                                .map(str::to_owned)
+                        })
+                });
                 out.push_str(&format!(
-                    "{}{}{} [{}]\n",
-                    "  ".repeat(stack),
-                    if field.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{field}: ")
-                    },
+                    "{}{}{}{}\n",
+                    "  ".repeat(depth),
+                    field.map_or_else(String::new, |f| format!("{f}: ")),
                     node.kind(),
                     if node.is_named() { "" } else { " (anon)" }
                 ));
-                stack += 1;
-            }
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    print(child, depth + 1, out);
+                }
+            };
+            print(tree.root_node(), 0, &mut out);
             println!("=== {source}\n{out}");
         }
     }
