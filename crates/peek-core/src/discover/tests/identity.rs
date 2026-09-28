@@ -79,7 +79,6 @@ fn repository_with_worktree() -> Option<Repository> {
     let root = TempTree::new("repo");
     let main = root.path().join("main");
     let worktree = root.path().join("feature");
-    let parent = root.path().to_path_buf();
 
     std::fs::create_dir_all(&main).expect("create main checkout");
     // `init` without `--initial-branch`, so the test does not depend on git >= 2.28. The initial
