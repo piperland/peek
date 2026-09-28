@@ -79,9 +79,11 @@ static RUST: LanguageSpec = LanguageSpec {
     imports: &[ImportRule::new("use_declaration", Some("argument"), None)],
     // Cortex declared `Inherit` and `Implement` in its enums and never constructed either one,
     // so its graph contained no inheritance edge at all. These fields are what make it possible.
+    // The node type is `trait_bounds`, not `trait_bound` — see the "did you mean" diagnostic that
+    // caught that.
     inheritance: Some(InheritanceStyle::TraitBounds {
         trait_decl_node: "trait_item",
-        bounds_node: "trait_bound",
+        bounds_node: "trait_bounds",
         impl_node: "impl_item",
         impl_trait_field: "trait",
         impl_type_field: "type",
