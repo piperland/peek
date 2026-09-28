@@ -92,15 +92,54 @@ static RUST: LanguageSpec = LanguageSpec {
             NameStrategy::Field,
         ),
         // A trait method has no body, so it is a `function_signature_item` rather than a
-        // `function_item`. Cortex matched neither.
+        // `function_item`. Cortex matched neither, so it lost every trait method.
         SymbolRule::new(
             "function_signature_item",
             EntityKind::Function,
             Some("name"),
             NameStrategy::Field,
         ),
+        // `enum_variant.name` is an `identifier`, not a `type_identifier`. Writing the wrong one
+        // here is exactly the mistake the grammar validator exists to catch.
+        SymbolRule::new(
+            "enum_variant",
+            EntityKind::Constant,
+            Some("name"),
+            NameStrategy::Field,
+        ),
+        SymbolRule::new(
+            "associated_type",
+            EntityKind::TypeAlias,
+            Some("name"),
+            NameStrategy::Field,
+        ),
+        SymbolRule::new(
+            "type_parameter",
+            EntityKind::TypeParameter,
+            Some("name"),
+            NameStrategy::Field,
+        ),
+        SymbolRule::new(
+            "const_parameter",
+            EntityKind::Parameter,
+            Some("name"),
+            NameStrategy::Field,
+        ),
+        // `parameter` has no `name` field; the name is the text of its `pattern` when the
+        // pattern is a plain binding.
+        SymbolRule::new(
+            "parameter",
+            EntityKind::Parameter,
+            Some("pattern"),
+            NameStrategy::Field,
+        ),
     ],
-    calls: &[CallRule::new("call_expression", "function")],
+    // Macro invocations are never `call_expression` in this grammar, and a Rust codebase is
+    // full of them. Omitting them would understate call counts badly.
+    calls: &[
+        CallRule::new("call_expression", "function"),
+        CallRule::new("macro_invocation", "macro"),
+    ],
     imports: &[ImportRule::new("use_declaration", Some("argument"), None)],
     // Cortex declared `Inherit` and `Implement` in its enums and never constructed either one,
     // so its graph contained no inheritance edge at all. These fields are what make it possible.
@@ -135,6 +174,11 @@ static RUST: LanguageSpec = LanguageSpec {
             "macro_definition",
             "field_declaration",
             "function_signature_item",
+            "enum_variant",
+            "associated_type",
+            "type_parameter",
+            "const_parameter",
+            "parameter",
         ],
     }),
     scope_nodes: &[
