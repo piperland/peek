@@ -123,8 +123,10 @@ static RUST: LanguageSpec = LanguageSpec {
 };
 
 /// Every spec Peek currently has.
+static ALL: &[LanguageSpec] = &[RUST];
+
 pub fn all() -> &'static [LanguageSpec] {
-    &[RUST]
+    ALL
 }
 
 /// Look up a spec by language.

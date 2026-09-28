@@ -162,7 +162,7 @@ impl GrammarFacts {
         }
 
         if let Some(style) = spec.inheritance {
-            problems.extend(self.validate_inheritance(language, style));
+            problems.extend(self.validate_inheritance(language, &style));
         }
 
         problems
