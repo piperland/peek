@@ -312,13 +312,13 @@ fn remove_scope(
             "SELECT COUNT(*) FROM relation WHERE {}",
             scope("source_path")
         ),
-        bound.scope(),
+        bound.scope_params(),
     )?;
     let counted_before = stats.entities_removed;
     stats.entities_removed += count(
         tx,
         &format!("SELECT COUNT(*) FROM entity WHERE {}", scope("path")),
-        bound.scope(),
+        bound.scope_params(),
     )?;
 
     // Demote before deleting. Without this, the target foreign key's `ON DELETE SET NULL` would
@@ -329,7 +329,7 @@ fn remove_scope(
     let deleted = tx
         .execute(
             &format!("DELETE FROM entity WHERE {}", scope("path")),
-            bound.scope(),
+            bound.scope_params(),
         )
         .map_err(|e| StoreError::Query(format!("cannot delete entities: {e}")))?;
     let removed_here = stats.entities_removed - counted_before;
@@ -370,7 +370,7 @@ fn demote_incoming(
         scope_clause("e.path", removal)
     );
     let carried = Value::Text(payload);
-    tx.execute(&sql, bound.with_payload(&carried))
+    tx.execute(&sql, bound.with_payload_params(&carried))
         .map_err(|e| StoreError::Query(format!("cannot demote incoming relations: {e}")))?;
     Ok(())
 }
@@ -409,12 +409,21 @@ impl ScopeParams {
     }
 
     /// Bindings for a statement that selects a scope and carries no payload.
+    ///
+    /// Returned through `params_from_iter` rather than as a bare `Vec`, because `Vec<&dyn
+    /// ToSql>` does not itself implement `Params`. The trait object has to be the element type
+    /// of an iterator rather than of a vector.
     fn scope(&self) -> Vec<&dyn rusqlite::ToSql> {
         let mut bindings: Vec<&dyn rusqlite::ToSql> = vec![self.path.as_str()];
         if let Some(pattern) = &self.pattern {
             bindings.push(pattern);
         }
         bindings
+    }
+
+    /// The scope bindings wrapped for `execute`.
+    fn scope_params(&self) -> rusqlite::Params<'_, Vec<&dyn rusqlite::ToSql>> {
+        rusqlite::params_from_iter(self.scope())
     }
 
     /// Bindings for a statement that also writes a payload, which is the next parameter.
@@ -425,6 +434,14 @@ impl ScopeParams {
         let mut bindings = self.scope();
         bindings.push(payload);
         bindings
+    }
+
+    /// The scope bindings plus a payload, wrapped for `execute`.
+    fn with_payload_params(
+        &self,
+        payload: &Value,
+    ) -> rusqlite::Params<'_, Vec<&dyn rusqlite::ToSql>> {
+        rusqlite::params_from_iter(self.with_payload(payload))
     }
 }
 

@@ -61,6 +61,7 @@
 
 mod error;
 mod repo;
+mod row;
 mod schema;
 mod stats;
 mod update;
