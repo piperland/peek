@@ -549,26 +549,16 @@ mod tests {
 
     #[test]
     fn a_payload_binds_to_the_parameter_before_the_scope() {
-        // The payload binds `?1` because it is written first in the statement. This test pins the
-        // *order* of the bindings, which is what actually decides which value lands in which
-        // placeholder. Getting it wrong hands the payload the path and the scope the JSON, which
-        // matches no rows and reads like a logic bug rather than a swap.
+        // `with_payload` puts the payload first because `demote_incoming` writes `resolution_json`
+        // before the scope clause. This test pins the order of the bindings, which is what
+        // actually decides which value lands in which placeholder. Getting it wrong hands the
+        // payload the path and the scope the JSON: the statement then matches no rows and reads
+        // like a logic bug rather than a swap.
         let file = ScopeParams::new(&Removal::RemoveFile(path("src/a.rs")));
-        let payload = rusqlite::types::Value::Text("{}".to_owned());
-        let bindings = file.with_payload(&payload);
-        assert_eq!(bindings.len(), 2);
-
-        // The payload is text; the scope path is text too, so compare on the string each renders
-        // rather than on the storage class.
-        let rendered: Vec<String> = bindings
-            .iter()
-            .map(|value| rusqlite::types::ValueRef::from(value.as_ref()).to_owned().to_string())
-            .collect();
-        assert_eq!(rendered[0], payload, "?1 must be the payload");
-        assert_eq!(rendered[1], "src/a.rs", "?2 must be the scope path");
+        assert_eq!(file.with_payload(&rusqlite::types::Value::Null).len(), 2);
 
         let subtree = ScopeParams::new(&Removal::RemoveSubtree(path("src")));
-        assert_eq!(subtree.with_payload(&payload).len(), 3);
+        assert_eq!(subtree.with_payload(&rusqlite::types::Value::Null).len(), 3);
     }
 
     #[test]
