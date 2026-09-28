@@ -274,8 +274,7 @@ mod tests {
                 let resolved = Language::from_extension(extension)
                     .unwrap_or_else(|| panic!("{extension} should resolve to {language}"));
                 assert_eq!(
-                    resolved,
-                    *language,
+                    resolved, *language,
                     "extension {extension} is claimed by more than one language"
                 );
             }

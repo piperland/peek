@@ -107,10 +107,7 @@ impl EntityKind {
     pub fn is_callable(self) -> bool {
         matches!(
             self,
-            EntityKind::Function
-                | EntityKind::Method
-                | EntityKind::Constructor
-                | EntityKind::Macro
+            EntityKind::Function | EntityKind::Method | EntityKind::Constructor | EntityKind::Macro
         )
     }
 
@@ -118,10 +115,7 @@ impl EntityKind {
     pub fn is_member(self) -> bool {
         matches!(
             self,
-            EntityKind::Method
-                | EntityKind::Field
-                | EntityKind::Property
-                | EntityKind::Parameter
+            EntityKind::Method | EntityKind::Field | EntityKind::Property | EntityKind::Parameter
         )
     }
 
@@ -215,7 +209,9 @@ impl EntityId {
 
     /// The ownership chain without this entity's own name, or `None` at the top level.
     pub fn parent_name(&self) -> Option<&str> {
-        self.qualified_name.rsplit_once('.').map(|(parent, _)| parent)
+        self.qualified_name
+            .rsplit_once('.')
+            .map(|(parent, _)| parent)
     }
 
     /// The disambiguating index among identically-named, identically-kinded siblings.
@@ -426,7 +422,11 @@ mod tests {
     #[test]
     fn entity_summary_points_at_the_declaration() {
         let entity = Entity {
-            id: id("src/payments.rs", EntityKind::Method, "PaymentService.retry"),
+            id: id(
+                "src/payments.rs",
+                EntityKind::Method,
+                "PaymentService.retry",
+            ),
             name: "retry".to_owned(),
             signature: Some("fn retry(&self, attempt: u32) -> Result<()>".to_owned()),
             doc: None,

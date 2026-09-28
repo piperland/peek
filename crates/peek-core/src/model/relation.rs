@@ -292,8 +292,9 @@ impl ResolutionState {
     /// The evidence class, when there is any.
     pub fn evidence_class(&self) -> Option<&'static str> {
         match self {
-            ResolutionState::Resolved { by }
-            | ResolutionState::Inferred { by, .. } => Some(by.class()),
+            ResolutionState::Resolved { by } | ResolutionState::Inferred { by, .. } => {
+                Some(by.class())
+            }
             ResolutionState::Ambiguous { .. } | ResolutionState::Unresolved { .. } => None,
         }
     }
@@ -469,7 +470,10 @@ mod tests {
             Some("unique_name"),
             "a globally-unique name is weaker evidence than an explicit import"
         );
-        assert_eq!(by_import.resolution.evidence_class(), Some("import_binding"));
+        assert_eq!(
+            by_import.resolution.evidence_class(),
+            Some("import_binding")
+        );
         assert!(
             Evidence::ImportBinding {
                 module: "m".to_owned(),
@@ -555,7 +559,12 @@ mod tests {
         assert!(relation.is_followable());
         assert!(relation.resolution.is_resolved());
         assert!(relation.resolution.describe().contains("inferred"));
-        assert!(relation.resolution.describe().contains("only PaymentGateway"));
+        assert!(
+            relation
+                .resolution
+                .describe()
+                .contains("only PaymentGateway")
+        );
     }
 
     #[test]

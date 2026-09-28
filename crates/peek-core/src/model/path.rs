@@ -204,7 +204,10 @@ mod tests {
 
     #[test]
     fn normalises_windows_separators() {
-        assert_eq!(p(r"crates\peek-core\src\lib.rs").as_str(), "crates/peek-core/src/lib.rs");
+        assert_eq!(
+            p(r"crates\peek-core\src\lib.rs").as_str(),
+            "crates/peek-core/src/lib.rs"
+        );
     }
 
     #[test]
@@ -245,7 +248,10 @@ mod tests {
 
     #[test]
     fn parent_and_depth() {
-        assert_eq!(p("a/b/c.rs").parent().map(|x| x.to_string()), Some("a/b".into()));
+        assert_eq!(
+            p("a/b/c.rs").parent().map(|x| x.to_string()),
+            Some("a/b".into())
+        );
         assert_eq!(p("top.rs").parent(), None);
         assert_eq!(p("a/b/c.rs").depth(), 3);
         assert_eq!(p("top.rs").depth(), 1);
