@@ -1502,8 +1502,9 @@ mod tests {
 
     #[test]
     fn diagnostic_dump_grammar_shapes() {
-        // Temporary: prints the real parse tree for constructs whose shape we are unsure of, so
-        // the extractor is written against observed output rather than assumption.
+        // Temporary: panics with the real parse tree for constructs whose shape we are unsure
+        // of, so the extractor is written against observed output rather than assumption.
+        let mut dump = String::new();
         for source in [
             "impl dyn std::fmt::Debug for MyType {}",
             "trait Extended: Base + Send {}",
@@ -1543,8 +1544,9 @@ mod tests {
                 }
             }
             print(tree.root_node(), 0, &mut out);
-            println!("=== {source}\n{out}");
+            dump.push_str(&format!("=== {source}\n{out}\n"));
         }
+        panic!("grammar dump:\n{dump}");
     }
 
     #[test]
