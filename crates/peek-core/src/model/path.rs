@@ -91,7 +91,7 @@ impl RepoPath {
         let name = self.file_name();
         match name.rsplit_once('.') {
             Some((stem, _)) if !stem.is_empty() => {
-                let stripped = format!("{stem}");
+                let stripped = stem.to_owned();
                 match self.0.rsplit_once('/') {
                     Some((dir, _)) => RepoPath(format!("{dir}/{stripped}")),
                     None => RepoPath(stripped),
@@ -193,7 +193,8 @@ mod tests {
         // The defect this type exists to prevent: Cortex keyed its file map on a lowercased
         // path, so these two files collided and one overwrote the other.
         assert_ne!(p("src/Foo.rs"), p("src/foo.rs"));
-        assert!(!p("src/Foo.rs").eq_ignore_case(&p("src/foo.rs")) == false);
+        // Case-insensitive comparison is a separate, explicit operation, not the default.
+        assert!(p("src/Foo.rs").eq_ignore_case(&p("src/foo.rs")));
     }
 
     #[test]
