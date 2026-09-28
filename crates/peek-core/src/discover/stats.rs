@@ -158,6 +158,18 @@ pub struct WalkIssue {
 impl fmt::Display for WalkIssue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.reason {
+            WalkIssueReason::UnsupportedExtension { extension: None } => {
+                write!(f, "{}: no file extension", self.path)
+            }
+            WalkIssueReason::UnsupportedExtension {
+                extension: Some(extension),
+            } => write!(f, "{}: no extraction rules for .{extension}", self.path),
+            WalkIssueReason::TooLarge { bytes, cap } => {
+                write!(f, "{}: {bytes} bytes exceeds the {cap} byte cap", self.path)
+            }
+            WalkIssueReason::NotUtf8 { offset } => {
+                write!(f, "{}: not valid UTF-8 (at byte {offset})", self.path)
+            }
             WalkIssueReason::Unreadable { detail } => write!(f, "{}: {detail}", self.path),
             WalkIssueReason::OutsideRepository => {
                 write!(f, "{}: resolves outside the repository root", self.path)
@@ -191,6 +203,31 @@ impl fmt::Display for WalkIssue {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum WalkIssueReason {
+    /// The file's extension maps to no registered language, so nothing can extract it.
+    ///
+    /// Named rather than merely counted. A file the indexer silently ignored is a file an agent
+    /// believes it knows nothing about, which is a different thing from one it was told it cannot
+    /// read. It is also how "this language is not supported yet" becomes visible instead of
+    /// looking like an empty file.
+    UnsupportedExtension {
+        /// The extension without its dot, or `None` when the file has none at all.
+        extension: Option<String>,
+    },
+    /// The file is larger than the configured cap, so it is never handed to a parser.
+    TooLarge {
+        /// The size on disk when the decision was made.
+        bytes: u64,
+        /// The cap it exceeded.
+        cap: u64,
+    },
+    /// The bytes are not valid UTF-8, so no text-based extractor can read them.
+    ///
+    /// Audit A11: one such file aborted an entire repository index and persisted nothing. Here it
+    /// degrades alone, and it is counted and named.
+    NotUtf8 {
+        /// Where the invalid sequence starts, in bytes.
+        offset: usize,
+    },
     /// The entry could not be read: permissions, a broken symlink, a file removed mid-walk, or an
     /// ignore file that failed to parse.
     Unreadable {

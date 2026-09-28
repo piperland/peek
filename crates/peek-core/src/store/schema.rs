@@ -144,10 +144,20 @@ CREATE TABLE relation (
   -- The check that makes the store honest. A relation cannot claim to be resolved to an entity
   -- it does not name, and an ambiguous or unresolved relation cannot name one at all. This is
   -- D-0003 and D-0009 enforced by the database instead of by reviewer discipline.
-  CHECK ((resolution_state IN ('resolved', 'inferred')) = (target_path IS NOT NULL)),
-  -- A relation cannot outlive the entity it was observed in. Deleting a file's entities deletes
-  -- its relations and, through them, their candidates: contract G3 (no orphan nodes or edges
-  -- after a delete) holds by construction rather than by remembering to clean up.
+  CHECK (NOT (resolution_state IN ('resolved', 'inferred') AND target_path IS NULL)),
+  -- A relation may not *claim* to be resolved while naming no target. This is deliberately a
+  -- one-way implication and not an equality. An equality would also forbid a `pending` relation
+  -- from carrying a provisional target, which is a legitimate state: the extractor narrowed the
+  -- reference to one candidate and handed the decision to the resolver, and the target columns
+  -- are how that provisional answer is recorded. Writing the equality here meant the extractor's
+  -- normal output could not be stored at all.
+  --
+  -- Dangling edges are prevented by something else and something stronger: the target foreign key
+  -- is `ON DELETE SET NULL`, and the write path demotes a relation whose target is being removed
+  -- before deleting it, so the target is never nulled behind a `resolved` claim. Deleting a
+  -- file's entities deletes its relations and, through them, their candidates: contract G3 (no
+  -- orphan nodes or edges after a delete) holds by construction rather than by remembering to
+  -- clean up.
   FOREIGN KEY (source_path, source_kind, source_qualified_name, source_ordinal)
     REFERENCES entity (path, kind, qualified_name, entity_ordinal) ON DELETE CASCADE,
   -- `ON DELETE SET NULL` is declared, but the CHECK above turns it into a practical RESTRICT:

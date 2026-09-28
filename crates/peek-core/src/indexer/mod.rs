@@ -95,13 +95,20 @@ impl IndexReport {
 /// Why a file was not indexed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkipReason {
-    /// No registered extraction rules for this language.
+    /// No registered extraction rules for this file's extension.
     ///
     /// Reported separately from "no symbols found" on purpose. Conflating the two is how an
-    /// engine advertises twenty-eight languages of which fourteen extract nothing.
+    /// engine advertises twenty-eight languages of which fourteen extract nothing. The extension
+    /// is carried rather than the language, because discovery decides this *before* it knows a
+    /// language — a file with no extension at all has no language either.
+    UnsupportedExtension(Option<String>),
+    /// The file's language is known but no extraction rules are registered for it.
     UnsupportedLanguage(Language),
     /// The bytes are not valid UTF-8.
-    NotUtf8,
+    NotUtf8 {
+        /// Where the invalid sequence starts, in bytes.
+        offset: usize,
+    },
     /// The file is larger than the configured cap.
     TooLarge { bytes: u64, cap: u64 },
     /// The file could not be read at all.
@@ -113,10 +120,16 @@ pub enum SkipReason {
 impl std::fmt::Display for SkipReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            SkipReason::UnsupportedExtension(None) => f.write_str("no file extension"),
+            SkipReason::UnsupportedExtension(Some(extension)) => {
+                write!(f, "no extraction rules for .{extension}")
+            }
             SkipReason::UnsupportedLanguage(language) => {
                 write!(f, "no extraction rules for {language}")
             }
-            SkipReason::NotUtf8 => f.write_str("not valid UTF-8"),
+            SkipReason::NotUtf8 { offset } => {
+                write!(f, "not valid UTF-8 (at byte {offset})")
+            }
             SkipReason::TooLarge { bytes, cap } => {
                 write!(f, "{bytes} bytes exceeds the {cap} byte cap")
             }
@@ -370,18 +383,30 @@ fn absorb_discovery(outcome: &mut IndexOutcome, stats: &DiscoveryStats, issues: 
 
     for issue in issues {
         let reason = match &issue.reason {
+            WalkIssueReason::UnsupportedExtension { extension } => {
+                SkipReason::UnsupportedExtension(extension.clone())
+            }
+            WalkIssueReason::TooLarge { bytes, cap } => SkipReason::TooLarge {
+                bytes: *bytes,
+                cap: *cap,
+            },
+            WalkIssueReason::NotUtf8 { offset } => {
+                SkipReason::NotUtf8 { offset: *offset }
+            }
             WalkIssueReason::Unreadable { detail } => SkipReason::Unreadable(detail.clone()),
             WalkIssueReason::OutsideRepository => SkipReason::OutsideRoot,
-            WalkIssueReason::NonUtf8Path => SkipReason::NotUtf8,
+            WalkIssueReason::NonUtf8Path => SkipReason::Unreadable(
+                "the path itself is not valid UTF-8".to_owned(),
+            ),
             WalkIssueReason::SymlinkEscapes { target } => {
                 SkipReason::Unreadable(format!("symlink resolves to {target}, outside the root"))
             }
             WalkIssueReason::UnresolvableSymlink { .. } => {
                 SkipReason::Unreadable("symlink target does not exist".to_owned())
             }
-            WalkIssueReason::Duplicate => {
-                SkipReason::Unreadable("a case-insensitive twin of this file was already yielded".to_owned())
-            }
+            WalkIssueReason::Duplicate => SkipReason::Unreadable(
+                "a case-insensitive twin of this file was already yielded".to_owned(),
+            ),
         };
         outcome.skipped.push(SkippedFile {
             path: issue.path.clone(),

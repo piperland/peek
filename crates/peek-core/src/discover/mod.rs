@@ -525,10 +525,20 @@ impl<'a> WalkState<'a> {
 
         let Some(extension) = path.extension() else {
             self.stats.unsupported_extension += 1;
+            self.issue(
+                path.as_str(),
+                WalkIssueReason::UnsupportedExtension { extension: None },
+            );
             return;
         };
         let Some(language) = Language::from_extension(&extension) else {
             self.stats.unsupported_extension += 1;
+            self.issue(
+                path.as_str(),
+                WalkIssueReason::UnsupportedExtension {
+                    extension: Some(extension.to_owned()),
+                },
+            );
             return;
         };
 
@@ -547,6 +557,13 @@ impl<'a> WalkState<'a> {
         };
         if metadata.len() > self.options.max_file_bytes() {
             self.stats.too_large += 1;
+            self.issue(
+                path.as_str(),
+                WalkIssueReason::TooLarge {
+                    bytes: metadata.len(),
+                    cap: self.options.max_file_bytes(),
+                },
+            );
             return;
         }
 
@@ -566,9 +583,18 @@ impl<'a> WalkState<'a> {
                 return;
             }
         };
-        let Ok(source) = String::from_utf8(contents) else {
-            self.stats.not_utf8 += 1;
-            return;
+        let source = match String::from_utf8(contents) {
+            Ok(source) => source,
+            Err(error) => {
+                self.stats.not_utf8 += 1;
+                self.issue(
+                    path.as_str(),
+                    WalkIssueReason::NotUtf8 {
+                        offset: error.utf8_error().valid_up_to(),
+                    },
+                );
+                return;
+            }
         };
 
         // The read length, not the earlier `stat`. A file edited between the two would otherwise
