@@ -1501,6 +1501,56 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_dump_grammar_shapes() {
+        // Temporary: prints the real parse tree for constructs whose shape we are unsure of, so
+        // the extractor is written against observed output rather than assumption.
+        for source in [
+            "impl dyn std::fmt::Debug for MyType {}",
+            "trait Extended: Base + Send {}",
+            "impl Gateway for Stripe {}",
+        ] {
+            let mut parser = tree_sitter::Parser::new();
+            let grammar: tree_sitter::Language = (registry::get(crate::model::Language::Rust)
+                .expect("rust spec"))
+            .grammar();
+            if parser.set_language(&grammar).is_err() {
+                continue;
+            }
+            let Some(tree) = parser.parse(source, None) else {
+                continue;
+            };
+            let mut cursor = tree.walk();
+            let mut out = String::new();
+            let mut stack = 0usize;
+            // Print node kinds and field names only; that is what the extractor depends on.
+            for node in tree.root_node().descendants(&mut cursor) {
+                let field = node
+                    .parent()
+                    .and_then(|parent| {
+                        let mut c = parent.walk();
+                        (0..parent.child_count())
+                            .find(|i| parent.child(*i) == Some(node))
+                            .and_then(|i| parent.field_name_for_child(i as u32).map(str::to_owned))
+                    })
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "{}{}{} [{}]\n",
+                    "  ".repeat(stack),
+                    if field.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{field}: ")
+                    },
+                    node.kind(),
+                    if node.is_named() { "" } else { " (anon)" }
+                ));
+                stack += 1;
+            }
+            println!("=== {source}\n{out}");
+        }
+    }
+
+    #[test]
     fn unknown_language_yields_none_not_an_empty_file() {
         // Conflating "no rules" with "no symbols" is how Cortex reported 14 dead languages as
         // supported.
