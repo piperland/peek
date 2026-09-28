@@ -406,15 +406,17 @@ impl FileDiscovery {
 /// Mutable state for a single walk. Private: a caller can never observe a half-finished walk.
 struct WalkState<'a> {
     root: PathBuf,
-    options: &'a DiscoveryOptions,
-    case_sensitivity: CaseSensitivity,
+    options: &'a DiscoveryOptions,    case_sensitivity: CaseSensitivity,
     candidates: Vec<DiscoveredFile>,
     stats: DiscoveryStats,
     issues: Vec<WalkIssue>,
 }
 
-impl WalkState<'_> {
-    fn new(root: &Path, options: &DiscoveryOptions, case_sensitivity: CaseSensitivity) -> Self {
+impl<'a> WalkState<'a> {
+    /// The lifetime of `options` is the struct's own. Writing `impl WalkState<'_>` and letting
+    /// `new` infer it makes the borrow checker unable to tie the two together, which fails to
+    /// compile because the returned `Self` would outlive the options it points at.
+    fn new(root: &Path, options: &'a DiscoveryOptions, case_sensitivity: CaseSensitivity) -> Self {
         Self {
             root: root.to_path_buf(),
             options,

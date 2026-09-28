@@ -163,6 +163,14 @@ fn the_common_directory_identifies_the_repository() {
     let main = RepoIdentity::identify(&fs_canonical(&repository.main));
     let feature = RepoIdentity::identify(&fs_canonical(&repository.worktree));
 
+    // The common directory is the same for a repository and all of its worktrees. That is exactly
+    // why it cannot be what separates them, and why the identity hashes the root as well.
+    assert_eq!(
+        main.common_dir(),
+        feature.common_dir(),
+        "a worktree shares the repository's common directory"
+    );
+
     let common = main.common_dir().expect("a repository must have a common directory");
     assert!(
         common.ends_with(".git"),

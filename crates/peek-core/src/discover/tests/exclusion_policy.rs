@@ -182,7 +182,8 @@ fn exclusion_matching_is_case_insensitive() {
 /// printed policy sees exactly what is matched.
 #[test]
 fn names_are_stored_lowercased() {
-    let names: BTreeSet<&str> = ExcludeSet::default().with(["Custom_Dir"]).names().collect();
+    let custom = ExcludeSet::default().with(["Custom_Dir"]);
+    let names: BTreeSet<&str> = custom.names().collect();
 
     assert!(names.contains("custom_dir"), "names must be lowercased: {names:?}");
     assert!(
