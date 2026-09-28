@@ -1218,6 +1218,19 @@ mod tests {
 
     #[test]
     fn supertraits_emit_inherits() {
+        let file = rust("trait Base {} trait Extended: Base + Send {}");
+        let inherits: Vec<&str> = file
+            .relations
+            .iter()
+            .filter(|r| r.kind == RelationKind::Inherits)
+            .map(|r| r.target_name.as_str())
+            .collect();
+        assert!(inherits.contains(&"Base"), "inherits was {inherits:?}");
+        assert!(inherits.contains(&"Send"), "inherits was {inherits:?}");
+    }
+
+    #[test]
+    fn supertraits_emit_inherits_from_a_multiline_file() {
         let file = rust(
             r#"
             trait Base {}
@@ -1230,7 +1243,7 @@ mod tests {
             .filter(|r| r.kind == RelationKind::Inherits)
             .map(|r| r.target_name.as_str())
             .collect();
-        assert!(inherits.contains(&"Base"), "{inherits:?}");
+        assert!(inherits.contains(&"Base"), "inherits was {inherits:?}");
     }
 
     #[test]
