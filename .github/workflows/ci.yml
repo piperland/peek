@@ -24,14 +24,9 @@ jobs:
           toolchain: 1.98.1
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all --check
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Test
-        run: cargo test --all-targets --all-features
-      - name: Release build
-        run: cargo build --release
+      # The repository ships one definition of the gate; local iteration runs the same script.
+      - name: Full gate
+        run: bash scripts/gate.sh full
 
   windows:
     name: windows / build + test
@@ -43,12 +38,14 @@ jobs:
           toolchain: 1.98.1
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Test
-        run: cargo test --all-targets --all-features
+        run: cargo test --all-targets --all-features --locked
       - name: Release build
-        run: cargo build --release
+        run: cargo build --release --locked
 
   macos:
     name: macos / build + test
@@ -60,9 +57,11 @@ jobs:
           toolchain: 1.98.1
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Test
-        run: cargo test --all-targets --all-features
+        run: cargo test --all-targets --all-features --locked
       - name: Release build
-        run: cargo build --release
+        run: cargo build --release --locked

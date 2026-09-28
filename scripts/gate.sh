@@ -46,21 +46,21 @@ case "$TARGET" in
     ;;
   clippy)
     step "cargo clippy --all-targets --all-features -- -D warnings"
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --all-targets --all-features --locked -- -D warnings
     ;;
   test)
     step "cargo test --all-targets --all-features"
-    cargo test --all-targets --all-features
+    cargo test --all-targets --all-features --locked
     ;;
   build)
     step "cargo build --release"
-    cargo build --release
+    cargo build --release --locked
     ;;
   quick)
     step "cargo fmt --check"
     cargo fmt --all --check
     step "cargo clippy --all-targets --all-features -- -D warnings"
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --all-targets --all-features --locked -- -D warnings
     ;;
   full)
     bash "$ROOT/scripts/gate.sh" fmt
