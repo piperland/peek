@@ -323,12 +323,6 @@ pub fn relation_from_row(row: &Row<'_>) -> Result<RelationRow, StoreError> {
 
 /// Unwrap one of the four target columns, which the all-or-nothing check has already proven
 /// present.
-fn target_column(columns: &[Option<String>; 4], index: usize) -> Result<&str, StoreError> {
-    columns[index].as_deref().ok_or_else(|| {
-        StoreError::Corrupt("target column is NULL after an all-or-nothing check".to_owned())
-    })
-}
-
 /// Rebuild a [`ResolutionState`] from its tag and payload.
 ///
 /// The tag says *which* state the row is and the payload supplies the evidence. A disagreement
@@ -411,7 +405,7 @@ fn slot(value: Option<String>, relation: i64) -> Result<String, StoreError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ENTITY_COLUMNS, RELATION_COLUMNS, enum_from_sql, enum_to_sql, is_ambiguous, kind_to_sql,
+        ENTITY_COLUMNS, RELATION_COLUMNS, enum_from_sql, is_ambiguous, kind_to_sql,
         language_to_sql, path_from_sql, relation_kind_to_sql, resolution_payload, resolution_tag,
     };
     use crate::model::entity::EntityKind;

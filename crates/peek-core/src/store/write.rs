@@ -187,7 +187,7 @@ fn upsert_entities(
             sc,
             el,
             ec,
-            optional_enum_to_sql(entity.language.as_ref())?,
+            optional_language_to_sql(entity.language.as_ref())?,
             i64::from(u8::from(entity.is_test)),
             entity.structural_fingerprint.as_deref(),
         ])?;
@@ -405,6 +405,7 @@ impl ScopeParams {
     }
 
     /// How many parameters the scope clause occupies.
+    #[cfg(test)]
     fn scope_len(&self) -> usize {
         match self.pattern {
             Some(_) => 2,
@@ -513,8 +514,19 @@ fn span_params(span: Option<Span>) -> [Value; 6] {
 }
 
 /// Encode an optional enum for storage, mapping `None` to SQL NULL.
+/// Encode an optional enum column.
+///
+/// `Language` is written through its own `as_str()` rather than `serde`, so the stored spelling
+/// and the printed spelling cannot drift. See `row::enum_to_sql` for why that matters.
 fn optional_enum_to_sql<T: Serialize>(value: Option<&T>) -> Result<Option<String>, StoreError> {
     value.map(row::enum_to_sql).transpose()
+}
+
+/// Encode the optional `language` column, which has its own canonical spelling.
+fn optional_language_to_sql(
+    value: Option<&crate::model::Language>,
+) -> Result<Option<String>, StoreError> {
+    value.map(|language| row::language_to_sql(*language)).transpose()
 }
 
 #[cfg(test)]
