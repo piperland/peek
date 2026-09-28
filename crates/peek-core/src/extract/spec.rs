@@ -186,7 +186,9 @@ impl LanguageSpec {
     /// Returns `None` for any language without a spec. Callers must treat that as
     /// "no extraction rules", never as "no symbols found".
     pub fn for_language(language: Language) -> Option<&'static LanguageSpec> {
-        crate::extract::registry::all().into_iter().find(|spec| spec.language == language)
+        crate::extract::registry::all()
+            .into_iter()
+            .find(|spec| spec.language == language)
     }
 
     /// Whether a spec exists for this language.
@@ -233,9 +235,12 @@ mod tests {
     use super::{LanguageSpec, NameStrategy, SymbolRule};
     use crate::model::EntityKind;
 
-    const RULES: &[SymbolRule] = &[
-        SymbolRule::new("function_item", EntityKind::Function, Some("name"), NameStrategy::Field),
-    ];
+    const RULES: &[SymbolRule] = &[SymbolRule::new(
+        "function_item",
+        EntityKind::Function,
+        Some("name"),
+        NameStrategy::Field,
+    )];
 
     #[test]
     fn symbol_rules_look_up_by_node_type() {

@@ -31,11 +31,36 @@ static RUST: LanguageSpec = LanguageSpec {
             Some("name"),
             NameStrategy::Field,
         ),
-        SymbolRule::new("enum_item", EntityKind::Enum, Some("name"), NameStrategy::Field),
-        SymbolRule::new("union_item", EntityKind::Union, Some("name"), NameStrategy::Field),
-        SymbolRule::new("trait_item", EntityKind::Trait, Some("name"), NameStrategy::Field),
-        SymbolRule::new("impl_item", EntityKind::Module, Some("type"), NameStrategy::Field),
-        SymbolRule::new("mod_item", EntityKind::Module, Some("name"), NameStrategy::Field),
+        SymbolRule::new(
+            "enum_item",
+            EntityKind::Enum,
+            Some("name"),
+            NameStrategy::Field,
+        ),
+        SymbolRule::new(
+            "union_item",
+            EntityKind::Union,
+            Some("name"),
+            NameStrategy::Field,
+        ),
+        SymbolRule::new(
+            "trait_item",
+            EntityKind::Trait,
+            Some("name"),
+            NameStrategy::Field,
+        ),
+        SymbolRule::new(
+            "impl_item",
+            EntityKind::Module,
+            Some("type"),
+            NameStrategy::Field,
+        ),
+        SymbolRule::new(
+            "mod_item",
+            EntityKind::Module,
+            Some("name"),
+            NameStrategy::Field,
+        ),
         SymbolRule::new(
             "type_item",
             EntityKind::TypeAlias,
@@ -145,7 +170,10 @@ mod tests {
     #[test]
     fn rust_is_registered() {
         assert!(get(Language::Rust).is_some());
-        assert_eq!(get(Language::Rust).map(|s| s.language), Some(Language::Rust));
+        assert_eq!(
+            get(Language::Rust).map(|s| s.language),
+            Some(Language::Rust)
+        );
     }
 
     #[test]

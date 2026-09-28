@@ -98,7 +98,12 @@ impl GrammarFacts {
     }
 
     /// Format a "no such node type" problem, with the nearest real names when there are any.
-    fn missing_node(&self, language: crate::model::Language, node_type: &str, what: &str) -> String {
+    fn missing_node(
+        &self,
+        language: crate::model::Language,
+        node_type: &str,
+        what: &str,
+    ) -> String {
         let suggestions = self.suggest_node_types(node_type, 8);
         if suggestions.is_empty() {
             format!(
@@ -123,7 +128,11 @@ impl GrammarFacts {
                 "{language}: {what} field `{field}` does not exist in this grammar \
                  (the grammar has {} fields: {})",
                 self.field_names.len(),
-                self.field_names.iter().cloned().collect::<Vec<_>>().join(", ")
+                self.field_names
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         } else {
             format!(
@@ -235,7 +244,11 @@ impl GrammarFacts {
                 impl_type_field,
             } => {
                 if !self.has_node_type(trait_decl_node) {
-                    problems.push(self.missing_node(language, trait_decl_node, "trait declaration"));
+                    problems.push(self.missing_node(
+                        language,
+                        trait_decl_node,
+                        "trait declaration",
+                    ));
                 }
                 if !self.has_node_type(bounds_node) {
                     problems.push(self.missing_node(language, bounds_node, "trait bounds"));
