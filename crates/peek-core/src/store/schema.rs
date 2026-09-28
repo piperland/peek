@@ -27,7 +27,12 @@ use rusqlite::params;
 use crate::store::error::StoreError;
 
 /// The schema version this build writes and reads without migrating.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// Bumped to 2 when `pending` was added to the `resolution_state` CHECK. Nothing has shipped, so
+/// there is no migration to write: a v1 file is a cache entry from a build that could not store
+/// the extractor's output, and the correct response is to refuse it and rebuild rather than to
+/// guess what its rows meant.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// The version that predates schema versioning.
 ///
@@ -114,7 +119,12 @@ CREATE TABLE relation (
   end_line              INTEGER NOT NULL,
   end_column            INTEGER NOT NULL,
   resolution_state      TEXT    NOT NULL
-    CHECK (resolution_state IN ('resolved', 'ambiguous', 'unresolved', 'inferred')),
+    -- `pending` is a real, persistable state: the extractor observed a reference but has not yet
+    -- decided what it points at, and the resolver will decide it later. It was missing from this
+    -- list, which meant the extractor's *normal* output could not be stored at all — the
+    -- indexer conformance suite caught it on the first real pipeline run. A state that the
+    -- database cannot represent is a state the system cannot have.
+    CHECK (resolution_state IN ('resolved', 'ambiguous', 'unresolved', 'inferred', 'pending')),
   resolution_json       TEXT    NOT NULL,
   -- The natural key of a relation: who said it, what they said, to what, and where. Two records
   -- agreeing on all twelve describe the same fact and must collapse to one row, or a re-index

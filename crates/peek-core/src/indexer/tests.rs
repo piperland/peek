@@ -70,12 +70,7 @@ fn open_store(tree: &TempTree) -> Store {
 }
 
 fn id(path: &str, kind: EntityKind, qualified: &str) -> EntityId {
-    EntityId::new(
-        RepoPath::new(path).expect("valid path"),
-        kind,
-        qualified,
-        0,
-    )
+    EntityId::new(RepoPath::new(path).expect("valid path"), kind, qualified, 0)
 }
 
 #[test]
@@ -92,7 +87,10 @@ fn a_full_build_indexes_the_repository_and_reports_what_it_did() {
     let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
 
     let report = outcome.report();
-    assert_eq!(report.files_indexed, 2, "only the two Rust files are source");
+    assert_eq!(
+        report.files_indexed, 2,
+        "only the two Rust files are source"
+    );
     assert_eq!(report.files_degraded, 0, "both files parse cleanly");
     assert!(report.entities_written > 0);
     assert!(report.relations_written > 0);
@@ -100,13 +98,20 @@ fn a_full_build_indexes_the_repository_and_reports_what_it_did() {
         report.generation, 1,
         "the first commit is generation 1, and the store agrees"
     );
-    assert_eq!(store.generation(), 1, "the report must not invent a generation");
+    assert_eq!(
+        store.generation(),
+        1,
+        "the report must not invent a generation"
+    );
 
     // The store's own counts are the ones that matter, and they must agree with the report.
     let stats = store.stats().expect("stats");
     assert_eq!(stats.entity_count, report.entities_written);
     assert_eq!(stats.relation_count, report.relations_written);
-    assert_eq!(stats.orphan_relations, 0, "a fresh build has no dangling edges");
+    assert_eq!(
+        stats.orphan_relations, 0,
+        "a fresh build has no dangling edges"
+    );
 }
 
 #[test]
@@ -165,7 +170,8 @@ fn a_non_utf8_file_degrades_alone_and_never_aborts_the_repository() {
     let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
 
     assert_eq!(
-        outcome.report().files_indexed, 2,
+        outcome.report().files_indexed,
+        2,
         "the two good files must still be indexed"
     );
     assert!(
@@ -227,7 +233,8 @@ fn a_refresh_touches_only_the_file_that_changed() {
     .expect("refresh");
 
     assert_eq!(
-        outcome.report().files_indexed, 1,
+        outcome.report().files_indexed,
+        1,
         "exactly one file is re-extracted"
     );
     assert_eq!(
@@ -261,7 +268,12 @@ fn a_refresh_that_shrinks_a_file_removes_the_symbols_that_left() {
 
     let mut store = open_store(&tree);
     build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first build");
-    assert!(store.entity(&id("src/shrinks.rs", EntityKind::Function, "two")).expect("q").is_some());
+    assert!(
+        store
+            .entity(&id("src/shrinks.rs", EntityKind::Function, "two"))
+            .expect("q")
+            .is_some()
+    );
 
     tree.write("src/shrinks.rs", "fn one() {}\n");
     refresh(
@@ -295,7 +307,12 @@ fn deleting_a_file_removes_its_rows_and_leaves_no_orphans() {
 
     let mut store = open_store(&tree);
     build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
-    assert!(store.entity(&id("src/gone.rs", EntityKind::Function, "gone")).expect("q").is_some());
+    assert!(
+        store
+            .entity(&id("src/gone.rs", EntityKind::Function, "gone"))
+            .expect("q")
+            .is_some()
+    );
 
     fs::remove_file(tree.path().join("src/gone.rs")).expect("delete the file");
     let outcome = refresh(
@@ -336,8 +353,14 @@ fn the_generation_is_monotonic_across_rebuilds() {
     tree.write("src/lib.rs", "fn a() {}\n");
 
     let mut store = open_store(&tree);
-    let first = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first").report().generation;
-    let second = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("second").report().generation;
+    let first = build_full(&mut store, tree.path(), DiscoveryOptions::default())
+        .expect("first")
+        .report()
+        .generation;
+    let second = build_full(&mut store, tree.path(), DiscoveryOptions::default())
+        .expect("second")
+        .report()
+        .generation;
     let third = refresh(
         &mut store,
         tree.path(),
@@ -348,8 +371,14 @@ fn the_generation_is_monotonic_across_rebuilds() {
     .report()
     .generation;
 
-    assert!(second > first, "a rebuild must advance the generation: {first} -> {second}");
-    assert!(third > second, "a refresh must advance it too: {second} -> {third}");
+    assert!(
+        second > first,
+        "a rebuild must advance the generation: {first} -> {second}"
+    );
+    assert!(
+        third > second,
+        "a refresh must advance it too: {second} -> {third}"
+    );
 }
 
 #[test]
@@ -383,7 +412,11 @@ fn an_oversized_file_is_skipped_and_counted_rather_than_parsed() {
     let options = DiscoveryOptions::default().with_max_file_bytes(64);
     let outcome = build_full(&mut store, tree.path(), options).expect("build");
 
-    assert_eq!(outcome.report().files_indexed, 1, "only the small file is parsed");
+    assert_eq!(
+        outcome.report().files_indexed,
+        1,
+        "only the small file is parsed"
+    );
     assert!(
         outcome
             .skipped

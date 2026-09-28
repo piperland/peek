@@ -25,7 +25,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::discover::{DiscoveredFile, DiscoveryOptions, FileDiscovery};
+use crate::discover::{
+    DiscoveredFile, DiscoveryOptions, DiscoveryStats, FileDiscovery, WalkIssue, WalkIssueReason,
+};
 use crate::extract::ExtractedFile;
 use crate::model::{Language, RepoPath, ResolutionState};
 use crate::store::{IndexUpdate, Store, StoreError, UpdateStats};
@@ -46,9 +48,13 @@ pub struct IndexReport {
     pub files_unsupported: u64,
     /// Files whose parse was degraded, so their extraction is best effort.
     pub files_degraded: u64,
-    /// Paths removed from the index.
+    /// Paths removed from the index. **Paths**, not entities — one deleted file routinely removes
+    /// a file entity plus every symbol in it, and reporting that as "2 files removed" is a lie a
+    /// caller cannot check.
     pub files_removed: u64,
     pub entities_written: u64,
+    /// Entity rows deleted, which is the store's `entities_removed` measured directly.
+    pub entities_removed: u64,
     pub relations_written: u64,
     /// Relations left `Pending` by the extractor, awaiting resolution.
     pub relations_pending: u64,
@@ -163,6 +169,12 @@ pub fn build_full(
     let discovery = FileDiscovery::new(root, options).discover()?;
 
     let mut outcome = IndexOutcome::default();
+    // Discovery refused some files before this module ever saw them — non-UTF-8, oversized,
+    // unreadable, unrecognised extension. Those counts belong in the report. Without this the
+    // indexer would report a clean run over a tree where a third of the source was silently
+    // absent, which is the exact failure this whole engine exists to remove.
+    absorb_discovery(&mut outcome, discovery.report().stats(), discovery.issues());
+
     let mut update = IndexUpdate::empty();
 
     for file in discovery.files() {
@@ -341,15 +353,51 @@ fn absorb_file(
     update
 }
 
-/// Copy the store's own measured counts into the report.
+/// Carry the walk's own refusals into the report.
 ///
+/// Discovery *counts* what it refused and, for the cases worth naming, says which file. This
+/// copies both across, so a single report answers "how much did you index" and "what did you
+/// leave out, and why" without the caller having to run a second walk to find out.
+///
+/// `unsupported_extension` is deliberately **not** folded into `files_skipped`. A language with
+/// no extraction rules is a different fact from a file that could not be read, and the indexer
+/// reports them separately for exactly the reason fourteen languages once shipped as "supported"
+/// while extracting nothing.
+fn absorb_discovery(outcome: &mut IndexOutcome, stats: &DiscoveryStats, issues: &[WalkIssue]) {
+    outcome.report.files_unsupported += stats.unsupported_extension as u64;
+    outcome.report.files_skipped +=
+        (stats.not_utf8 + stats.too_large + stats.unreadable + stats.irregular_skipped) as u64;
+
+    for issue in issues {
+        let reason = match &issue.reason {
+            WalkIssueReason::Unreadable { detail } => SkipReason::Unreadable(detail.clone()),
+            WalkIssueReason::OutsideRepository => SkipReason::OutsideRoot,
+            WalkIssueReason::NonUtf8Path => SkipReason::NotUtf8,
+            WalkIssueReason::SymlinkEscapes { target } => {
+                SkipReason::Unreadable(format!("symlink resolves to {target}, outside the root"))
+            }
+            WalkIssueReason::UnresolvableSymlink { .. } => {
+                SkipReason::Unreadable("symlink target does not exist".to_owned())
+            }
+            WalkIssueReason::Duplicate => {
+                SkipReason::Unreadable("a case-insensitive twin of this file was already yielded".to_owned())
+            }
+        };
+        outcome.skipped.push(SkippedFile {
+            path: issue.path.clone(),
+            reason,
+        });
+    }
+}
+
+/// Copy the store's own measured counts into the report.///
 /// The counts come from the store because the store is what actually did the work. Reporting a
 /// number the caller inferred rather than one the writer measured is how statistics become
 /// fiction.
 fn absorb(report: &mut IndexReport, stats: &UpdateStats) {
     report.entities_written = stats.entities_upserted;
     report.relations_written = stats.relations_upserted;
-    report.files_removed = stats.entities_removed;
+    report.entities_removed = stats.entities_removed;
 }
 
 #[cfg(test)]
