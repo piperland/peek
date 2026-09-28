@@ -71,6 +71,69 @@ impl GrammarFacts {
         self.node_types.iter().map(String::as_str)
     }
 
+    /// Node types whose name contains `fragment`, for use in "did you mean" diagnostics.
+    ///
+    /// A wrong node-type string is the single most likely mistake when writing a language spec,
+    /// and it is the exact mistake that made Cortex's extractions silently dead. Pointing the
+    /// author at the nearest real names turns a baffling failure into a one-line fix.
+    pub fn suggest_node_types(&self, fragment: &str, limit: usize) -> Vec<&str> {
+        let lowered = fragment.to_ascii_lowercase();
+        self.node_types
+            .iter()
+            .filter(|name| name.to_ascii_lowercase().contains(&lowered))
+            .map(String::as_str)
+            .take(limit)
+            .collect()
+    }
+
+    /// Field names containing `fragment`, for use in "did you mean" diagnostics.
+    pub fn suggest_fields(&self, fragment: &str, limit: usize) -> Vec<&str> {
+        let lowered = fragment.to_ascii_lowercase();
+        self.field_names
+            .iter()
+            .filter(|name| name.to_ascii_lowercase().contains(&lowered))
+            .map(String::as_str)
+            .take(limit)
+            .collect()
+    }
+
+    /// Format a "no such node type" problem, with the nearest real names when there are any.
+    fn missing_node(&self, language: crate::model::Language, node_type: &str, what: &str) -> String {
+        let suggestions = self.suggest_node_types(node_type, 8);
+        if suggestions.is_empty() {
+            format!(
+                "{language}: {what} node type `{node_type}` does not exist in this grammar \
+                 (the grammar has {} node types)",
+                self.node_types.len()
+            )
+        } else {
+            format!(
+                "{language}: {what} node type `{node_type}` does not exist in this grammar; \
+                 did you mean one of: {}?",
+                suggestions.join(", ")
+            )
+        }
+    }
+
+    /// Format a "no such field" problem, with the nearest real names when there are any.
+    fn missing_field(&self, language: crate::model::Language, field: &str, what: &str) -> String {
+        let suggestions = self.suggest_fields(field, 8);
+        if suggestions.is_empty() {
+            format!(
+                "{language}: {what} field `{field}` does not exist in this grammar \
+                 (the grammar has {} fields: {})",
+                self.field_names.len(),
+                self.field_names.iter().cloned().collect::<Vec<_>>().join(", ")
+            )
+        } else {
+            format!(
+                "{language}: {what} field `{field}` does not exist in this grammar; \
+                 did you mean one of: {}?",
+                suggestions.join(", ")
+            )
+        }
+    }
+
     /// Check a whole [`LanguageSpec`] against the grammar and return every problem found.
     ///
     /// Returning all problems rather than the first is deliberate: a contributor adding a
@@ -81,82 +144,55 @@ impl GrammarFacts {
 
         for rule in spec.symbols {
             if !self.has_node_type(rule.node_type) {
-                problems.push(format!(
-                    "{language}: symbol rule names node type `{}`, which this grammar does not have",
-                    rule.node_type
-                ));
+                problems.push(self.missing_node(language, rule.node_type, "symbol rule"));
             }
             if let Some(field) = rule.name_field
                 && !self.has_field(field)
             {
-                problems.push(format!(
-                    "{language}: symbol rule `{}` names field `{field}`, which this grammar does not have",
-                    rule.node_type
-                ));
+                problems.push(self.missing_field(language, field, "symbol rule name"));
             }
         }
 
         for rule in spec.calls {
             if !self.has_node_type(rule.node_type) {
-                problems.push(format!(
-                    "{language}: call rule names node type `{}`, which this grammar does not have",
-                    rule.node_type
-                ));
+                problems.push(self.missing_node(language, rule.node_type, "call rule"));
             }
             if !self.has_field(rule.callee_field) {
-                problems.push(format!(
-                    "{language}: call rule `{}` names callee field `{}`, which this grammar does not have",
-                    rule.node_type, rule.callee_field
-                ));
+                problems.push(self.missing_field(language, rule.callee_field, "callee"));
             }
         }
 
         for rule in spec.imports {
             if !self.has_node_type(rule.node_type) {
-                problems.push(format!(
-                    "{language}: import rule names node type `{}`, which this grammar does not have",
-                    rule.node_type
-                ));
+                problems.push(self.missing_node(language, rule.node_type, "import rule"));
             }
             if let Some(field) = rule.path_field
                 && !self.has_field(field)
             {
-                problems.push(format!(
-                    "{language}: import rule `{}` names field `{field}`, which this grammar does not have",
-                    rule.node_type
-                ));
+                problems.push(self.missing_field(language, field, "import path"));
             }
             if let Some(node_type) = rule.path_node_type
                 && !self.has_node_type(node_type)
             {
-                problems.push(format!(
-                    "{language}: import rule `{}` names path node type `{node_type}`, which this grammar does not have",
-                    rule.node_type
-                ));
+                problems.push(self.missing_node(language, node_type, "import path"));
             }
         }
 
         for node_type in spec.scope_nodes {
             if !self.has_node_type(node_type) {
-                problems.push(format!(
-                    "{language}: scope node `{node_type}` does not exist in this grammar"
-                ));
+                problems.push(self.missing_node(language, node_type, "scope"));
             }
         }
 
         if let Some(references) = spec.references {
             for node_type in references.node_types {
                 if !self.has_node_type(node_type) {
-                    problems.push(format!(
-                        "{language}: reference rule names node type `{node_type}`, which this grammar does not have"
-                    ));
+                    problems.push(self.missing_node(language, node_type, "reference"));
                 }
             }
             for parent in references.excluded_parents {
                 if !self.has_node_type(parent) {
-                    problems.push(format!(
-                        "{language}: reference excluded-parent `{parent}` does not exist in this grammar"
-                    ));
+                    problems.push(self.missing_node(language, parent, "excluded parent"));
                 }
             }
         }
@@ -168,33 +204,28 @@ impl GrammarFacts {
         problems
     }
 
-    fn validate_inheritance(&self, language: crate::model::Language, style: &InheritanceStyle) -> Vec<String> {
+    fn validate_inheritance(
+        &self,
+        language: crate::model::Language,
+        style: &InheritanceStyle,
+    ) -> Vec<String> {
         let mut problems = Vec::new();
-        let check_node = |problems: &mut Vec<String>, node_type: &str, what: &str| {
-            if !self.has_node_type(node_type) {
-                problems.push(format!(
-                    "{language}: inheritance style names {what} node type `{node_type}`, which this grammar does not have"
-                ));
-            }
-        };
-        let check_field = |problems: &mut Vec<String>, field: &str, what: &str| {
-            if !self.has_field(field) {
-                problems.push(format!(
-                    "{language}: inheritance style names {what} field `{field}`, which this grammar does not have"
-                ));
-            }
-        };
-
         match style {
             InheritanceStyle::SuperclassAndInterfaces {
                 superclass_node,
                 interfaces_node,
             } => {
-                check_node(&mut problems, superclass_node, "superclass");
-                check_node(&mut problems, interfaces_node, "interfaces");
+                if !self.has_node_type(superclass_node) {
+                    problems.push(self.missing_node(language, superclass_node, "superclass"));
+                }
+                if !self.has_node_type(interfaces_node) {
+                    problems.push(self.missing_node(language, interfaces_node, "interfaces"));
+                }
             }
             InheritanceStyle::BaseList { node_type } => {
-                check_node(&mut problems, node_type, "base list");
+                if !self.has_node_type(node_type) {
+                    problems.push(self.missing_node(language, node_type, "base list"));
+                }
             }
             InheritanceStyle::TraitBounds {
                 trait_decl_node,
@@ -203,18 +234,36 @@ impl GrammarFacts {
                 impl_trait_field,
                 impl_type_field,
             } => {
-                check_node(&mut problems, trait_decl_node, "trait declaration");
-                check_node(&mut problems, bounds_node, "trait bounds");
-                check_node(&mut problems, impl_node, "impl block");
-                check_field(&mut problems, impl_trait_field, "impl trait");
-                check_field(&mut problems, impl_type_field, "impl type");
+                if !self.has_node_type(trait_decl_node) {
+                    problems.push(self.missing_node(language, trait_decl_node, "trait declaration"));
+                }
+                if !self.has_node_type(bounds_node) {
+                    problems.push(self.missing_node(language, bounds_node, "trait bounds"));
+                }
+                if !self.has_node_type(impl_node) {
+                    problems.push(self.missing_node(language, impl_node, "impl block"));
+                }
+                if !self.has_field(impl_trait_field) {
+                    problems.push(self.missing_field(language, impl_trait_field, "impl trait"));
+                }
+                if !self.has_field(impl_type_field) {
+                    problems.push(self.missing_field(language, impl_type_field, "impl type"));
+                }
             }
             InheritanceStyle::ProtocolInheritance {
                 protocol_node,
                 inheritance_node,
             } => {
-                check_node(&mut problems, protocol_node, "protocol");
-                check_node(&mut problems, inheritance_node, "protocol inheritance");
+                if !self.has_node_type(protocol_node) {
+                    problems.push(self.missing_node(language, protocol_node, "protocol"));
+                }
+                if !self.has_node_type(inheritance_node) {
+                    problems.push(self.missing_node(
+                        language,
+                        inheritance_node,
+                        "protocol inheritance",
+                    ));
+                }
             }
         }
         problems
