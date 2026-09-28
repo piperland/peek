@@ -175,22 +175,24 @@ impl<'a> Walker<'a> {
     }
 
     fn span(&self, node: Node<'_>) -> Span {
-        self.source
-            .span(node.start_byte(), node.end_byte())
+        match self.source.span(node.start_byte(), node.end_byte()) {
+            Some(span) => span,
             // A Tree-sitter range is always well-formed and in bounds, so this is unreachable in
-            // practice. Falling back to a zero-width span at the node start keeps a pathological
-            // grammar from aborting an entire file over a position calculation.
-            .unwrap_or_else(|| {
-                let line = self.source.line_count() as u32;
-                Span::new(
-                    node.start_byte().min(u32::MAX as usize) as u32,
-                    node.start_byte().min(u32::MAX as usize) as u32,
-                    line,
-                    1,
-                    line,
-                    1,
-                )
-            })
+            // practice. A zero-width span at the last line keeps a pathological grammar from
+            // aborting an entire file over a position calculation.
+            None => {
+                let byte = u32::try_from(node.start_byte()).unwrap_or(0);
+                let line = u32::try_from(self.source.line_count()).unwrap_or(1);
+                Span {
+                    start_byte: byte,
+                    end_byte: byte,
+                    start_line: line,
+                    start_column: 1,
+                    end_line: line,
+                    end_column: 1,
+                }
+            }
+        }
     }
 
     fn text(&self, node: Node<'_>) -> Option<String> {
@@ -443,7 +445,7 @@ impl<'a> Walker<'a> {
         }
 
         let declared = self.declare(node);
-        if let Some(entity_id) = declared {
+        if let Some(entity_id) = declared.clone() {
             self.scope.push(ScopeEntry {
                 name: entity_id.name().to_owned(),
                 id: entity_id,
@@ -546,8 +548,8 @@ impl<'a> Walker<'a> {
     }
 
     /// Emit the non-structural relations a node implies.
-    fn emit_relations(&self, node: Node<'_>) {
-        if let Some(Some(source)) = self.current_entity().map(|id| Some(id.clone())) {
+    fn emit_relations(&mut self, node: Node<'_>) {
+        if let Some(source) = self.current_entity().cloned() {
             if let Some(rule) = self.spec.call_rule(node.kind())
                 && let Some(callee_node) = node.child_by_field_name(rule.callee_field)
             {
@@ -589,7 +591,7 @@ impl<'a> Walker<'a> {
         false
     }
 
-    fn emit_call(&self, source: EntityId, node: Node<'_>, callee: &Callee) {
+    fn emit_call(&mut self, source: EntityId, node: Node<'_>, callee: &Callee) {
         if callee.name.is_empty() {
             return;
         }
@@ -618,18 +620,21 @@ impl<'a> Walker<'a> {
     }
 
     /// Emit `imports` relations from a `use` declaration, preserving aliases.
-    fn emit_import(&self, source: EntityId, node: Node<'_>, path_field: Option<&str>) {
+    fn emit_import(&mut self, source: EntityId, node: Node<'_>, path_field: Option<&str>) {
         let Some(argument) = path_field.and_then(|field| node.child_by_field_name(field)) else {
             return;
         };
+        // Copy the text out so the binding walk does not borrow `self` while we push relations.
+        let text = self.source.text().to_owned();
+        let span = self.span(node);
         let mut bindings = Vec::new();
-        collect_use_bindings(self, argument, "", &mut bindings);
+        collect_use_bindings(text.as_str(), argument, "", &mut bindings);
         for binding in bindings {
             self.relations.push(Relation::pending(
                 RelationKind::Imports,
                 source.clone(),
                 binding.local,
-                self.span(node),
+                span,
                 Evidence::ImportBinding {
                     module: binding.module,
                     alias: binding.alias,
@@ -639,7 +644,7 @@ impl<'a> Walker<'a> {
     }
 
     /// Emit `implements` and `inherits` relations.
-    fn emit_inheritance(&self, node: Node<'_>, style: InheritanceStyle) {
+    fn emit_inheritance(&mut self, node: Node<'_>, style: InheritanceStyle) {
         match style {
             InheritanceStyle::TraitBounds {
                 trait_decl_node,
@@ -683,13 +688,23 @@ impl<'a> Walker<'a> {
                 }
 
                 // `trait X: Y` -> inherits.
-                if node.kind() == trait_decl_node
-                    && let Some(name) = self.text(node.child_by_field_name("name")?)
-                    && let Some(bounds) = node.child_by_field_name(bounds_node)
-                {
-                    let span = self.span(node);
-                    for bound in self.bound_types(bounds) {
-                        self.emit_named(RelationKind::Inherits, &name, &bound, span, "inherits");
+                if node.kind() == trait_decl_node {
+                    let name = node
+                        .child_by_field_name("name")
+                        .and_then(|child| self.text(child));
+                    if let (Some(name), Some(bounds)) =
+                        (name, node.child_by_field_name(bounds_node))
+                    {
+                        let span = self.span(node);
+                        for bound in self.bound_types(bounds) {
+                            self.emit_named(
+                                RelationKind::Inherits,
+                                &name,
+                                &bound,
+                                span,
+                                "inherits",
+                            );
+                        }
                     }
                 }
             }
@@ -757,7 +772,7 @@ impl<'a> Walker<'a> {
     /// this file may not declare. The resolver turns the name into an entity or records why it
     /// could not.
     fn emit_named(
-        &self,
+        &mut self,
         kind: RelationKind,
         subject: &str,
         bound: &str,
@@ -789,7 +804,7 @@ impl<'a> Walker<'a> {
         }
     }
 
-    fn emit_reference(&self, source: EntityId, node: Node<'_>) {
+    fn emit_reference(&mut self, source: EntityId, node: Node<'_>) {
         if let Some(name) = self.text(node)
             && !name.is_empty()
         {
