@@ -1366,8 +1366,15 @@ fn the_orphan_counter_detects_a_dangling_edge_when_the_constraint_is_disabled() 
 
     {
         // Foreign keys are off by default on a new connection, which is exactly how this situation
-        // arises in production: a migration, a maintenance script, or a bug.
+        // arises in production: a migration, a maintenance script, or a bug. The state/target
+        // CHECK has to be relaxed too — it is what normally makes a dangling edge impossible, so
+        // producing one requires defeating both guards.
         let raw = Connection::open(dir.database()).expect("raw connection");
+        raw.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             PRAGMA ignore_check_constraints = ON;",
+        )
+        .expect("relax the guards");
         raw.execute("DELETE FROM entity WHERE path = 'src/target.rs'", [])
             .expect("delete the target behind the store's back");
     }
@@ -1511,6 +1518,15 @@ fn a_removal_demotes_an_edge_before_deleting_the_entity_it_points_at() {
         .apply_update(IndexUpdate::empty().removing_file(path("src/target.rs")))
         .expect("a referenced entity can be removed");
     assert_eq!(stats.entities_removed, 1);
-    assert_eq!(stats.relations_removed, 0, "the demoted edge is not a removal");
-    assert_eq!(store.stats().expect("stats").unresolved_relations, 2);
+    // The fixture has one edge *sourced* from `src/target.rs` (the `Implements` edge), so exactly
+    // one relation is removed. The edge that pointed *into* it is not removed — it is demoted.
+    assert_eq!(
+        stats.relations_removed, 1,
+        "only the edge sourced from the removed file is a removal"
+    );
+    assert_eq!(
+        store.stats().expect("stats").unresolved_relations,
+        2,
+        "the demoted edge and the pre-existing external one"
+    );
 }

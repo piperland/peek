@@ -605,6 +605,15 @@ mod tests {
         // `100%` must not act as a wildcard.
         assert_eq!(like_pattern(&path("we_ird")), "we\\_ird/%");
         assert_eq!(like_pattern(&path("100%")), "100\\%/%");
-        assert_eq!(like_pattern(&path("a\\b")), "a\\\\b/%");
+    }
+
+    #[test]
+    fn a_path_never_contains_a_backslash_so_the_like_escape_is_never_needed_for_one() {
+        // `RepoPath` normalises `\` to `/` at construction, so a backslash can never reach the
+        // pattern builder. That is why the escape only has to handle `_` and `%`. If a backslash
+        // ever could appear, `LIKE ... ESCAPE '\'` would need to escape it too, and this would be
+        // the test that noticed.
+        assert_eq!(path("a\\b").as_str(), "a/b");
+        assert_eq!(like_pattern(&path("a\\b")), "a/b/%");
     }
 }
