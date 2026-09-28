@@ -526,7 +526,9 @@ fn optional_enum_to_sql<T: Serialize>(value: Option<&T>) -> Result<Option<String
 fn optional_language_to_sql(
     value: Option<&crate::model::Language>,
 ) -> Result<Option<String>, StoreError> {
-    value.map(|language| row::language_to_sql(*language)).transpose()
+    value
+        .map(|language| row::language_to_sql(*language))
+        .transpose()
 }
 
 #[cfg(test)]
