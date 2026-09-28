@@ -143,10 +143,14 @@ fn a_relative_symlink_escaping_the_root_is_refused() {
     // surfaced as a plain directory, in which case the link is never followed and so is never
     // *refused*. Asserting the counter would then report a platform quirk as a containment
     // failure. The count is reported in the message so a regression is still visible.
+    let yielded: Vec<&str> = discovery
+        .files()
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
     assert!(
         !contains(discovery.files(), "src/up/main.rs"),
-        "nothing under the escaping link may be indexed; yielded {:?}",
-        super::paths(discovery.files())
+        "nothing under the escaping link may be indexed; yielded {yielded:?}"
     );
     assert!(
         contains(discovery.files(), "src/main.rs"),
