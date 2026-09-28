@@ -1,0 +1,4 @@
+# `.ignore` is honoured alongside `.gitignore`, with lower precedence. Committed to prove that
+# both are read, since Cortex read neither.
+#    Asserted against: editor/notes.py (ignored) and editor/keep.rs (indexed).
+/editor/

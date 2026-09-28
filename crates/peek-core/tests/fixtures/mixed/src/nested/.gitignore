@@ -1,0 +1,4 @@
+# A nested ignore file. Git scopes it to its own directory and below, so the same rule name has a
+# different effect one level up.
+#    Asserted against: src/nested/local.rs (ignored) and src/local.rs (indexed).
+local.rs
