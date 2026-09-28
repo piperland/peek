@@ -25,7 +25,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::discover::{DiscoveryOptions, DiscoveredFile, FileDiscovery};
+use crate::discover::{DiscoveredFile, DiscoveryOptions, FileDiscovery};
 use crate::extract::ExtractedFile;
 use crate::model::{Language, RepoPath, ResolutionState};
 use crate::store::{IndexUpdate, Store, StoreError, UpdateStats};
