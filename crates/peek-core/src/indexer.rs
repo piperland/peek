@@ -161,14 +161,13 @@ pub fn build_full(
 ) -> Result<IndexOutcome, IndexError> {
     let started = Instant::now();
     let discovery = FileDiscovery::new(root, options).discover()?;
-    let canonical_root = discovery.report().root().to_path_buf();
 
     let mut outcome = IndexOutcome::default();
     let mut update = IndexUpdate::empty();
 
     for file in discovery.files() {
         let absolute = discovery.report().absolute(&file.path);
-        update = ingest(&canonical_root, file, &absolute, update, &mut outcome);
+        update = ingest(file, &absolute, update, &mut outcome);
     }
 
     let stats = store.apply_update(update)?;
@@ -275,13 +274,11 @@ pub fn refresh(
 
 /// Read and extract one discovered file, folding it into `update`.
 fn ingest(
-    root: &Path,
     file: &DiscoveredFile,
     absolute: &Path,
     mut update: IndexUpdate,
     outcome: &mut IndexOutcome,
 ) -> IndexUpdate {
-    let _ = root;
     let Some(spec) = crate::extract::registry::get(file.language) else {
         outcome.report.files_unsupported += 1;
         outcome.skipped.push(SkippedFile {
