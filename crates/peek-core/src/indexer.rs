@@ -312,7 +312,7 @@ fn ingest(
 /// would leave rows for symbols that no longer exist.
 fn absorb_file(
     extracted: ExtractedFile,
-    update: IndexUpdate,
+    mut update: IndexUpdate,
     outcome: &mut IndexOutcome,
 ) -> IndexUpdate {
     outcome.report.files_indexed += 1;
