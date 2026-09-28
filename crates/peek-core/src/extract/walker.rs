@@ -146,6 +146,9 @@ impl Callee {
 struct ScopeEntry {
     name: String,
     id: EntityId,
+    /// Whether the enclosing declaration is a type, which is what promotes a function declared
+    /// inside it to a method.
+    is_type: bool,
 }
 
 /// The walker.
@@ -153,6 +156,8 @@ struct Walker<'a> {
     spec: &'static LanguageSpec,
     source: SourceText<'a>,
     path: RepoPath,
+    /// The file entity every module-level relation anchors on.
+    file_id: EntityId,
     entities: Vec<Entity>,
     relations: Vec<Relation>,
     scope: Vec<ScopeEntry>,
@@ -166,8 +171,28 @@ impl<'a> Walker<'a> {
         Self {
             spec,
             source: SourceText::new(text),
+            file_id: EntityId::new(
+                path.clone(),
+                EntityKind::File,
+                path.file_name().to_owned(),
+                0,
+            ),
             path,
-            entities: Vec::new(),
+            entities: vec![Entity {
+                id: EntityId::new(
+                    path.clone(),
+                    EntityKind::File,
+                    path.file_name().to_owned(),
+                    0,
+                ),
+                name: path.file_name().to_owned(),
+                signature: None,
+                doc: None,
+                span: None,
+                language: Some(spec.language),
+                is_test: false,
+                structural_fingerprint: None,
+            }],
             relations: Vec::new(),
             scope: Vec::new(),
             ordinals: HashMap::new(),
@@ -307,17 +332,20 @@ impl<'a> Walker<'a> {
         Some(lines.join("\n"))
     }
 
-    /// Collect the type names a `trait_bounds` node names.
-    fn bound_types(&self, node: Node<'_>) -> Vec<String> {
-        node.named_children(&mut node.walk())
-            .filter(|child| {
-                matches!(
-                    child.kind(),
-                    "type_identifier" | "scoped_type_identifier" | "generic_type"
-                )
-            })
-            .filter_map(|child| self.text(child))
-            .collect()
+    /// The names a node introduces as type bounds.
+    ///
+    /// Handles both shapes the grammars use. A `trait_bounds` node *contains* the bounds, so
+    /// its children are read. But the `impl_item.trait` field is already the bound itself, and
+    /// reading its children would find nothing — a `type_identifier` has no children. Getting
+    /// this wrong is why Cortex could not produce a single implementation edge.
+    fn bound_names(&self, node: Node<'_>) -> Vec<String> {
+        match node.kind() {
+            "trait_bounds" | "use_bounds" => node
+                .named_children(&mut node.walk())
+                .filter_map(|child| self.type_name(child))
+                .collect(),
+            _ => self.type_name(node).into_iter().collect(),
+        }
     }
 
     /// The type named by an `impl_item`'s `type` field, reading through generic and reference
@@ -445,10 +473,12 @@ impl<'a> Walker<'a> {
         }
 
         let declared = self.declare(node);
-        if let Some(entity_id) = declared.clone() {
+        if let Some(id) = declared.clone() {
+            let is_type = id.kind().is_type();
             self.scope.push(ScopeEntry {
-                name: entity_id.name().to_owned(),
-                id: entity_id,
+                name: id.name().to_owned(),
+                id,
+                is_type,
             });
         }
 
@@ -472,9 +502,21 @@ impl<'a> Walker<'a> {
             return None;
         }
 
+        // A function declared inside a type is a method, not a plain function. The language
+        // spec cannot express this — `function_item` means one node type in every context — so
+        // the distinction is made here, from the scope stack, rather than being declared twice
+        // in every language's table.
+        let mut kind = rule.kind;
+        if kind == EntityKind::Function
+            && let Some(enclosing) = self.scope.last()
+            && enclosing.is_type
+        {
+            kind = EntityKind::Method;
+        }
+
         let qualified_name = self.qualified_name(&name);
-        let ordinal = self.next_ordinal(rule.kind, &qualified_name);
-        let id = EntityId::new(self.path.clone(), rule.kind, qualified_name, ordinal);
+        let ordinal = self.next_ordinal(kind, &qualified_name);
+        let id = EntityId::new(self.path.clone(), kind, qualified_name, ordinal);
         let span = self.span(node);
 
         let entity = Entity {
@@ -549,17 +591,20 @@ impl<'a> Walker<'a> {
 
     /// Emit the non-structural relations a node implies.
     fn emit_relations(&mut self, node: Node<'_>) {
-        if let Some(source) = self.current_entity().cloned() {
-            if let Some(rule) = self.spec.call_rule(node.kind())
-                && let Some(callee_node) = node.child_by_field_name(rule.callee_field)
-            {
-                let callee = self.callee(callee_node);
-                self.emit_call(source.clone(), node, &callee);
-            }
+        // A `use` declaration and an `impl` block sit outside any function body, so they have
+        // no enclosing symbol to originate from. They anchor on the file instead of being
+        // dropped — Cortex silently lost every module-level import for the same reason.
+        let subject = self.current_entity().cloned().unwrap_or_else(|| self.file_id.clone());
 
-            if let Some(rule) = self.spec.import_rule(node.kind()) {
-                self.emit_import(source, node, rule.path_field);
-            }
+        if let Some(rule) = self.spec.call_rule(node.kind())
+            && let Some(callee_node) = node.child_by_field_name(rule.callee_field)
+        {
+            let callee = self.callee(callee_node);
+            self.emit_call(subject.clone(), node, &callee);
+        }
+
+        if let Some(rule) = self.spec.import_rule(node.kind()) {
+            self.emit_import(subject, node, rule.path_field);
         }
 
         if let Some(style) = self.spec.inheritance {
@@ -569,9 +614,9 @@ impl<'a> Walker<'a> {
         if let Some(references) = self.spec.references
             && references.node_types.contains(&node.kind())
             && !self.is_excluded_reference(node, references.excluded_parents)
-            && let Some(source) = self.current_entity().cloned()
+            && self.current_entity().is_some()
         {
-            self.emit_reference(source, node);
+            self.emit_reference(subject, node);
         }
     }
 
@@ -659,7 +704,7 @@ impl<'a> Walker<'a> {
                     if let Some(implemented) = implemented {
                         let span = self.span(node);
                         if let Some(trait_node) = node.child_by_field_name(impl_trait_field) {
-                            for bound in self.bound_types(trait_node) {
+                            for bound in self.bound_names(trait_node) {
                                 self.emit_named(
                                     RelationKind::Implements,
                                     &implemented,
@@ -696,7 +741,7 @@ impl<'a> Walker<'a> {
                         (name, node.child_by_field_name(bounds_node))
                     {
                         let span = self.span(node);
-                        for bound in self.bound_types(bounds) {
+                        for bound in self.bound_names(bounds) {
                             self.emit_named(
                                 RelationKind::Inherits,
                                 &name,
@@ -728,7 +773,7 @@ impl<'a> Walker<'a> {
                     && let Some(list) = self.child_with_kind(node, interfaces_node)
                 {
                     let span = self.span(node);
-                    for interface in self.bound_types(list) {
+                    for interface in self.bound_names(list) {
                         self.emit_named(
                             RelationKind::Implements,
                             &name,
@@ -744,7 +789,7 @@ impl<'a> Walker<'a> {
                     && let Some(list) = self.child_with_kind(node, node_type)
                 {
                     let span = self.span(node);
-                    for base in self.bound_types(list) {
+                    for base in self.bound_names(list) {
                         self.emit_named(RelationKind::Inherits, &name, &base, span, "inherits");
                     }
                 }
@@ -757,7 +802,7 @@ impl<'a> Walker<'a> {
                     && let Some(list) = self.child_with_kind(node, inheritance_node)
                 {
                     let span = self.span(node);
-                    for parent in self.bound_types(list) {
+                    for parent in self.bound_names(list) {
                         self.emit_named(RelationKind::Inherits, &name, &parent, span, "inherits");
                     }
                 }
@@ -782,26 +827,22 @@ impl<'a> Walker<'a> {
         if subject.is_empty() || bound.is_empty() {
             return;
         }
-        // Anchor the relation on the file so it is not lost, and carry the subject name so the
-        // resolver can bind both ends.
+        // Anchor on the enclosing entity, or the file when there is none.
         let anchor = self
-            .scope
-            .last()
-            .map(|entry| entry.id.clone())
-            .or_else(|| self.entities.first().map(|entity| entity.id.clone()));
-        if let Some(anchor) = anchor {
-            self.relations.push(Relation {
-                kind,
-                source: anchor,
-                target_name: bound.to_owned(),
-                target: None,
-                span,
-                resolution: ResolutionState::Inferred {
-                    by: Evidence::NameOnly,
-                    basis: format!("{basis} relation on `{subject}`"),
-                },
-            });
-        }
+            .current_entity()
+            .cloned()
+            .unwrap_or_else(|| self.file_id.clone());
+        self.relations.push(Relation {
+            kind,
+            source: anchor,
+            target_name: bound.to_owned(),
+            target: None,
+            span,
+            resolution: ResolutionState::Inferred {
+                by: Evidence::NameOnly,
+                basis: format!("{basis} relation on `{subject}`"),
+            },
+        });
     }
 
     fn emit_reference(&mut self, source: EntityId, node: Node<'_>) {
@@ -1198,7 +1239,21 @@ mod tests {
 
     #[test]
     fn impl_dyn_trait_is_not_lost() {
-        // The bound lives at `type` -> `dynamic_type` -> `trait`, not at `impl_item.trait`.
+        // The bound lives at `impl_item.trait`. Reading only the `type` field loses it silently,
+        // which is a documented trap in this grammar.
+        let file = rust("impl std::fmt::Debug for MyType {}");
+        let implements: Vec<&str> = file
+            .relations
+            .iter()
+            .filter(|r| r.kind == RelationKind::Implements)
+            .map(|r| r.target_name.as_str())
+            .collect();
+        assert_eq!(implements, vec!["std::fmt::Debug"], "{implements:?}");
+    }
+
+    #[test]
+    fn impl_dyn_marker_type_keeps_its_bound() {
+        // `impl dyn Trait {}` hides the bound at `type` -> `dynamic_type` -> `trait`.
         let file = rust("impl dyn std::fmt::Debug for MyType {}");
         let implements: Vec<&str> = file
             .relations
@@ -1244,7 +1299,7 @@ mod tests {
     fn single_segment_path_calls_are_reported_as_ambiguous() {
         // `S::new()` and `mod::new()` are byte-identical in Rust. Claiming to know which one it
         // is would be a confident wrong answer.
-        let file = rust("struct S; impl S { fn new() -> S { S } }");
+        let file = rust("struct S; impl S { fn new() -> S { S } } fn main() { S::new(); }");
         let call = file
             .relations
             .iter()
@@ -1419,13 +1474,35 @@ mod tests {
 
     #[test]
     fn summary_helpers_count_by_kind() {
-        let file = rust("struct S; fn f() {} fn g() {}");
+        let file = rust("struct S; fn f() { g(); } fn g() {}");
         let entities = file.entity_counts();
         assert_eq!(entities.get(&EntityKind::Function), Some(&2));
         assert_eq!(entities.get(&EntityKind::Struct), Some(&1));
+        assert_eq!(entities.get(&EntityKind::File), Some(&1));
 
         let relations = file.relation_counts();
-        assert!(relations.contains_key(&RelationKind::References));
+        assert!(relations.contains_key(&RelationKind::Calls), "{relations:?}");
+    }
+
+    #[test]
+    fn a_file_entity_exists_so_module_level_relations_have_an_anchor() {
+        // A `use` declaration and an `impl` block sit outside any function body. Without a file
+        // entity they have nowhere to originate from and are silently lost, which is what
+        // happened to every module-level import in the code Peek replaces.
+        let file = rust("use std::collections::HashMap; trait T {} struct S; impl T for S {}");
+        let file_entity = file
+            .entities
+            .iter()
+            .find(|entity| entity.kind() == EntityKind::File)
+            .expect("a file entity is always present");
+        assert_eq!(file_entity.name, "payments.rs");
+
+        let import = file
+            .relations
+            .iter()
+            .find(|r| r.kind == RelationKind::Imports)
+            .expect("the import survived");
+        assert_eq!(import.source, file_entity.id);
     }
 
     #[test]
