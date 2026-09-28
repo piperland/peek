@@ -514,15 +514,13 @@ fn span_params(span: Option<Span>) -> [Value; 6] {
 }
 
 /// Encode an optional enum for storage, mapping `None` to SQL NULL.
-/// Encode an optional enum column.
-///
-/// `Language` is written through its own `as_str()` rather than `serde`, so the stored spelling
-/// and the printed spelling cannot drift. See `row::enum_to_sql` for why that matters.
-fn optional_enum_to_sql<T: Serialize>(value: Option<&T>) -> Result<Option<String>, StoreError> {
-    value.map(row::enum_to_sql).transpose()
-}
-
 /// Encode the optional `language` column, which has its own canonical spelling.
+///
+/// There is deliberately no generic `enum_to_sql` here. Every stored enum is written through its
+/// own `as_str()`, because serde's `rename_all = "snake_case"` disagrees with the canonical name
+/// for some variants — `Language::ObjectiveC` serialises as `objective_c` while `as_str()` says
+/// `objectivec`. A generic helper invites exactly that divergence; per-type helpers make it
+/// impossible to reintroduce. See `row::enum_to_sql`'s replacement and the divergence guard test.
 fn optional_language_to_sql(
     value: Option<&crate::model::Language>,
 ) -> Result<Option<String>, StoreError> {

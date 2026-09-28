@@ -45,26 +45,6 @@ pub struct RelationRow {
     pub relation: Relation,
 }
 
-/// Serialise any model enum to its stored wire form.
-///
-/// Goes through serde rather than a hand-written `as_str` lookup so the stored text and the
-/// serialised text cannot diverge: there is one definition of each variant's name.
-/// The wire form of a language, kind, or relation kind.
-///
-/// These go through the type's own `as_str()` rather than `serde`, because serde's
-/// `rename_all = "snake_case"` produces a *different* spelling for some variants than the
-/// canonical name does — `Language::ObjectiveC` serialises as `objective_c` while `as_str()`
-/// says `objectivec`. Two spellings of one value is two sources of truth, and a migration that
-/// reads one and writes the other silently changes the stored value. The canonical
-/// `as_str()`/`FromStr` pair is the contract, and `model::Language` already round-trips it.
-pub fn enum_to_sql<T: Serialize>(value: &T) -> Result<String, StoreError> {
-    let json = serde_json::to_value(value)
-        .map_err(|e| StoreError::Query(format!("cannot encode a stored value: {e}")))?;
-    json.as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| StoreError::Query("an enum did not encode to a string".to_owned()))
-}
-
 /// Decode a stored enum value, rejecting anything this build does not know.
 ///
 /// A newer Peek writing a kind or evidence class this build has never heard of must produce an
