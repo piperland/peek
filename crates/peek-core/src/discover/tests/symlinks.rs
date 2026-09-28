@@ -116,7 +116,9 @@ fn a_symlink_escaping_the_root_is_refused() {
 fn a_relative_symlink_escaping_the_root_is_refused() {
     let root = TempTree::new("symlink-relative-escape");
     if !root.can_create_symlinks() {
-        eprintln!("skipping: this environment cannot create symlinks (Windows needs Developer Mode)");
+        eprintln!(
+            "skipping: this environment cannot create symlinks (Windows needs Developer Mode)"
+        );
         return;
     }
     root.file("src/main.rs", "fn main() {}");

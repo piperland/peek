@@ -121,7 +121,9 @@ fn output_paths_preserve_case() {
 fn sorting_does_not_fold_case() {
     let root = TempTree::new("sort-case");
     if !root.filesystem_is_case_sensitive() {
-        eprintln!("skipping: this filesystem is case-insensitive, so a case fold cannot be observed");
+        eprintln!(
+            "skipping: this filesystem is case-insensitive, so a case fold cannot be observed"
+        );
         return;
     }
     root.file("src/b.rs", "fn b() {}");
