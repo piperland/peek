@@ -245,13 +245,15 @@ mod tests {
         Some("name"),
         NameStrategy::Field,
     )];
+    const CALLS: &[CallRule] = &[CallRule::new("call_expression", "function")];
+    const IMPORTS: &[ImportRule] = &[ImportRule::new("use_declaration", Some("argument"), None)];
 
     fn spec() -> LanguageSpec {
         LanguageSpec {
             language: crate::model::Language::Rust,
             symbols: RULES,
-            calls: &[CallRule::new("call_expression", "function")],
-            imports: &[ImportRule::new("use_declaration", Some("argument"), None)],
+            calls: CALLS,
+            imports: IMPORTS,
             inheritance: None,
             references: None,
             scope_nodes: &["function_item"],
