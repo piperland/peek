@@ -275,7 +275,7 @@ fn a_tree_of_unsupported_files_says_so() {
 #[test]
 fn a_tree_of_unusable_files_says_so() {
     let root = TempTree::new("unusable-only");
-    root.raw_file("src/a.rs", &vec![0xffu8; 128]);
+    root.raw_file("src/a.rs", vec![0xffu8; 128]);
     root.file("notes.md", "# hi");
 
     let discovery = FileDiscovery::new(root.path(), DiscoveryOptions::default())
