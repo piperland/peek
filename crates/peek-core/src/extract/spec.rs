@@ -273,12 +273,14 @@ mod tests {
     fn call_and_import_rules_look_up_by_node_type() {
         let spec = spec();
         assert_eq!(
-            spec.call_rule("call_expression").map(|rule| rule.callee_field),
+            spec.call_rule("call_expression")
+                .map(|rule| rule.callee_field),
             Some("function")
         );
         assert!(spec.call_rule("no_such_node").is_none());
         assert_eq!(
-            spec.import_rule("use_declaration").and_then(|rule| rule.path_field),
+            spec.import_rule("use_declaration")
+                .and_then(|rule| rule.path_field),
             Some("argument")
         );
         assert!(spec.import_rule("no_such_node").is_none());
