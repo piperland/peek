@@ -351,3 +351,6 @@ fn absorb(report: &mut IndexReport, stats: &UpdateStats) {
     report.relations_written = stats.relations_upserted;
     report.files_removed = stats.entities_removed;
 }
+
+#[cfg(test)]
+mod tests;
