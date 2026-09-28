@@ -63,10 +63,10 @@ case "$TARGET" in
     cargo clippy --all-targets --all-features -- -D warnings
     ;;
   full)
-    "$ROOT/scripts/gate.sh" fmt
-    "$ROOT/scripts/gate.sh" clippy
-    "$ROOT/scripts/gate.sh" test
-    "$ROOT/scripts/gate.sh" build
+    bash "$ROOT/scripts/gate.sh" fmt
+    bash "$ROOT/scripts/gate.sh" clippy
+    bash "$ROOT/scripts/gate.sh" test
+    bash "$ROOT/scripts/gate.sh" build
     ;;
   *)
     fail "unknown gate target: $TARGET (expected: fmt|clippy|test|build|quick|full)"
