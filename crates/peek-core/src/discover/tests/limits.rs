@@ -83,7 +83,7 @@ fn one_non_utf8_file_does_not_abort_the_repository() {
     );
     root.raw_file(
         "src/binary.go",
-        &[0x00, 0x01, 0x02, 0xff, 0xfe, 0x03],
+        [0x00, 0x01, 0x02, 0xff, 0xfe, 0x03],
     );
 
     let discovery = FileDiscovery::new(root.path(), DiscoveryOptions::default())
@@ -229,7 +229,7 @@ fn an_empty_source_file_is_indexed() {
 #[test]
 fn the_size_check_runs_before_the_decode() {
     let root = TempTree::new("both-fail");
-    root.raw_file("src/both.rs", &vec![0xffu8; 4096]);
+    root.raw_file("src/both.rs", vec![0xffu8; 4096]);
 
     let options = DiscoveryOptions::default().with_max_file_bytes(16);
     let discovery = FileDiscovery::new(root.path(), options)
