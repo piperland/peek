@@ -216,7 +216,9 @@ fn skipped_is_the_sum_of_the_named_reasons() {
     let root = TempTree::new("skipped-sum");
     root.file("src/good.rs", "fn good() {}");
     root.file("README.md", "# hi");
-    root.raw_file("src/corrupt.rs", b"fn f() { \xff }");
+    // Two bytes: under the size cap, so it is unambiguously a decode failure rather than also
+    // being "too large". A file that trips two guards at once makes the tally ambiguous.
+    root.raw_file("src/corrupt.rs", b"\xff\xfe");
     root.file("target/debug/artifact.rs", "pub fn artifact() {}");
 
     let options = DiscoveryOptions::default().with_max_file_bytes(8);

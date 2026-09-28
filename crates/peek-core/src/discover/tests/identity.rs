@@ -96,11 +96,20 @@ fn repository_with_worktree() -> Option<Repository> {
     run_git(&main, &["add", "lib.rs"]);
     run_git(&main, &["commit", "--quiet", "-m", "initial"]);
 
-    // The worktree path is resolved against the directory git is run from, which `-C` sets, so the
-    // relative path lands beside the primary checkout rather than in the process's directory.
+    // The command has to run **from the repository**, not from its parent: `git worktree add` is a
+    // repository-local operation and refuses to run anywhere else with "not a git repository".
+    // The destination is therefore given as an absolute path, because a relative one would be
+    // resolved against whichever directory `-C` selects.
     run_git(
-        &parent,
-        &["worktree", "add", "--quiet", "-b", "feature", "feature"],
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "feature",
+            &worktree.to_string_lossy(),
+        ],
     );
 
     Some(Repository {
