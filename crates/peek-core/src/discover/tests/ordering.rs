@@ -100,10 +100,11 @@ fn output_paths_preserve_case() {
         );
     }
     assert!(
-        discovery
-            .files()
-            .iter()
-            .any(|file| file.path.as_str().chars().any(|c| c.is_ascii_uppercase())),
+        discovery.files().iter().any(|file| file
+            .path
+            .as_str()
+            .chars()
+            .any(|c| c.is_ascii_uppercase())),
         "at least one yielded path must contain an upper-case letter, or this test proves nothing"
     );
 }

@@ -47,16 +47,15 @@ fn pattern_without_a_slash_matches_at_any_depth() {
 #[test]
 fn anchored_pattern_does_not_match_at_depth() {
     let discovery = discover_fixture();
-    let yielded: Vec<&str> = discovery
-        .files()
-        .iter()
-        .map(|file| file.path.as_str())
-        .collect();
-    panic!("yielded: {yielded:#?}\nissues: {:#?}", discovery.issues());
-    #[allow(unreachable_code)]
-    {
-        assert!(true);
-    }
+
+    assert!(
+        !contains(discovery.files(), "toponly.rs"),
+        "/toponly.rs must exclude the root-level file"
+    );
+    assert!(
+        contains(discovery.files(), "deep/touponly.rs"),
+        "/toponly.rs must not exclude a deeper file of the same name"
+    );
 }
 
 /// Negation is the feature with the most subtle semantics: the last matching rule wins, and a file
