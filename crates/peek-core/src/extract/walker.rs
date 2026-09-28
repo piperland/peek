@@ -1519,7 +1519,7 @@ mod tests {
             };
             let mut out = String::new();
             // Print node kinds and field names only; that is what the extractor depends on.
-            let mut print = |node: Node<'_>, depth: usize, out: &mut String| {
+            fn print(node: tree_sitter::Node<'_>, depth: usize, out: &mut String) {
                 let field = node.parent().and_then(|parent| {
                     let mut cursor = parent.walk();
                     (0..parent.child_count())
@@ -1541,7 +1541,7 @@ mod tests {
                 for child in node.children(&mut cursor) {
                     print(child, depth + 1, out);
                 }
-            };
+            }
             print(tree.root_node(), 0, &mut out);
             println!("=== {source}\n{out}");
         }
