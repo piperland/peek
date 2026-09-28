@@ -25,7 +25,6 @@
 use rusqlite::Transaction;
 use rusqlite::params;
 use rusqlite::types::Value;
-use serde::Serialize;
 
 use crate::model::entity::Entity;
 use crate::model::path::RepoPath;

@@ -14,7 +14,6 @@
 //! variant's name rather than a hand-written table that can drift from the model.
 
 use rusqlite::Row;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::model::entity::{Entity, EntityId, EntityKind};
