@@ -15,6 +15,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod extract;
 pub mod model;
+pub mod store;
 
 #[cfg(test)]
 mod tests {
