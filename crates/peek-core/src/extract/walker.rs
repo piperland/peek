@@ -28,8 +28,8 @@ use tree_sitter::Node;
 use super::source::SourceText;
 use super::spec::{InheritanceStyle, LanguageSpec, NameStrategy, SymbolRule};
 use crate::model::{
-    Entity, EntityId, EntityKind, Evidence, Language, Relation, RelationKind, RepoPath,
-    ResolutionState, Span, UnresolvedReason,
+    Entity, EntityId, EntityKind, Evidence, Language, Relation, RelationKind, RepoPath, Span,
+    UnresolvedReason,
 };
 
 /// What is wrong with a file, if anything.
