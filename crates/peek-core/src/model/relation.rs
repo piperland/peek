@@ -1,0 +1,637 @@
+//! Relations between entities, and the evidence that justifies them.
+//!
+//! # The gap this module closes
+//!
+//! Cortex's `Edge` had a `reason: String` field. Every producer set it to a constant —
+//! `"call"`, `"import"`, `"identifier"`, `"symbol definition"`, `"derived dependency"` — so it
+//! recorded *which AST node triggered extraction* and nothing about *how the target was
+//! resolved*. A call resolved because exactly one entity in the repository had that name and a
+//! call resolved by `symbols.first()` were byte-identical records. There was no field on any
+//! type that could have distinguished them.
+//!
+//! The consequence was not cosmetic. `explain()` counted inbound edges with no kind filter and
+//! labelled the result "N callers", and because every symbol is guaranteed a `Defines` edge, that
+//! number was off by at least one *always*. The engine could not tell the truth about its own
+//! output, so it did not.
+//!
+//! Peek makes resolution a typed, queryable value. [`ResolutionState`] is carried on every
+//! [`Relation`], [`Evidence`] is an enum rather than prose, and unresolved relations are
+//! **persisted** rather than dropped at the first sign of ambiguity. There are deliberately no
+//! numeric confidence scores: an uncalibrated percentage is worse than an honest label.
+//!
+//! The other half of the fix is that ambiguity is a *result*, never a silent pick. See
+//! [`ResolutionState::Ambiguous`].
+
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+use super::entity::EntityId;
+use super::span::Span;
+
+/// What kind of relationship two entities have.
+///
+/// Every variant here answers a question an agent actually asks. Vocabulary is added when a
+/// real extractor can prove it, not because it sounds sophisticated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationKind {
+    // ---- structural ----
+    /// A file or module declares an entity.
+    Defines,
+    /// An entity lexically encloses another.
+    Contains,
+    /// An entity is a member of a type.
+    Owns,
+
+    // ---- module system ----
+    Imports,
+    Exports,
+    Reexports,
+
+    // ---- usage ----
+    References,
+    Calls,
+    Reads,
+    Writes,
+    Mutates,
+
+    // ---- types ----
+    UsesType,
+    Returns,
+    Accepts,
+    Throws,
+    Constructs,
+    Instantiates,
+
+    // ---- hierarchies ----
+    Inherits,
+    Implements,
+    Overrides,
+
+    // ---- behavioural ----
+    ConfiguredBy,
+    TestedBy,
+    RoutesTo,
+    Handles,
+    Publishes,
+    Subscribes,
+}
+
+impl RelationKind {
+    /// A stable, lowercase label for CLI and MCP output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RelationKind::Defines => "defines",
+            RelationKind::Contains => "contains",
+            RelationKind::Owns => "owns",
+            RelationKind::Imports => "imports",
+            RelationKind::Exports => "exports",
+            RelationKind::Reexports => "reexports",
+            RelationKind::References => "references",
+            RelationKind::Calls => "calls",
+            RelationKind::Reads => "reads",
+            RelationKind::Writes => "writes",
+            RelationKind::Mutates => "mutates",
+            RelationKind::UsesType => "uses_type",
+            RelationKind::Returns => "returns",
+            RelationKind::Accepts => "accepts",
+            RelationKind::Throws => "throws",
+            RelationKind::Constructs => "constructs",
+            RelationKind::Instantiates => "instantiates",
+            RelationKind::Inherits => "inherits",
+            RelationKind::Implements => "implements",
+            RelationKind::Overrides => "overrides",
+            RelationKind::ConfiguredBy => "configured_by",
+            RelationKind::TestedBy => "tested_by",
+            RelationKind::RoutesTo => "routes_to",
+            RelationKind::Handles => "handles",
+            RelationKind::Publishes => "publishes",
+            RelationKind::Subscribes => "subscribes",
+        }
+    }
+
+    /// Whether this relation is established purely by grammar and needs no name resolution.
+    ///
+    /// Structural relations are always [`ResolutionState::Resolved`], which lets consumers skip
+    /// the ambiguity handling path for them.
+    pub fn is_structural(self) -> bool {
+        matches!(
+            self,
+            RelationKind::Defines | RelationKind::Contains | RelationKind::Owns
+        )
+    }
+
+    /// Whether this relation implies a dependency direction, so that it participates in
+    /// `dependencies` / `dependents` traversal.
+    pub fn is_dependency(self) -> bool {
+        !self.is_structural()
+    }
+}
+
+impl fmt::Display for RelationKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Why a relation's target was established.
+///
+/// An enum, not a string. Two relations with different evidence are different values even when
+/// they connect the same pair with the same kind, and the difference survives serialisation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "class", rename_all = "snake_case")]
+pub enum Evidence {
+    /// Grammatical containment: the enclosing node is the target. Always sound.
+    Containment,
+    /// An import binding in the referring file mapped this name to this entity. Strong: the
+    /// author said where it came from.
+    ImportBinding {
+        /// The module path as written, e.g. `../payments/service`.
+        module: String,
+        /// The local alias, when the import renamed the symbol.
+        alias: Option<String>,
+    },
+    /// A receiver expression whose type is statically known in the source language.
+    ReceiverType {
+        /// The receiver's type as written, e.g. `PaymentService`.
+        receiver: String,
+    },
+    /// The qualified name resolves uniquely within the containing module or package.
+    QualifiedNameInScope {
+        /// The module or package the lookup was confined to.
+        scope: String,
+    },
+    /// Exactly one entity in the whole repository carries this name. Sound, but weak evidence:
+    /// uniqueness is not intent.
+    UniqueName,
+    /// The target is declared in the same file as the reference.
+    SameFile,
+    /// The target was identified by an explicit path.
+    PathMatch,
+    /// For second-parity languages where no stronger evidence is available. Explicitly marked
+    /// so a consumer can discount it.
+    NameOnly,
+}
+
+impl Evidence {
+    /// A stable label naming the evidence class, without its payload.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Evidence::Containment => "containment",
+            Evidence::ImportBinding { .. } => "import_binding",
+            Evidence::ReceiverType { .. } => "receiver_type",
+            Evidence::QualifiedNameInScope { .. } => "qualified_name_in_scope",
+            Evidence::UniqueName => "unique_name",
+            Evidence::SameFile => "same_file",
+            Evidence::PathMatch => "path_match",
+            Evidence::NameOnly => "name_only",
+        }
+    }
+
+    /// How much this evidence constrains the answer.
+    ///
+    /// Ordered strongest first. Used only to *rank* competing candidates for presentation; it
+    /// never silently promotes an edge to resolved.
+    pub fn strength(self) -> u8 {
+        match self {
+            Evidence::Containment => 100,
+            Evidence::ImportBinding { .. } => 90,
+            Evidence::ReceiverType { .. } => 85,
+            Evidence::PathMatch => 80,
+            Evidence::QualifiedNameInScope { .. } => 70,
+            Evidence::SameFile => 50,
+            Evidence::UniqueName => 40,
+            Evidence::NameOnly => 10,
+        }
+    }
+}
+
+impl fmt::Display for Evidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.class())
+    }
+}
+
+/// Why a relation could not be resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum UnresolvedReason {
+    /// The name was found but nothing in the repository matches it.
+    NoCandidate,
+    /// More than one candidate matched and none carried decisive evidence. This is a real,
+    /// reportable ambiguity, not a failure.
+    Ambiguous,
+    /// The target lives outside the repository: a standard library, a third-party dependency, or
+    /// a generated artefact that was not indexed.
+    External,
+    /// The callee is computed at runtime, so no static target exists.
+    Dynamic,
+    /// The file did not parse cleanly, so the surrounding construct is unreliable.
+    ParseError,
+    /// The language has no extractor rules that can prove this relation.
+    Unsupported,
+}
+
+impl UnresolvedReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UnresolvedReason::NoCandidate => "no_candidate",
+            UnresolvedReason::Ambiguous => "ambiguous",
+            UnresolvedReason::External => "external",
+            UnresolvedReason::Dynamic => "dynamic",
+            UnresolvedReason::ParseError => "parse_error",
+            UnresolvedReason::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// The resolution state of a relation.
+///
+/// This is the field Cortex did not have.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ResolutionState {
+    /// Proven. Exactly one target, with evidence that supports it.
+    Resolved { by: Evidence },
+    /// More than one candidate fits and none was proven correct. **The relation is reported, not
+    /// guessed.** An agent can disambiguate and ask again.
+    Ambiguous {
+        /// Candidate targets, ordered strongest evidence first.
+        candidates: Vec<EntityId>,
+    },
+    /// No target could be established.
+    Unresolved { reason: UnresolvedReason },
+    /// Derived from another fact rather than directly observed in source.
+    Inferred {
+        by: Evidence,
+        /// What this was inferred from, in words the consumer can audit.
+        basis: String,
+    },
+}
+
+impl ResolutionState {
+    /// Whether the relation has exactly one proven target.
+    pub fn is_resolved(&self) -> bool {
+        matches!(
+            self,
+            ResolutionState::Resolved { .. } | ResolutionState::Inferred { .. }
+        )
+    }
+
+    /// Whether a consumer must handle the possibility of several targets.
+    pub fn is_ambiguous(&self) -> bool {
+        matches!(self, ResolutionState::Ambiguous { .. })
+    }
+
+    /// Whether the relation is explicitly known to be unresolved, and why.
+    pub fn is_unresolved(&self) -> bool {
+        matches!(self, ResolutionState::Unresolved { .. })
+    }
+
+    /// The evidence class, when there is any.
+    pub fn evidence_class(&self) -> Option<&'static str> {
+        match self {
+            ResolutionState::Resolved { by }
+            | ResolutionState::Inferred { by, .. } => Some(by.class()),
+            ResolutionState::Ambiguous { .. } | ResolutionState::Unresolved { .. } => None,
+        }
+    }
+
+    /// A one-line, human-readable rendering for CLI and MCP output.
+    pub fn describe(&self) -> String {
+        match self {
+            ResolutionState::Resolved { by } => format!("resolved ({by})"),
+            ResolutionState::Inferred { by, basis } => format!("inferred ({by}): {basis}"),
+            ResolutionState::Ambiguous { candidates } => {
+                if candidates.is_empty() {
+                    "ambiguous (no candidates)".to_owned()
+                } else {
+                    format!("ambiguous ({} candidates)", candidates.len())
+                }
+            }
+            ResolutionState::Unresolved { reason } => format!("unresolved ({})", reason.as_str()),
+        }
+    }
+}
+
+/// A relationship between a source entity and a named target.
+///
+/// `target_name` always holds the text as it was written, so provenance survives even when the
+/// target could not be resolved. `target` holds the entity only when resolution succeeded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Relation {
+    pub kind: RelationKind,
+    /// The entity the relation originates from.
+    pub source: EntityId,
+    /// The target exactly as written in source. Never empty for a resolved relation.
+    pub target_name: String,
+    /// The resolved target entity, present only when resolution succeeded.
+    pub target: Option<EntityId>,
+    /// Where this relation appears in source.
+    pub span: Span,
+    /// How the target was established, or why it could not be.
+    pub resolution: ResolutionState,
+}
+
+impl Relation {
+    /// A relation whose target is proven.
+    pub fn resolved(
+        kind: RelationKind,
+        source: EntityId,
+        target: EntityId,
+        target_name: impl Into<String>,
+        span: Span,
+        by: Evidence,
+    ) -> Self {
+        Self {
+            kind,
+            source,
+            target_name: target_name.into(),
+            target: Some(target),
+            span,
+            resolution: ResolutionState::Resolved { by },
+        }
+    }
+
+    /// A relation whose target could not be established. Persisted, never discarded.
+    pub fn unresolved(
+        kind: RelationKind,
+        source: EntityId,
+        target_name: impl Into<String>,
+        span: Span,
+        reason: UnresolvedReason,
+    ) -> Self {
+        Self {
+            kind,
+            source,
+            target_name: target_name.into(),
+            target: None,
+            span,
+            resolution: ResolutionState::Unresolved { reason },
+        }
+    }
+
+    /// A relation with several equally plausible targets and no decisive evidence.
+    pub fn ambiguous(
+        kind: RelationKind,
+        source: EntityId,
+        target_name: impl Into<String>,
+        span: Span,
+        candidates: Vec<EntityId>,
+    ) -> Self {
+        Self {
+            kind,
+            source,
+            target_name: target_name.into(),
+            target: None,
+            span,
+            resolution: ResolutionState::Ambiguous { candidates },
+        }
+    }
+
+    /// A relation derived from another fact.
+    pub fn inferred(
+        kind: RelationKind,
+        source: EntityId,
+        target: EntityId,
+        target_name: impl Into<String>,
+        span: Span,
+        by: Evidence,
+        basis: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            source,
+            target_name: target_name.into(),
+            target: Some(target),
+            span,
+            resolution: ResolutionState::Inferred {
+                by,
+                basis: basis.into(),
+            },
+        }
+    }
+
+    /// Whether this relation can be followed to a single target.
+    pub fn is_followable(&self) -> bool {
+        self.resolution.is_resolved() && self.target.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Evidence, Relation, RelationKind, ResolutionState, UnresolvedReason};
+    use crate::model::entity::{EntityId, EntityKind};
+    use crate::model::path::RepoPath;
+    use crate::model::span::Span;
+
+    fn id(qname: &str) -> EntityId {
+        EntityId::new(
+            RepoPath::new("src/a.rs").expect("path"),
+            EntityKind::Function,
+            qname,
+            0,
+        )
+    }
+
+    fn span() -> Span {
+        Span::new(0, 10, 1, 1, 1, 11).expect("span")
+    }
+
+    #[test]
+    fn evidence_is_typed_not_prose() {
+        // The two relations below differ only in how their target was established. Under Cortex's
+        // `reason: String` these were byte-identical records.
+        let unique = Relation::resolved(
+            RelationKind::Calls,
+            id("main"),
+            id("helper"),
+            "helper",
+            span(),
+            Evidence::UniqueName,
+        );
+        let by_import = Relation::resolved(
+            RelationKind::Calls,
+            id("main"),
+            id("helper"),
+            "helper",
+            span(),
+            Evidence::ImportBinding {
+                module: "./helper".to_owned(),
+                alias: None,
+            },
+        );
+
+        assert_ne!(unique.resolution, by_import.resolution);
+        assert_eq!(
+            unique.resolution.evidence_class(),
+            Some("unique_name"),
+            "a globally-unique name is weaker evidence than an explicit import"
+        );
+        assert_eq!(by_import.resolution.evidence_class(), Some("import_binding"));
+        assert!(
+            Evidence::ImportBinding {
+                module: "m".to_owned(),
+                alias: None
+            }
+            .strength()
+                > Evidence::UniqueName.strength()
+        );
+    }
+
+    #[test]
+    fn ambiguity_is_persisted_not_guessed() {
+        // `symbols.first()` is banned. Ambiguity must survive to the consumer.
+        let relation = Relation::ambiguous(
+            RelationKind::Calls,
+            id("main"),
+            "render",
+            span(),
+            vec![id("A.render"), id("B.render")],
+        );
+
+        assert!(relation.target.is_none());
+        assert!(relation.resolution.is_ambiguous());
+        assert!(!relation.resolution.is_resolved());
+        assert!(!relation.is_followable());
+        assert_eq!(relation.resolution.describe(), "ambiguous (2 candidates)");
+        // The name as written is preserved regardless of resolution outcome.
+        assert_eq!(relation.target_name, "render");
+    }
+
+    #[test]
+    fn unresolved_relations_are_retained_with_a_reason() {
+        // Cortex did `else { continue }` here, so a relation that resolved to nothing left
+        // no trace at all. It has to be countable now.
+        let external = Relation::unresolved(
+            RelationKind::Calls,
+            id("main"),
+            "printf",
+            span(),
+            UnresolvedReason::External,
+        );
+        assert!(external.resolution.is_unresolved());
+        assert!(external.target.is_none());
+        assert_eq!(external.resolution.describe(), "unresolved (external)");
+
+        let dynamic = Relation::unresolved(
+            RelationKind::Calls,
+            id("main"),
+            "<computed>",
+            span(),
+            UnresolvedReason::Dynamic,
+        );
+        assert_eq!(dynamic.resolution.describe(), "unresolved (dynamic)");
+    }
+
+    #[test]
+    fn resolved_relations_are_followable() {
+        let relation = Relation::resolved(
+            RelationKind::Calls,
+            id("main"),
+            id("helper"),
+            "helper",
+            span(),
+            Evidence::SameFile,
+        );
+        assert!(relation.is_followable());
+        assert_eq!(relation.target.as_ref().map(EntityId::name), Some("helper"));
+    }
+
+    #[test]
+    fn inferred_relations_carry_their_basis() {
+        let relation = Relation::inferred(
+            RelationKind::Implements,
+            id("StripeGateway"),
+            id("PaymentGateway"),
+            "PaymentGateway",
+            span(),
+            Evidence::QualifiedNameInScope {
+                scope: "src/payments".to_owned(),
+            },
+            "the only PaymentGateway trait in the enclosing module",
+        );
+        assert!(relation.is_followable());
+        assert!(relation.resolution.is_resolved());
+        assert!(relation.resolution.describe().contains("inferred"));
+        assert!(relation.resolution.describe().contains("only PaymentGateway"));
+    }
+
+    #[test]
+    fn structural_relations_are_flagged() {
+        assert!(RelationKind::Defines.is_structural());
+        assert!(RelationKind::Contains.is_structural());
+        assert!(RelationKind::Owns.is_structural());
+        assert!(!RelationKind::Calls.is_structural());
+
+        assert!(RelationKind::Calls.is_dependency());
+        assert!(!RelationKind::Contains.is_dependency());
+    }
+
+    #[test]
+    fn resolution_states_round_trip_through_serde() {
+        // The distinction only matters if it survives persistence, which is where Cortex lost it.
+        let cases = vec![
+            ResolutionState::Resolved {
+                by: Evidence::ImportBinding {
+                    module: "../payments".to_owned(),
+                    alias: Some("Svc".to_owned()),
+                },
+            },
+            ResolutionState::Ambiguous {
+                candidates: vec![id("A.render")],
+            },
+            ResolutionState::Unresolved {
+                reason: UnresolvedReason::ParseError,
+            },
+            ResolutionState::Inferred {
+                by: Evidence::NameOnly,
+                basis: "second-parity heuristic".to_owned(),
+            },
+        ];
+
+        for state in cases {
+            let json = serde_json::to_string(&state).expect("serialise");
+            let back: ResolutionState = serde_json::from_str(&json).expect("deserialise");
+            assert_eq!(back, state, "round trip changed the resolution state");
+        }
+    }
+
+    #[test]
+    fn every_relation_kind_has_a_unique_label() {
+        let all = [
+            RelationKind::Defines,
+            RelationKind::Contains,
+            RelationKind::Owns,
+            RelationKind::Imports,
+            RelationKind::Exports,
+            RelationKind::Reexports,
+            RelationKind::References,
+            RelationKind::Calls,
+            RelationKind::Reads,
+            RelationKind::Writes,
+            RelationKind::Mutates,
+            RelationKind::UsesType,
+            RelationKind::Returns,
+            RelationKind::Accepts,
+            RelationKind::Throws,
+            RelationKind::Constructs,
+            RelationKind::Instantiates,
+            RelationKind::Inherits,
+            RelationKind::Implements,
+            RelationKind::Overrides,
+            RelationKind::ConfiguredBy,
+            RelationKind::TestedBy,
+            RelationKind::RoutesTo,
+            RelationKind::Handles,
+            RelationKind::Publishes,
+            RelationKind::Subscribes,
+        ];
+        let mut labels: Vec<&str> = all.iter().map(|k| k.as_str()).collect();
+        let count = labels.len();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), count, "relation kind labels must be unique");
+    }
+}

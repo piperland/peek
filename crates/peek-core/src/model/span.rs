@@ -58,7 +58,9 @@ impl Span {
 
     /// Number of source lines the span touches; always at least 1.
     pub fn line_count(&self) -> u32 {
-        self.end_line.saturating_sub(self.start_line).saturating_add(1)
+        self.end_line
+            .saturating_sub(self.start_line)
+            .saturating_add(1)
     }
 
     /// The text this span covers, or `None` if the range does not fall on character boundaries

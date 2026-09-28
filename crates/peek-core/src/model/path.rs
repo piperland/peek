@@ -277,6 +277,9 @@ mod tests {
     #[test]
     fn from_path_accepts_filesystem_paths() {
         let path = Path::new("src").join("main.rs");
-        assert_eq!(RepoPath::from_path(&path).map(|x| x.to_string()), Some("src/main.rs".into()));
+        assert_eq!(
+            RepoPath::from_path(&path).map(|x| x.to_string()),
+            Some("src/main.rs".into())
+        );
     }
 }

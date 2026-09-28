@@ -12,8 +12,14 @@
 //!    queryable rather than being silently dropped or silently asserted.
 //! 3. **Paths preserve case.** Repository-relative, `/`-separated, never lowercased.
 
+pub mod entity;
+pub mod language;
 pub mod path;
+pub mod relation;
 pub mod span;
 
+pub use entity::{Entity, EntityId, EntityKind};
+pub use language::{CapabilityTier, Language};
 pub use path::{PathError, RepoPath};
+pub use relation::{Evidence, Relation, RelationKind, ResolutionState, UnresolvedReason};
 pub use span::Span;
