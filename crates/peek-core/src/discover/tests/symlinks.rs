@@ -30,8 +30,7 @@ fn a_file_symlink_inside_the_root_is_followed() {
     );
     assert!(
         contains(discovery.files(), "shared/parser.rs"),
-        "the target is still indexed at its own path; both are real files as far as an agent "\
-         "is concerned"
+        "the target is still indexed at its own path; both are real files as far as an agent is concerned"
     );
     assert_eq!(discovery.stats().symlinks_followed, 1);
     assert_eq!(discovery.stats().symlink_escapes, 0);

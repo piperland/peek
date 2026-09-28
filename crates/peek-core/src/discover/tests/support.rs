@@ -49,12 +49,16 @@ impl TempTree {
     }
 
     /// Create a file with arbitrary bytes, so non-UTF-8 content can be exercised.
-    pub fn raw_file(&self, relative: &str, contents: &[u8]) -> &Self {
+    ///
+    /// Takes `impl AsRef<[u8]>` rather than `&[u8]` so a test can pass a `&str` literal directly.
+    /// A byte-slice parameter makes every ordinary fixture read `as_bytes()`, which is noise in
+    /// the common case and hides which fixtures are deliberately not valid UTF-8.
+    pub fn raw_file(&self, relative: &str, contents: impl AsRef<[u8]>) -> &Self {
         let path = self.path.join(relative);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create parent directory");
         }
-        fs::write(&path, contents).expect("write fixture file");
+        fs::write(&path, contents.as_ref()).expect("write fixture file");
         self
     }
 

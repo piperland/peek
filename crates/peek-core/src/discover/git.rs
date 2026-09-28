@@ -122,7 +122,7 @@ impl fmt::Display for RepoId {
 /// what it loses is the ability to say the two checkouts are the *same repository*, which is what a
 /// caller needs in order to report one repository with two indexes rather than two unrelated
 /// projects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepoIdSource {
     /// The repository root and the git common directory both contributed, so the id identifies a
