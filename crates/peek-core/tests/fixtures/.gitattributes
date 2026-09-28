@@ -1,0 +1,8 @@
+# Fixture-specific overrides for the repository's `* text=auto eol=lf` rule.
+#
+# `src/corrupt.rs` deliberately contains bytes that are not valid UTF-8. It is the file that used to
+# abort a whole Cortex index, and the test that asserts it no longer does depends on those exact
+# bytes surviving the round trip. `text=auto` classifies a file as binary by looking for NUL bytes,
+# and this file has none, so without this line git would treat it as text and is free to rewrite it
+# on any future commit.
+mixed/src/corrupt.rs -text
