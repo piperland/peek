@@ -57,8 +57,12 @@ fn anchored_pattern_does_not_match_at_depth() {
         !contains(discovery.files(), "toponly.rs"),
         "/toponly.rs must exclude the root-level file; yielded {yielded:?}"
     );
+    // The deeper file is named `toponly` — the same name as the root one, which is the whole
+    // point of the rule. An earlier version of this test spelled it `touponly`, which asserted
+    // the existence of a file that is not in the fixture and so failed for a reason that had
+    // nothing to do with anchoring.
     assert!(
-        contains(discovery.files(), "deep/touponly.rs"),
+        contains(discovery.files(), "deep/toponly.rs"),
         "/toponly.rs must not exclude a deeper file of the same name; yielded {yielded:?}"
     );
 }
