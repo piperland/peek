@@ -73,7 +73,9 @@ impl<'a> SourceText<'a> {
             .get(line)
             .copied()
             .unwrap_or(self.text.len());
-        self.text.get(start..end).map(|line| line.trim_end_matches(['\n', '\r']))
+        self.text
+            .get(start..end)
+            .map(|line| line.trim_end_matches(['\n', '\r']))
     }
 
     /// The 0-based index of the line containing `offset`.
@@ -116,7 +118,9 @@ impl<'a> SourceText<'a> {
     /// 1-based character column of `offset`, counting from the start of `line_start`.
     fn char_column(&self, offset: usize, line_start: usize) -> u32 {
         let prefix = self.text.get(line_start..offset).unwrap_or_default();
-        u32::try_from(prefix.chars().count()).unwrap_or(u32::MAX).saturating_add(1)
+        u32::try_from(prefix.chars().count())
+            .unwrap_or(u32::MAX)
+            .saturating_add(1)
     }
 }
 

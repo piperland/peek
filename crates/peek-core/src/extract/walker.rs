@@ -28,8 +28,8 @@ use tree_sitter::Node;
 use super::source::SourceText;
 use super::spec::{InheritanceStyle, LanguageSpec, NameStrategy, SymbolRule};
 use crate::model::{
-    Entity, EntityId, EntityKind, Evidence, Language, Relation, RelationKind, ResolutionState,
-    RepoPath, Span, UnresolvedReason,
+    Entity, EntityId, EntityKind, Evidence, Language, Relation, RelationKind, RepoPath,
+    ResolutionState, Span, UnresolvedReason,
 };
 
 /// What is wrong with a file, if anything.
@@ -217,7 +217,11 @@ impl<'a> Walker<'a> {
     }
 
     fn text(&self, node: Node<'_>) -> Option<String> {
-        self.source.text().get(node.byte_range()).map(str::trim).map(str::to_owned)
+        self.source
+            .text()
+            .get(node.byte_range())
+            .map(str::trim)
+            .map(str::to_owned)
     }
 
     /// The entity a relation should originate from: the innermost enclosing scope, or nothing if
@@ -305,7 +309,9 @@ impl<'a> Walker<'a> {
                 "attribute_item" | "inner_attribute_item" => {
                     current = sibling.prev_named_sibling();
                 }
-                "line_comment" | "block_comment" if sibling.child_by_field_name("doc").is_some() => {
+                "line_comment" | "block_comment"
+                    if sibling.child_by_field_name("doc").is_some() =>
+                {
                     if let Some(text) = self.text(sibling) {
                         // Strip the leading `///`, `//!` or `/** */` marker.
                         let cleaned = text
@@ -368,9 +374,9 @@ impl<'a> Walker<'a> {
                 self.type_name(inner)
             }
             "reference_type" | "pointer_type" => {
-                let inner = node.named_children(&mut node.walk()).find(|child| {
-                    !matches!(child.kind(), "lifetime" | "type_arguments")
-                })?;
+                let inner = node
+                    .named_children(&mut node.walk())
+                    .find(|child| !matches!(child.kind(), "lifetime" | "type_arguments"))?;
                 self.type_name(inner)
             }
             "dynamic_type" | "abstract_type" => {
@@ -396,9 +402,7 @@ impl<'a> Walker<'a> {
                 let field = node.child_by_field_name("field");
                 let value = node.child_by_field_name("value");
                 Callee {
-                    name: field
-                        .and_then(|node| self.text(node))
-                        .unwrap_or_default(),
+                    name: field.and_then(|node| self.text(node)).unwrap_or_default(),
                     receiver: value.and_then(|node| self.text(node)),
                     path: None,
                     dynamic: false,
@@ -409,7 +413,9 @@ impl<'a> Walker<'a> {
                     .child_by_field_name("name")
                     .and_then(|node| self.text(node))
                     .unwrap_or_default();
-                let path = node.child_by_field_name("path").and_then(|node| self.text(node));
+                let path = node
+                    .child_by_field_name("path")
+                    .and_then(|node| self.text(node));
                 Callee {
                     name,
                     receiver: None,
@@ -420,10 +426,7 @@ impl<'a> Walker<'a> {
             // `x.method::<T>()` — the real callee is inside.
             "generic_function" => node
                 .child_by_field_name("function")
-                .map_or_else(
-                    || self.dynamic_callee(node),
-                    |inner| self.callee(inner),
-                ),
+                .map_or_else(|| self.dynamic_callee(node), |inner| self.callee(inner)),
             // These have no fields; the interesting child is positional.
             "try_expression" | "await_expression" | "parenthesized_expression" => node
                 .named_child(0)
@@ -432,9 +435,7 @@ impl<'a> Walker<'a> {
                 let value = node.named_child(0);
                 let index = node.named_child(1);
                 Callee {
-                    name: index
-                        .and_then(|node| self.text(node))
-                        .unwrap_or_default(),
+                    name: index.and_then(|node| self.text(node)).unwrap_or_default(),
                     receiver: value.and_then(|node| self.text(node)),
                     path: None,
                     dynamic: false,
@@ -555,7 +556,10 @@ impl<'a> Walker<'a> {
         let parameters = node.child_by_field_name("parameters")?;
         let head = self.source.text().get(node.byte_range())?;
         let start = head.find('(')?;
-        let end = self.source.text().get(parameters.byte_range())?.find(')')? + parameters.start_byte() - node.start_byte() + 1;
+        let end = self.source.text().get(parameters.byte_range())?.find(')')?
+            + parameters.start_byte()
+            - node.start_byte()
+            + 1;
         let mut signature = head.get(start..end)?.trim().to_owned();
         if let Some(return_type) = node.child_by_field_name("return_type")
             && let Some(text) = self.source.text().get(return_type.byte_range())
@@ -591,7 +595,10 @@ impl<'a> Walker<'a> {
         // A `use` declaration and an `impl` block sit outside any function body, so they have
         // no enclosing symbol to originate from. They anchor on the file instead of being
         // dropped — Cortex silently lost every module-level import for the same reason.
-        let subject = self.current_entity().cloned().unwrap_or_else(|| self.file_id.clone());
+        let subject = self
+            .current_entity()
+            .cloned()
+            .unwrap_or_else(|| self.file_id.clone());
 
         if let Some(rule) = self.spec.call_rule(node.kind())
             && let Some(callee_node) = node.child_by_field_name(rule.callee_field)
@@ -888,7 +895,10 @@ struct UseBinding {
 /// walker's borrow of that text.
 fn collect_use_bindings(source: &str, node: Node<'_>, prefix: &str, out: &mut Vec<UseBinding>) {
     let text_of = |node: Node<'_>| -> Option<String> {
-        source.get(node.byte_range()).map(str::trim).map(str::to_owned)
+        source
+            .get(node.byte_range())
+            .map(str::trim)
+            .map(str::to_owned)
     };
 
     match node.kind() {
@@ -986,7 +996,10 @@ fn join_path(prefix: &str, suffix: &str) -> String {
 }
 
 fn last_segment(path: &str) -> Option<String> {
-    path.rsplit("::").next().filter(|s| !s.is_empty()).map(str::to_owned)
+    path.rsplit("::")
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
 }
 
 /// Count `ERROR` and `MISSING` nodes in a tree.
@@ -1077,7 +1090,7 @@ pub fn extract_with(spec: &'static LanguageSpec, path: RepoPath, text: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_with, ExtractedFile};
+    use super::{ExtractedFile, extract_with};
     use crate::extract::registry;
     use crate::model::{EntityKind, RelationKind, RepoPath, ResolutionState};
 
@@ -1086,7 +1099,11 @@ mod tests {
     }
 
     fn rust(source: &str) -> ExtractedFile {
-        extract_with(registry::get(crate::model::Language::Rust).expect("rust spec"), path(), source)
+        extract_with(
+            registry::get(crate::model::Language::Rust).expect("rust spec"),
+            path(),
+            source,
+        )
     }
 
     fn qualified_names(file: &ExtractedFile) -> Vec<String> {
@@ -1141,7 +1158,10 @@ mod tests {
             "#,
         );
         let names = qualified_names(&file);
-        assert!(names.contains(&"PaymentService.new".to_owned()), "{names:?}");
+        assert!(
+            names.contains(&"PaymentService.new".to_owned()),
+            "{names:?}"
+        );
         assert!(
             names.contains(&"PaymentService.retry".to_owned()),
             "{names:?}"
@@ -1335,7 +1355,10 @@ mod tests {
             .iter()
             .find(|r| r.kind == RelationKind::Calls && r.target_name == "new")
             .expect("the call");
-        assert_eq!(call.resolution.evidence_class(), Some("qualified_name_in_scope"));
+        assert_eq!(
+            call.resolution.evidence_class(),
+            Some("qualified_name_in_scope")
+        );
     }
 
     #[test]
@@ -1343,7 +1366,10 @@ mod tests {
         // `println!` is a `macro_invocation`, never a `call_expression`, and a Rust codebase is
         // full of them. Omitting them would badly understate call counts.
         let file = rust("fn main() { println!(\"hi\"); }");
-        assert!(relation_count(&file, RelationKind::Calls) >= 1, "macro call missing");
+        assert!(
+            relation_count(&file, RelationKind::Calls) >= 1,
+            "macro call missing"
+        );
     }
 
     #[test]
@@ -1494,7 +1520,10 @@ mod tests {
         assert_eq!(entities.get(&EntityKind::File), Some(&1));
 
         let relations = file.relation_counts();
-        assert!(relations.contains_key(&RelationKind::Calls), "{relations:?}");
+        assert!(
+            relations.contains_key(&RelationKind::Calls),
+            "{relations:?}"
+        );
     }
 
     #[test]
