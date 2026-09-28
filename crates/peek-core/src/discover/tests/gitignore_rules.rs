@@ -48,13 +48,18 @@ fn pattern_without_a_slash_matches_at_any_depth() {
 fn anchored_pattern_does_not_match_at_depth() {
     let discovery = discover_fixture();
 
+    let yielded: Vec<&str> = discovery
+        .files()
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
     assert!(
         !contains(discovery.files(), "toponly.rs"),
-        "/toponly.rs must exclude the root-level file"
+        "/toponly.rs must exclude the root-level file; yielded {yielded:?}"
     );
     assert!(
         contains(discovery.files(), "deep/touponly.rs"),
-        "/toponly.rs must not exclude a deeper file of the same name"
+        "/toponly.rs must not exclude a deeper file of the same name; yielded {yielded:?}"
     );
 }
 
