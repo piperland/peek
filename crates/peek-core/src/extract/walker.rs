@@ -827,21 +827,21 @@ struct UseBinding {
 }
 
 /// Walk a `use` argument, collecting every name it binds.
-fn collect_use_bindings(
-    walker: &Walker<'_>,
-    node: Node<'_>,
-    prefix: &str,
-    out: &mut Vec<UseBinding>,
-) {
+///
+/// Takes the source text rather than the whole walker, so its lifetime is independent of the
+/// walker's borrow of that text.
+fn collect_use_bindings(source: &str, node: Node<'_>, prefix: &str, out: &mut Vec<UseBinding>) {
+    let text_of = |node: Node<'_>| -> Option<String> {
+        source.get(node.byte_range()).map(str::trim).map(str::to_owned)
+    };
+
     match node.kind() {
         "use_as_clause" => {
             let path = node
                 .child_by_field_name("path")
-                .and_then(|node| walker.text(node))
+                .and_then(text_of)
                 .unwrap_or_default();
-            let alias = node
-                .child_by_field_name("alias")
-                .and_then(|node| walker.text(node));
+            let alias = node.child_by_field_name("alias").and_then(text_of);
             let module = join_path(prefix, &path);
             if let Some(alias) = alias {
                 out.push(UseBinding {
@@ -860,11 +860,11 @@ fn collect_use_bindings(
         "scoped_identifier" => {
             let name = node
                 .child_by_field_name("name")
-                .and_then(|node| walker.text(node))
+                .and_then(text_of)
                 .unwrap_or_default();
             let path_prefix = node
                 .child_by_field_name("path")
-                .and_then(|node| walker.text(node))
+                .and_then(text_of)
                 .unwrap_or_default();
             let full = join_path(prefix, &join_path(&path_prefix, &name));
             if let Some(last) = last_segment(&name) {
@@ -879,23 +879,23 @@ fn collect_use_bindings(
         "scoped_use_list" => {
             let base = node
                 .child_by_field_name("path")
-                .and_then(|node| walker.text(node))
+                .and_then(text_of)
                 .unwrap_or_default();
             let combined = join_path(prefix, &base);
             if let Some(list) = node.child_by_field_name("list") {
                 for child in list.named_children(&mut list.walk()) {
-                    collect_use_bindings(walker, child, &combined, out);
+                    collect_use_bindings(source, child, &combined, out);
                 }
             }
         }
         "use_list" => {
             for child in node.named_children(&mut node.walk()) {
-                collect_use_bindings(walker, child, prefix, out);
+                collect_use_bindings(source, child, prefix, out);
             }
         }
         // `use a::*;` — the path is an unnamed child, not a field.
         "use_wildcard" => {
-            let base = walker.text(node).unwrap_or_default();
+            let base = text_of(node).unwrap_or_default();
             if !base.is_empty() {
                 out.push(UseBinding {
                     local: "*".to_owned(),
@@ -905,7 +905,7 @@ fn collect_use_bindings(
             }
         }
         "identifier" | "type_identifier" | "crate" | "self" | "super" | "metavariable" => {
-            let path = walker.text(node).unwrap_or_default();
+            let path = text_of(node).unwrap_or_default();
             let full = join_path(prefix, &path);
             if let Some(local) = last_segment(&path) {
                 out.push(UseBinding {

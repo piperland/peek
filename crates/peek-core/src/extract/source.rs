@@ -91,7 +91,7 @@ impl<'a> SourceText<'a> {
     /// boundaries. Tree-sitter always produces well-formed ranges, but a caller that hand-builds
     /// one should not be able to produce a span that silently slices through a multi-byte
     /// character.
-    pub fn span(&self, start_byte: usize, end_byte: usize) -> Option<super::span::Span> {
+    pub fn span(&self, start_byte: usize, end_byte: usize) -> Option<crate::model::Span> {
         if end_byte < start_byte || end_byte > self.text.len() {
             return None;
         }
@@ -103,7 +103,7 @@ impl<'a> SourceText<'a> {
         let start_line_start = self.line_starts[start_line];
         let end_line_start = self.line_starts[end_line];
 
-        super::span::Span::new(
+        crate::model::Span::new(
             u32::try_from(start_byte).ok()?,
             u32::try_from(end_byte).ok()?,
             u32::try_from(start_line + 1).ok()?,
