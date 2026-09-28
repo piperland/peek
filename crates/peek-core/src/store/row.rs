@@ -84,6 +84,7 @@ pub fn relation_kind_to_sql(kind: RelationKind) -> Result<String, StoreError> {
 /// exists only inside a blob cannot be counted, so it cannot be reported honestly.
 pub fn resolution_tag(state: &ResolutionState) -> &'static str {
     match state {
+        ResolutionState::Pending { .. } => "pending",
         ResolutionState::Resolved { .. } => "resolved",
         ResolutionState::Ambiguous { .. } => "ambiguous",
         ResolutionState::Unresolved { .. } => "unresolved",

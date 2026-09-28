@@ -599,7 +599,7 @@ fn an_ambiguous_relation_keeps_its_candidate_list_and_its_order() {
     let stored = store
         .ambiguous_candidates(&caller, RelationKind::Calls, "render")
         .expect("query");
-    assert_eq!(stored, candidates, "the candidate list is queryable on its own");
+    assert_eq!(stored, *candidates, "the candidate list is queryable on its own");
 }
 
 #[test]

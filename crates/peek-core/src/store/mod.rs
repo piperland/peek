@@ -251,7 +251,7 @@ impl Store {
         let problems: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| StoreError::Query(format!("integrity_check failed: {e}")))?
-            .collect::<Result<_, _>>()
+            .collect::<Result<Vec<String>, _>>()
             .map_err(|e| StoreError::Query(format!("integrity_check failed: {e}")))?
             .into_iter()
             .filter(|line| line != "ok")

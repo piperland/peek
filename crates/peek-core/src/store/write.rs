@@ -227,7 +227,7 @@ fn upsert_relations(
             i64::from(source.ordinal()),
             relation.target_name.as_str(),
             target.map(|t| t.path().as_str()),
-            target.map(row::kind_to_sql).transpose()?,
+            target.map(&row::kind_to_sql).transpose()?,
             target.map(|t| t.qualified_name()),
             target.map(|t| i64::from(t.ordinal())),
             i64::from(relation.span.start_byte),
@@ -410,29 +410,28 @@ impl ScopeParams {
 
     /// Bindings for a statement that selects a scope and carries no payload.
     ///
-    /// Returned through `params_from_iter` rather than as a bare `Vec`, because `Vec<&dyn
-    /// ToSql>` does not itself implement `Params`. The trait object has to be the element type
-    /// of an iterator rather than of a vector.
-    fn scope(&self) -> Vec<&dyn rusqlite::ToSql> {
-        let mut bindings: Vec<&dyn rusqlite::ToSql> = vec![self.path.as_str()];
+    /// The bindings **own** their values (`Box<dyn ToSql>`) rather than borrowing them. A
+    /// `Vec<&dyn ToSql>` cannot hold a `&str` at all, because `str` is unsized and the trait
+    /// object needs a `Sized` type, and a borrowed vector would also tie every statement's
+    /// lifetime to the `Removal` that produced it. Owning the two `String`s costs one
+    /// allocation per update and removes both problems.
+    fn scope(&self) -> Vec<Box<dyn rusqlite::ToSql>> {
+        let mut bindings: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(self.path.clone())];
         if let Some(pattern) = &self.pattern {
-            bindings.push(pattern);
+            bindings.push(Box::new(pattern.clone()));
         }
         bindings
     }
 
     /// The scope bindings wrapped for `execute`.
-    fn scope_params(&self) -> rusqlite::Params<'_, Vec<&dyn rusqlite::ToSql>> {
+    fn scope_params(&self) -> impl rusqlite::Params<'static> {
         rusqlite::params_from_iter(self.scope())
     }
 
     /// Bindings for a statement that also writes a payload, which is the next parameter.
-    ///
-    /// `payload` must outlive the returned bindings, which is why the caller holds the `Value`
-    /// rather than passing a `&str` for this function to copy.
-    fn with_payload(&self, payload: &Value) -> Vec<&dyn rusqlite::ToSql> {
+    fn with_payload(&self, payload: &Value) -> Vec<Box<dyn rusqlite::ToSql>> {
         let mut bindings = self.scope();
-        bindings.push(payload);
+        bindings.push(Box::new(payload.clone()));
         bindings
     }
 
@@ -440,7 +439,7 @@ impl ScopeParams {
     fn with_payload_params(
         &self,
         payload: &Value,
-    ) -> rusqlite::Params<'_, Vec<&dyn rusqlite::ToSql>> {
+    ) -> impl rusqlite::Params<'static> {
         rusqlite::params_from_iter(self.with_payload(payload))
     }
 }
@@ -486,7 +485,8 @@ fn like_pattern(path: &RepoPath) -> String {
 /// Six columns for a span, or six NULLs when there is none.
 fn span_params(span: Option<Span>) -> [Value; 6] {
     let Some(span) = span else {
-        return [Value::Null; 6];
+        // `Value` is not `Copy`, so an array cannot be built by repetition.
+        return std::array::from_fn(|_| Value::Null);
     };
     [
         Value::Integer(i64::from(span.start_byte)),
