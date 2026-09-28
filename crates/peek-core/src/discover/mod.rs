@@ -73,53 +73,6 @@ pub mod stats;
 pub mod symlink;
 
 
-/// Forwarding accessors so a caller never has to unwrap the [`Discovery`] enum first.
-///
-/// The empty case is a real outcome, not an error, and it still carries a full report — so every
-/// question a caller might reasonably ask works on both variants. Without these, every consumer
-/// has to `match` on the outcome just to read the file list, and one that forgets gets a
-/// confusing type error rather than a reminder.
-impl Discovery {
-    /// The report, whether or not the walk found anything.
-    pub fn report(&self) -> &DiscoveryReport {
-        match self {
-            Discovery::Found(report) | Discovery::Empty { report, .. } => report,
-        }
-    }
-
-    /// The discovered files, sorted by path with case preserved.
-    pub fn files(&self) -> &[DiscoveredFile] {
-        self.report().files()
-    }
-
-    /// The counts behind this walk.
-    pub fn stats(&self) -> &DiscoveryStats {
-        self.report().stats()
-    }
-
-    /// The identity of the checkout that was walked.
-    pub fn repo(&self) -> &RepoIdentity {
-        self.report().repo()
-    }
-
-    /// Per-entry problems that did not stop the walk, in the order they were seen.
-    pub fn issues(&self) -> &[WalkIssue] {
-        self.report().issues()
-    }
-
-    /// Whether the walk yielded no indexable file.
-    pub fn is_empty(&self) -> bool {
-        matches!(self, Discovery::Empty { .. })
-    }
-
-    /// Why the walk yielded nothing, when it did.
-    pub fn empty_reason(&self) -> Option<EmptyReason> {
-        match self {
-            Discovery::Found(_) => None,
-            Discovery::Empty { reason, .. } => Some(*reason),
-        }
-    }
-}
 #[cfg(test)]
 mod tests;
 
@@ -304,6 +257,15 @@ impl Discovery {
     /// The repository identity this walk covered.
     pub fn repo(&self) -> &RepoIdentity {
         self.report().repo()
+    }
+
+    /// Per-entry problems that did not stop the walk.
+    ///
+    /// Present on both variants: a walk that found nothing can still have refused a file, and
+    /// "found nothing because everything was skipped" is a different diagnosis from "found
+    /// nothing because the tree was empty". `peek doctor` needs the difference.
+    pub fn issues(&self) -> &[WalkIssue] {
+        self.report().issues()
     }
 
     /// `true` when nothing was found.
