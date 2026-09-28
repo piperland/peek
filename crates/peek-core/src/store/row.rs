@@ -476,10 +476,17 @@ mod tests {
     #[test]
     fn kind_wire_forms_are_readable_english() {
         // A row a human can read in `sqlite3` is worth more than a few bytes, and someone
-        // debugging a bad index should not have to look up an enum discriminant.
-        assert_eq!(enum_to_sql(&EntityKind::TypeAlias).expect("encode"), "type_alias");
-        assert_eq!(enum_to_sql(&RelationKind::UsesType).expect("encode"), "uses_type");
-        assert_eq!(enum_to_sql(&Language::ObjectiveC).expect("encode"), "objectivec");
+        // debugging a bad index should not have to look up an enum discriminant. Crucially the
+        // stored spelling is the *printed* spelling — see the divergence guard below.
+        assert_eq!(kind_to_sql(EntityKind::TypeAlias).expect("encode"), "type_alias");
+        assert_eq!(
+            relation_kind_to_sql(RelationKind::UsesType).expect("encode"),
+            "uses_type"
+        );
+        assert_eq!(
+            language_to_sql(Language::ObjectiveC).expect("encode"),
+            "objectivec"
+        );
     }
 
     #[test]

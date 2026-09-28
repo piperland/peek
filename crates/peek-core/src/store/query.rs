@@ -169,19 +169,24 @@ impl Store {
         kind: Option<RelationKind>,
         limit: usize,
     ) -> Result<Vec<Relation>, StoreError> {
+        // The bindings must match the statement's shape exactly. `outgoing_sql` omits the `kind`
+        // predicate and shifts the limit down a slot when there is no filter, so supplying a
+        // placeholder `NULL` for the kind here would bind one value too many and SQLite would
+        // reject the statement. Building both from the same `kind` keeps them in lockstep.
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(id.path().as_str().to_owned()),
+            Box::new(row::kind_to_sql(id.kind())?),
+            Box::new(id.qualified_name().to_owned()),
+            Box::new(i64::from(id.ordinal())),
+        ];
+        if let Some(kind) = kind {
+            params.push(Box::new(row::relation_kind_to_sql(kind)?));
+        }
+        params.push(Box::new(limit_value(limit)));
+
         let relation_rows = self.relation_rows(
             &outgoing_sql(kind)?,
-            params![
-                id.path().as_str(),
-                row::kind_to_sql(id.kind())?,
-                id.qualified_name(),
-                i64::from(id.ordinal()),
-                match kind {
-                    Some(kind) => Value::Text(row::relation_kind_to_sql(kind)?),
-                    None => Value::Null,
-                },
-                limit_value(limit),
-            ],
+            rusqlite::params_from_iter(params),
             "outgoing",
         )?;
         self.attach_candidates(relation_rows)
@@ -199,19 +204,20 @@ impl Store {
         kind: Option<RelationKind>,
         limit: usize,
     ) -> Result<Vec<Relation>, StoreError> {
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(id.path().as_str().to_owned()),
+            Box::new(row::kind_to_sql(id.kind())?),
+            Box::new(id.qualified_name().to_owned()),
+            Box::new(i64::from(id.ordinal())),
+        ];
+        if let Some(kind) = kind {
+            params.push(Box::new(row::relation_kind_to_sql(kind)?));
+        }
+        params.push(Box::new(limit_value(limit)));
+
         let relation_rows = self.relation_rows(
             &incoming_sql(kind)?,
-            params![
-                id.path().as_str(),
-                row::kind_to_sql(id.kind())?,
-                id.qualified_name(),
-                i64::from(id.ordinal()),
-                match kind {
-                    Some(kind) => Value::Text(row::relation_kind_to_sql(kind)?),
-                    None => Value::Null,
-                },
-                limit_value(limit),
-            ],
+            rusqlite::params_from_iter(params),
             "incoming",
         )?;
         self.attach_candidates(relation_rows)

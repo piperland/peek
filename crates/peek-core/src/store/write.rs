@@ -367,7 +367,7 @@ fn demote_incoming(
          resolution_state = 'unresolved', resolution_json = ?1 \
          WHERE EXISTS (SELECT 1 FROM entity e \
            WHERE e.path = relation.target_path AND e.kind = relation.target_kind \
-             AND e.qualified_name = relation.qualified_name_target \
+             AND e.qualified_name = relation.target_qualified_name \
              AND e.entity_ordinal = relation.target_ordinal AND {})",
         scope_clause("e.path", removal, 2)
     );
