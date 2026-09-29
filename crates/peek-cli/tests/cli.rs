@@ -1132,7 +1132,11 @@ fn rm_on_a_path_the_index_never_held_reports_a_measured_zero() {
         &repository,
         &["rm", "src/never_seen.rs", "--root", repository.root_str()],
     );
-    assert_eq!(outcome.output.exit_code, 0);
+    assert_eq!(
+        outcome.output.exit_code, 0,
+        "a path the index never held is a measured zero, not a usage error: {:?}",
+        outcome.output.refusal
+    );
     match &outcome.output.answer {
         Answer::Remove(answer) => {
             // Both assertions carry the whole answer, so a failure says which field was wrong
