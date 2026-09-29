@@ -135,22 +135,37 @@ impl Server {
     }
 
     fn transcript(&self) -> String {
-        self.stderr
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        transcript_of(&self.stderr)
     }
 
     /// Close stdin, wait for the process, and return its stderr transcript.
-    fn finish(mut self) -> String {
-        drop(self.input);
-        let status = self.child.wait().expect("wait for the server to exit");
+    fn finish(self) -> String {
+        // Taken apart rather than closed field by field, because closing stdin *moves* the handle
+        // out of `self`, and a `self` with a field already moved out of it has no transcript left
+        // to read afterwards. The parts this does not need are dropped where they stand.
+        let Self {
+            mut child,
+            input,
+            stderr,
+            mut stderr_thread,
+            ..
+        } = self;
+        drop(input);
+        let status = child.wait().expect("wait for the server to exit");
         assert!(status.success(), "the server exited with {status}");
-        if let Some(handle) = self.stderr_thread.take() {
+        if let Some(handle) = stderr_thread.take() {
             handle.join().expect("the stderr reader thread finished");
         }
-        self.transcript()
+        transcript_of(&stderr)
     }
+}
+
+/// The child's stderr, read out of the slot the reader thread writes into.
+fn transcript_of(stderr: &Mutex<String>) -> String {
+    stderr
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
 }
 
 /// A repository with two Rust files, removed when it goes out of scope.
@@ -389,7 +404,7 @@ fn only_the_binary_holds_the_processs_stdout() {
     // never names the process's standard output, so a tool handler has nothing to print to even by
     // accident. Every spelling counts — `io::stdout()`, `std::io::stdout()`, a `use` of either, a
     // `writeln!` to the result — because the scan matches the identifier rather than one of them.
-    let mut holders: Vec<&str> = sources()
+    let holders: Vec<&str> = sources()
         .into_iter()
         .filter(|(_, source)| !names_stdout(source).is_empty())
         .map(|(name, _)| name)

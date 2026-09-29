@@ -72,7 +72,7 @@ fn main() -> ExitCode {
     };
 
     if options.help {
-        eprint!("{USAGE}{}\n", peek_mcp::server::surface_summary());
+        eprintln!("{USAGE}{}", peek_mcp::server::surface_summary());
         return ExitCode::SUCCESS;
     }
     if options.version {

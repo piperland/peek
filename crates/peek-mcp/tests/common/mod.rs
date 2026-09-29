@@ -162,7 +162,7 @@ fn offences(source: &str, is_an_offence: fn(&str) -> bool) -> Vec<Offence> {
 /// `println!`.
 fn calls_print_macro(line: &str) -> bool {
     let bytes = line.as_bytes();
-    identifiers(line).any(|(start, word)| {
+    identifiers(line).iter().any(|&(start, word)| {
         PRINT_MACROS.contains(&word)
             && bytes.get(start + word.len()) == Some(&b'!')
             // `print != x` is a comparison between two identifiers, not an invocation.
@@ -172,7 +172,7 @@ fn calls_print_macro(line: &str) -> bool {
 
 /// Whether `line` contains `name` as a whole identifier.
 fn has_identifier(line: &str, name: &str) -> bool {
-    identifiers(line).any(|(_, word)| word == name)
+    identifiers(line).iter().any(|&(_, word)| word == name)
 }
 
 /// Every identifier in `line`, as `(byte offset, spelling)`.

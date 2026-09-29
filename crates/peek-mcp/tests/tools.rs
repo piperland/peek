@@ -227,9 +227,11 @@ fn plant_uncertainty(session: &mut Session) {
     );
 
     let span = Span::new(0, 10, 1, 1, 1, 11).expect("a valid span");
+    // Both planted relations are calls *from* the same function, so the first takes a copy of the
+    // identity and the second takes the original. The identity is the same entity either way.
     update = update.with_relation(Relation::ambiguous(
         RelationKind::Calls,
-        service,
+        service.clone(),
         "render",
         span,
         vec![own_render, ui_render],
@@ -880,26 +882,26 @@ fn an_ambiguous_target_returns_candidates_rather_than_picking_one() {
         );
         for candidate in candidates {
             assert!(
-                candidate["path"]
-                    .as_str()
-                    .is_some_and(|p| p.ends_with(".rs")),
-                "a candidate says which file it is in, or the caller cannot choose: {candidate}"
+                candidate.path.ends_with(".rs"),
+                "a candidate says which file it is in, or the caller cannot choose: {candidate:?}"
             );
             assert!(
-                candidate["start_line"]
-                    .as_u64()
-                    .is_some_and(|line| line > 0),
-                "a candidate says where to open it: {candidate}"
+                candidate.start_line.is_some_and(|line| line > 0),
+                "a candidate says where to open it: {candidate:?}"
+            );
+            // The identity is the one field the caller has to hand back, so it is read off the wire
+            // rather than off the struct: what crosses the boundary is the whole identity, not a
+            // rendering of it that the caller would have to parse.
+            let carried = serde_json::to_value(candidate).unwrap_or_else(|error| {
+                panic!("a candidate is serialisable: {error}: {candidate:?}")
+            });
+            assert!(
+                carried["id"].is_object(),
+                "the identity is carried so the caller can pass it straight back: {candidate:?}"
             );
             assert!(
-                candidate["id"].is_object(),
-                "the identity is carried so the caller can pass it straight back: {candidate}"
-            );
-            assert!(
-                candidate["kind"]
-                    .as_str()
-                    .is_some_and(|kind| !kind.is_empty()),
-                "and what kind of declaration it is: {candidate}"
+                !candidate.kind.is_empty(),
+                "and what kind of declaration it is: {candidate:?}"
             );
         }
         assert!(
@@ -1461,13 +1463,17 @@ fn a_context_pack_costs_no_more_than_the_budget_at_every_budget_tried() {
                 .is_some_and(|text| ["ok", "reduced", "insufficient"].contains(&text)),
             "the outcome is one of the three budget states: {pack}"
         );
+        // The engine's own status and the outcome word are one fact said twice, so the word is
+        // turned into the status it stands for. Both sides are options, so a pack reporting no
+        // status at all fails here rather than quietly matching.
+        let expected_status = match pack["outcome"].as_str() {
+            Some("ok") => "complete",
+            Some("reduced") => "reduced",
+            _ => "insufficient",
+        };
         assert_eq!(
             pack["pack"]["budget"]["status"].as_str(),
-            match pack["outcome"].as_str() {
-                Some("ok") => "complete",
-                Some("reduced") => "reduced",
-                _ => "insufficient",
-            },
+            Some(expected_status),
             "the outcome and the engine's own status are the same fact: {pack}"
         );
     }
