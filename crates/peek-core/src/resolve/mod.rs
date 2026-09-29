@@ -128,6 +128,29 @@
 //! a large class of honest `Unresolved`, and it is safe precisely because it can only fire when
 //! the name is genuinely unique. It never picks between candidates.
 //!
+//! # A namespace is never what a bare name means
+//!
+//! Every rung that looks a name up applies one rule on top of its own evidence: **a module is
+//! outranked by a symbol.** See [`prefer_symbols`].
+//!
+//! The rule exists because the index contains entities that carry a name without declaring
+//! anything a bare name can denote, and the sharpest of them is a Rust `impl` block. The walker
+//! needs a row for one — its scope stack anchors every method to `scope.last().id`, and a relation
+//! whose source row is absent is a dangling edge the foreign key rejects — so `impl Gateway { .. }`
+//! is indexed as an `EntityKind::Module` named `Gateway`, next to `struct Gateway` in the file.
+//! `use alpha::gateway::Gateway;` then had two equally supported candidates and could not name the
+//! struct (R-012). A module table makes the same shape ordinary for every file stem, since every
+//! file is a module too.
+//!
+//! It is a **ranking, not an exclusion**, and the difference is the whole design. `use
+//! crate::payments;` names a module and nothing else, so when every candidate is a namespace the
+//! namespaces are kept and the import still resolves. Excluding modules outright would trade a
+//! false ambiguity for a large class of `no_candidate`.
+//!
+//! What it does buy is the other half of audit B21, which the file entity made a one-sided rule:
+//! a name shared by a namespace and a symbol means the symbol, because a call cannot target a
+//! namespace and an expression is not one.
+//!
 //! # `Resolved` and `Inferred` are different claims
 //!
 //! A target bound by an import binding, by an identified receiver, by a located module, or by a
@@ -981,6 +1004,7 @@ impl<'s> Resolver<'s> {
                 });
             }
         }
+        let mut found = prefer_symbols(found);
         if found.is_empty() {
             return Ok(None);
         }
@@ -1020,7 +1044,8 @@ impl<'s> Resolver<'s> {
     /// case-folded match. A `Resolved` decision writes no basis, because `ResolutionState` has no
     /// basis field for it; the rule is readable from the evidence class alone, which is what
     /// [`rule_name`] returns.
-    fn decide_candidates(&mut self, mut found: Vec<Found>, guess_note: &str) -> Decision {
+    fn decide_candidates(&mut self, found: Vec<Found>, guess_note: &str) -> Decision {
+        let mut found = prefer_symbols(found);
         // Sorted by hand rather than with `sort_by_key`, because the key is a tuple containing a
         // `Reverse` and a `String`-bearing identity, and the point of the comparison is to be
         // readable: strongest evidence first, then a stable identity order.
@@ -1087,9 +1112,53 @@ fn is_resolvable(relation: &Relation) -> bool {
 ///
 /// `File` is excluded because audit B21 is exactly what happens when it is not: a file whose
 /// name matches a symbol wins a name lookup and produces a well-formed empty answer instead of a
-/// reported ambiguity. A module is only ever a target through R1, which reaches one deliberately.
+/// reported ambiguity. A module is still allowed through here, because `use crate::payments;`
+/// names a module and that import has to be able to find it; [`prefer_symbols`] is what stops it
+/// from competing with a symbol that shares the name.
 fn is_declaration(kind: EntityKind) -> bool {
     kind != EntityKind::File
+}
+
+/// Whether an entity kind is a namespace rather than something a name can denote.
+///
+/// A namespace can be named — `use crate::payments;`, `crate::payments::Service::charge()` — but it
+/// cannot be called, instantiated or used as a value, so no *bare* name denotes one. `Package` is
+/// here for the same reason as `Module`: it is a boundary, and a boundary is not a declaration any
+/// expression can name.
+fn is_namespace(kind: EntityKind) -> bool {
+    matches!(kind, EntityKind::Module | EntityKind::Package)
+}
+
+/// Drop namespace candidates from a rung's candidate set when a symbol is also a candidate.
+///
+/// **The rule: a namespace never wins a name lookup against a real symbol.** One function, called
+/// from the two places a decision is built, because a rule stated once is a rule that cannot be
+/// forgotten in one of them — R5 carries its own ambiguity rule and does not go through
+/// `decide_candidates`, so it has to say so itself.
+///
+/// Why it is needed: the index holds entities that carry a name without declaring anything a name
+/// can denote. The sharpest is a Rust `impl` block — the walker's scope stack anchors every method
+/// to its enclosing scope's id, and a relation whose source row is absent is a dangling edge, so
+/// `impl Gateway { .. }` has to be a row, and the row is an `EntityKind::Module` named `Gateway`
+/// sitting beside `struct Gateway`. With both counted as candidates, `use alpha::gateway::Gateway;`
+/// was `Ambiguous` and could not name the struct (R-012). A module table made the same shape
+/// ordinary for every file stem, since every file is a module too.
+///
+/// Why it is a ranking and not an exclusion: a name that only a namespace carries is still a name
+/// the author wrote, and dropping it would trade one false answer for a larger class of honest
+/// `no_candidate`. When every candidate is a namespace, the namespaces stand and the import
+/// resolves; when a symbol is also a candidate, the symbol is what the name means.
+fn prefer_symbols(found: Vec<Found>) -> Vec<Found> {
+    let names_a_symbol = found
+        .iter()
+        .any(|candidate| !is_namespace(candidate.id.kind()));
+    if !names_a_symbol {
+        return found;
+    }
+    found
+        .into_iter()
+        .filter(|candidate| !is_namespace(candidate.id.kind()))
+        .collect()
 }
 
 /// The declaration enclosing `relation.source`, if it has one.

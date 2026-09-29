@@ -200,6 +200,7 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
         ..ResolutionOptions::default()
     };
     resolve_all(&mut store, options).expect("resolve with the module table on");
+    let alpha = "crates/alpha/src/gateway.rs";
 
     let import = relations_of(&store, RelationKind::Imports)
         .into_iter()
@@ -207,40 +208,54 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
         .expect("the import of Gateway was extracted");
     // Asserted on the typed state rather than on the rendered string, so the assertion is about
     // the answer and not about a formatter's wording.
-    let candidates = match &import.resolution {
-        ResolutionState::Ambiguous { candidates } => candidates.clone(),
-        other => panic!("expected an ambiguity, got {other:?} in {import:?}"),
-    };
+    //
+    // **This expectation changed, and the change is the fix.** The answer used to be `Ambiguous`
+    // with two candidates: the `struct Gateway`, and a *second* entity also named `Gateway` of kind
+    // `Module`, which is the `impl Gateway` block. An impl block is emitted as an entity because
+    // the walker's scope stack needs an id to anchor methods to, and that entity then competed for
+    // the type's own name in every lookup (R-012). The import now lands on the struct the author
+    // named, because a namespace is outranked by a symbol.
     assert_eq!(
-        candidates.len(),
-        2,
-        "the module table DID place it — the candidate is `crates/alpha/src/gateway.rs`, a path \
-         the guess cannot construct — but the answer is ambiguous, and that is a defect: the two \
-         candidates are the `struct Gateway` and a *second* entity also named `Gateway` of kind \
-         `Module`, which is the `impl Gateway` block. An impl block is emitted as an entity \
-         because the walker's scope stack needs an id to anchor methods to, and that entity then \
-         competes for the type's own name in every lookup. Recorded as R-012: an impl block is a \
-         scope, not a declaration, and it must not be findable as one. Candidates: {candidates:?}"
+        import.target,
+        Some(id(alpha, EntityKind::Struct, "Gateway")),
+        "the import names the struct, and a namespace that shares its name does not make it \
+         ambiguous: {import:?}"
     );
+    match &import.resolution {
+        ResolutionState::Resolved { by } => assert_eq!(
+            by.class(),
+            "import_binding",
+            "and the evidence is still the author's own import: {import:?}"
+        ),
+        other => panic!("expected a resolved import, got {other:?}: {}", state_of(&import)),
+    }
+
+    // The impl block is still indexed. Fixing the lookup was not a deletion: the methods inside it
+    // are contained by that row, so removing it would leave a dangling edge the foreign key
+    // rejects.
+    let impl_block = id(alpha, EntityKind::Module, "Gateway");
     assert!(
-        candidates.iter().any(|id| id.kind() == EntityKind::Module),
-        "the competing candidate is the impl block's own entity: {candidates:?}"
+        store.entity(&impl_block).expect("read it").is_some(),
+        "the scope row the methods hang from is still in the index"
     );
 
-    // The method call is the worse casualty, and this is the finding that makes R-012 urgent.
+    // The method call is still unplaced, and it is a **different** defect with a different cause.
     // `Gateway.send()` in `beta` is `no_candidate` even though `send` is declared in
     // `crates/alpha/src/gateway.rs` and the receiver is written out in full.
     //
-    // The hypothesis — and it needs verifying before it is acted on — is that this is the phantom
-    // again rather than a second independent defect: the receiver rung has to resolve the receiver
-    // expression `Gateway` to an owner before it can look for `{owner}.send` inside it, and
-    // `Gateway` is now ambiguous between the struct and the impl block, so the rung cannot commit
-    // to an owner and stops. If that is right, then every method on every type with an `impl`
-    // block — which in Rust is very nearly every type — is unplaceable, and the module work has
-    // made the graph *worse*, not better.
+    // The cause is not the impl block's entity. R-012's hypothesis was that it was — that the
+    // receiver rung has to name the receiver's owner before it can look for a method inside it,
+    // `Gateway` is ambiguous between the struct and the impl block, so the rung cannot commit and
+    // stops. The test
+    // `a_receiver_resolves_when_its_type_is_in_the_callers_file_and_stops_when_it_is_not`
+    // measures that hypothesis and refutes it: with two owner candidates and the type in the
+    // caller's file the call resolves, and with the *same* two candidates and the type in another
+    // file it does not. What decides it is that the receiver rung looks for the owner **in the
+    // caller's file only** and is terminal when it finds nothing, and here the owner is in another
+    // package, reached by an import that R1 is skipped for because the relation carries a receiver.
     //
     // Asserted as observed, not as desired, so the test records what is true and fails the moment
-    // the defect is fixed.
+    // that is fixed.
     let call = relations_of(&store, RelationKind::Calls)
         .into_iter()
         .find(|relation| relation.target_name == "send")
@@ -248,8 +263,8 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
     assert_eq!(
         state_of(&call),
         "go -> send (unresolved (no_candidate)), target None",
-        "the method call on a cross-package type is not placed at all, and the receiver it names \
-         is ambiguous because of the impl block's own entity: {call:?}"
+        "the method call on a cross-package type is still not placed, because the receiver rung \
+         cannot see an owner outside the caller's file: {call:?}"
     );
 }
 
@@ -278,19 +293,21 @@ fn the_module_table_switch_really_turns_the_table_off() {
     // A **second** package that also declares a `Gateway`. This is what makes the two arms
     // distinguishable at all, and it is worth being explicit about why.
     //
-    // With one `Gateway` in the repository, both arms report the same ambiguity and the switch
-    // could be broken with nothing to show it. The candidate *count* is the discriminator: the
-    // module table can only see the file it looked up, so it finds alpha's two entities (the
-    // struct and the phantom impl) and stops. The repository-wide rungs have no package boundary
-    // to respect, so they find every `Gateway` in the tree. Different counts, same state, and the
-    // difference is exactly the capability being measured.
+    // With one `Gateway` in the repository, the two arms could report the same thing and the
+    // switch could be broken with nothing to show it. The package boundary is the discriminator:
+    // the module table can only see the file it looked up, so it places the import inside `alpha`
+    // and stops. The fallback builds candidate paths from the importer's own directory and cannot
+    // construct `crates/gamma/src/gateway.rs` from `crates/beta/src/`, so the import is not placed
+    // at all and the repository-wide rungs answer it — with no package boundary to respect.
     tree.write("crates/gamma/Cargo.toml", "[package]\nname = \"gamma\"\n");
     tree.write("crates/gamma/src/lib.rs", "pub mod gateway;\n");
     tree.write("crates/gamma/src/gateway.rs", "pub struct Gateway;\n");
 
     let store = tree.index_without_resolving();
 
-    let candidates = |options: ResolutionOptions| -> Vec<RepoPath> {
+    // The decision the arm reached, and the files it decided between. A single target is the table
+    // working; a candidate list is the fallback searching the whole repository.
+    let decide = |options: ResolutionOptions| -> (String, Vec<RepoPath>) {
         let mut scratch = Store::open(&tree.db, store.repo()).expect("a second handle");
         let _ = &mut scratch;
         // Resolve into a fresh copy of the same relations so the two arms are independent.
@@ -318,44 +335,261 @@ fn the_module_table_switch_really_turns_the_table_off() {
             .into_iter()
             .find(|relation| relation.target_name == "Gateway")
             .expect("the import of Gateway");
-        match import.resolution {
-            ResolutionState::Ambiguous { candidates } => {
-                candidates.iter().map(|id| id.path().clone()).collect()
-            }
-            other => panic!("expected an ambiguity to compare, got {other:?}"),
-        }
+        let paths: Vec<RepoPath> = match &import.target {
+            Some(target) => vec![target.path().clone()],
+            None => match &import.resolution {
+                ResolutionState::Ambiguous { candidates } => {
+                    candidates.iter().map(|id| id.path().clone()).collect()
+                }
+                other => panic!("the import must be decided one way or the other, got {other:?}"),
+            },
+        };
+        (import.resolution.describe(), paths)
     };
 
-    let with_table = candidates(ResolutionOptions {
+    let (with_table, with_paths) = decide(ResolutionOptions {
         use_module_table: true,
         ..ResolutionOptions::default()
     });
-    let without_table = candidates(ResolutionOptions {
+    let (without_table, without_paths) = decide(ResolutionOptions {
         use_module_table: false,
         ..ResolutionOptions::default()
     });
 
+    assert!(
+        with_table.starts_with("resolved"),
+        "with the table the import is placed, because `alpha::gateway` is a name the index holds \
+         and one seek finds the file it means: {with_table}"
+    );
+    let alpha = RepoPath::new("crates/alpha/src/gateway.rs").expect("valid path");
     assert_eq!(
-        with_table.len(),
+        with_paths,
+        vec![alpha],
+        "and it is placed inside the package the path named, and nowhere else: \
+         {with_table} {with_paths:?}"
+    );
+    assert!(
+        without_table.starts_with("ambiguous"),
+        "without the table the import cannot be placed at all, so it falls through to the \
+         repository-wide rungs: {without_table}"
+    );
+    assert_eq!(
+        without_paths.len(),
         2,
-        "the table sees only alpha's file: the struct and the phantom impl: {with_table:?}"
+        "and those find one `Gateway` in each of the two packages: {without_table} \
+         {without_paths:?}"
     );
     assert!(
-        with_table
-            .iter()
-            .all(|path| path.as_str() == "crates/alpha/src/gateway.rs"),
-        "every candidate is in the package the import named: {with_table:?}"
-    );
-    assert!(
-        without_table.len() > with_table.len(),
-        "without the table the repository-wide rungs see gamma's Gateway too, which is the whole \
-         problem: the fallback cannot tell which package an import meant: {without_table:?}"
-    );
-    assert!(
-        without_table
+        without_paths
             .iter()
             .any(|path| path.as_str() == "crates/gamma/src/gateway.rs"),
-        "and gamma is exactly the wrong answer: {without_table:?}"
+        "gamma is exactly the wrong answer: {without_table} {without_paths:?}"
+    );
+    assert!(
+        !with_paths
+            .iter()
+            .any(|path| path.as_str() == "crates/gamma/src/gateway.rs"),
+        "so the table is what keeps the two packages apart: {with_paths:?}"
+    );
+}
+
+#[test]
+fn a_receiver_resolves_when_its_type_is_in_the_callers_file_and_stops_when_it_is_not() {
+    // R-012's hypothesis, measured rather than assumed.
+    //
+    // The hypothesis was that the receiver rung has to name the receiver's owner before it can
+    // look for a method inside it, that `impl Gateway { .. }` is indexed as a *second* entity
+    // named `Gateway`, and that the rung therefore cannot commit to an owner — so every method
+    // call on every type with an `impl` block is unplaceable.
+    //
+    // It does not hold, and the reason is worth recording because it is a property of the rung
+    // rather than a fact about one fixture: `via_receiver` collects its owners as **names**, not as
+    // entity identities, so any number of entities sharing the receiver's name produce one owner
+    // string and one search, and `decide_candidates` drops the duplicate identities that leaves
+    // behind. The candidate count below is identical in both arms and the answers are opposite.
+    let gateway = "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) {}\n}\n";
+
+    // Arm one: the type, its `impl` block and the call are all in one file, and the receiver is
+    // written exactly as the type's name.
+    let near = TempTree::new("receiver-owner-in-file");
+    let source = format!("{gateway}pub fn go() {{ Gateway.send() }}\n");
+    near.write("src/lib.rs", &source);
+    let mut near_store = near.index_without_resolving();
+    let owners = near_store
+        .entities_named("Gateway", 16)
+        .expect("entities carrying the receiver's name");
+    assert_eq!(
+        owners.len(),
+        2,
+        "the collision R-012 describes is present: the struct and the impl block's own row measure \
+         as two entities named `Gateway`: {owners:?}"
+    );
+    assert!(
+        owners.iter().any(|entity| entity.kind() == EntityKind::Struct),
+        "and one of them is the type: {owners:?}"
+    );
+
+    resolve_all(&mut near_store, ResolutionOptions::default()).expect("resolve");
+    let call = the_call(&near_store, "send");
+    assert_eq!(
+        call.resolution,
+        ResolutionState::Resolved {
+            by: Evidence::ReceiverType {
+                receiver: "Gateway".to_owned()
+            }
+        },
+        "two owner candidates and the method is placed anyway, because the rung compares names \
+         rather than identities: {}",
+        state_of(&call)
+    );
+    assert_eq!(
+        call.target,
+        Some(id("src/lib.rs", EntityKind::Method, "Gateway.send")),
+        "and it lands on the method, which is qualified by its type: {}",
+        state_of(&call)
+    );
+
+    // Arm two: the same call, with the receiver's type in another package. The candidate count is
+    // the same two, and the answer is the opposite — so the count is not what decides it.
+    let far = TempTree::new("receiver-owner-elsewhere");
+    far.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    far.write("crates/alpha/src/gateway.rs", gateway);
+    far.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    far.write(
+        "crates/beta/src/lib.rs",
+        "use alpha::gateway::Gateway;\n\npub fn go() {\n    Gateway.send()\n}\n",
+    );
+    let mut far_store = far.index_without_resolving();
+    let far_owners = far_store
+        .entities_named("Gateway", 16)
+        .expect("entities carrying the receiver's name");
+    assert_eq!(
+        far_owners.len(),
+        2,
+        "the same two entities carry the name, in the other package: {far_owners:?}"
+    );
+
+    resolve_all(&mut far_store, ResolutionOptions::default()).expect("resolve");
+    let call = the_call(&far_store, "send");
+    assert_eq!(
+        call.resolution,
+        ResolutionState::Unresolved {
+            reason: UnresolvedReason::NoCandidate
+        },
+        "the identical candidate count and the opposite answer. What decides it is that the \
+         receiver rung looks for the owner in the caller's file only, and is terminal when it \
+         finds nothing: {}",
+        state_of(&call)
+    );
+    assert_eq!(
+        call.target,
+        None,
+        "and a receiver with no owner in scope must name no target: {}",
+        state_of(&call)
+    );
+}
+
+#[test]
+fn a_name_shared_by_a_namespace_and_a_symbol_resolves_to_the_symbol() {
+    // Audit B21 is what happens when something that is not a declaration wins a name lookup: a
+    // well-formed answer about the wrong entity, or an ambiguity that is not uncertainty. The
+    // file entity was the original case, and the module table and the `impl` row give it two more
+    // that look identical from the store — two entities, one name, no way to tell which is a
+    // declaration.
+    //
+    // The shape here is ordinary Rust and needs no module table to arise: a file that declares a
+    // type, an `impl` block for it, and a second file that imports the type. The import names
+    // `Gateway`; the index holds `struct Gateway` and the row the `impl Gateway { .. }` block
+    // needs for its methods to hang from. Before the fix this came back `Ambiguous` between the
+    // two, which is R-012's first measured row.
+    let tree = TempTree::new("namespace-loses-to-symbol");
+    tree.write(
+        "src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        1\n    }\n}\n",
+    );
+    tree.write("src/app.rs", "use crate::gateway::Gateway;\nfn boot() {}\n");
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let import = relations_of(&store, RelationKind::Imports)
+        .into_iter()
+        .find(|relation| relation.target_name == "Gateway")
+        .expect("the import was extracted");
+    assert_eq!(
+        import.target,
+        Some(id("src/gateway.rs", EntityKind::Struct, "Gateway")),
+        "the name means the struct, and the namespace that shares it is not a candidate: {}",
+        state_of(&import)
+    );
+    match &import.resolution {
+        ResolutionState::Resolved { by } => assert_eq!(
+            by.class(),
+            "import_binding",
+            "and it is resolved by the author's own import rather than left ambiguous: {}",
+            state_of(&import)
+        ),
+        other => panic!(
+            "a name shared by a namespace and a symbol must decide, got {other:?}: {}",
+            state_of(&import)
+        ),
+    }
+
+    // The namespace is still in the index. Excluding it from a lookup is not the same as deleting
+    // it, and a rule that started deleting rows would take the methods' containment with it.
+    let impl_block = id("src/gateway.rs", EntityKind::Module, "Gateway");
+    assert!(
+        store.entity(&impl_block).expect("read it").is_some(),
+        "the impl block's own row is still there: the methods are contained by it"
+    );
+    let method = id("src/gateway.rs", EntityKind::Method, "Gateway.send");
+    assert!(
+        store
+            .incoming(&method, None, 8)
+            .expect("read the containment")
+            .iter()
+            .any(|relation| relation.source == impl_block),
+        "and the method is still contained by it, so the row is load-bearing rather than spare"
+    );
+}
+
+#[test]
+fn an_import_that_names_only_a_namespace_still_resolves() {
+    // The other half of the rule, and the half that makes it a ranking rather than an exclusion.
+    // `use payments::service;` names a module and nothing else, and it has to keep resolving: an
+    // import the author wrote is the strongest evidence the resolver has, and dropping every
+    // namespace candidate would trade one false ambiguity for a large class of `no_candidate`.
+    let tree = TempTree::new("module-import-still-resolves");
+    tree.write("src/payments/service.rs", "pub fn charge() {}\n");
+    tree.write("src/app.rs", "use payments::service;\nfn boot() {}\n");
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let import = relations_of(&store, RelationKind::Imports)
+        .into_iter()
+        .find(|relation| relation.target_name == "service")
+        .expect("the import was extracted");
+    let service = "src/payments/service.rs";
+    let module = id(service, EntityKind::Module, "src::payments::service");
+    assert_eq!(
+        import.target,
+        Some(module.clone()),
+        "nothing else carries the name, so the namespace stands: {}",
+        state_of(&import)
+    );
+    assert_eq!(
+        import.resolution,
+        ResolutionState::Resolved {
+            by: Evidence::ImportBinding {
+                module: "payments::service".to_owned(),
+                alias: None,
+            }
+        },
+        "and the evidence is still the author's own import: {}",
+        state_of(&import)
+    );
+    assert!(
+        store.entity(&module).expect("read it").is_some(),
+        "and the row it names is a real one: a module, in the file that declares it"
     );
 }
 
