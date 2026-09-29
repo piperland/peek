@@ -70,12 +70,11 @@ pub fn serve<R: BufRead, W: Write>(
     input: R,
     output: &mut ProtocolWriter<W>,
 ) -> io::Result<()> {
-    let mut input = input;
+    let mut lines = Lines::new(input);
     let mut buffer: Vec<u8> = Vec::with_capacity(4096);
-    let mut chunk = vec![0_u8; READ_CHUNK_BYTES];
     loop {
         buffer.clear();
-        let (read, truncated) = match read_line(&mut input, &mut buffer, &mut chunk) {
+        let (read, truncated) = match lines.next(&mut buffer) {
             Ok(outcome) => outcome,
             Err(error) => {
                 session.log(&format!("the input stream failed: {error}"));
@@ -125,41 +124,82 @@ pub fn serve<R: BufRead, W: Write>(
     Ok(())
 }
 
-/// Read one line, keeping at most [`MAX_LINE_BYTES`] of it, and say whether more was discarded.
+/// One line at a time out of a byte stream, with a bound on what it will hold for one.
 ///
-/// The terminator is consumed either way, so the stream is in step for the next message — that is
-/// the property that makes refusing an over-long line safe at all. The buffer is appended to and
-/// never cleared here, so a caller that reuses one buffer across messages pays for the allocation
-/// once.
-fn read_line<R: BufRead>(
-    input: &mut R,
-    buffer: &mut Vec<u8>,
-    chunk: &mut [u8],
-) -> io::Result<(usize, bool)> {
-    let mut read = 0_usize;
-    let mut truncated = false;
-    loop {
-        let available = match input.read(chunk) {
-            Ok(0) => break,
-            Ok(count) => &chunk[..count],
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-        };
-        match available.iter().position(|byte| *byte == b'\n') {
-            Some(newline) => {
-                read += keep(buffer, &available[..newline]);
-                read += 1;
-                return Ok((read, truncated));
-            }
-            None => {
-                read += available.len();
-                truncated |= keep(buffer, available);
-            }
+/// # Why the leftover is kept rather than dropped
+///
+/// A read is larger than one line, almost always. The bytes after the newline in the block that
+/// read returned are the beginning of the **next** message, and a reader that discards them loses
+/// it — silently, because a pipe will not give them back and the client is left waiting for a reply
+/// that was never going to be produced. So the unconsumed tail stays in [`Lines::chunk`] and the
+/// next call starts there, and the only way a read and a line line up is when the client sent one
+/// message and waited.
+///
+/// # Why there are two buffers
+///
+/// `chunk` is fixed at [`READ_CHUNK_BYTES`] and holds at most one read's worth. `buffer` is the
+/// caller's, grows to at most [`MAX_LINE_BYTES`], and is what the line is read out of. Neither can
+/// be made large by a client, and neither is a copy of the other.
+struct Lines<R> {
+    input: R,
+    /// The bytes one read returned, of which `chunk[start..end]` is not yet part of a line.
+    chunk: Vec<u8>,
+    start: usize,
+    end: usize,
+}
+
+impl<R: BufRead> Lines<R> {
+    fn new(input: R) -> Self {
+        Self {
+            input,
+            chunk: vec![0_u8; READ_CHUNK_BYTES],
+            start: 0,
+            end: 0,
         }
     }
-    // End of input with no terminator: the last line is still a line, and refusing to answer it
-    // would be refusing a request because the client closed its pipe.
-    Ok((read, truncated))
+
+    /// Read the next line into `buffer`, and say whether the bound discarded any of it.
+    ///
+    /// `(0, false)` is the end of the input. The terminator is consumed either way, so the stream
+    /// is in step for the next message — that is the property that makes refusing an over-long line
+    /// safe at all. `buffer` is appended to, never cleared, so a caller reusing one buffer across
+    /// messages pays for the allocation once.
+    fn next(&mut self, buffer: &mut Vec<u8>) -> io::Result<(usize, bool)> {
+        let mut read = 0_usize;
+        let mut truncated = false;
+        loop {
+            let newline = self.chunk[self.start..self.end]
+                .iter()
+                .position(|byte| *byte == b'\n');
+            let Some(at) = newline else {
+                let held = self.end - self.start;
+                truncated |= keep(buffer, &self.chunk[self.start..self.end]);
+                read += held;
+                self.start = 0;
+                self.end = 0;
+                match self.input.read(&mut self.chunk) {
+                    Ok(0) => {
+                        // End of input with no terminator: the last line is still a line, and
+                        // refusing to answer it would be refusing a request because the client
+                        // closed its pipe.
+                        return Ok((read, truncated));
+                    }
+                    Ok(count) => self.end = count,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
+                }
+                continue;
+            };
+            // The `|=` is the point: a line can be brought over the bound by the very block that
+            // carries its terminator, and a bound that is not noticed there is not a bound.
+            let terminator = self.start + at;
+            truncated |= keep(buffer, &self.chunk[self.start..terminator]);
+            read += at + 1;
+            // Past the newline, not onto it: the terminator belongs to this line.
+            self.start = terminator + 1;
+            return Ok((read, truncated));
+        }
+    }
 }
 
 /// Append as much of `bytes` as the bound allows, and report whether the bound was reached.
