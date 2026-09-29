@@ -303,10 +303,20 @@ fn report_a_real_symbol(store: &peek_core::store::Store, root: &std::path::Path)
             )
             .expect("ambiguous relations");
         println!(
-            "  {} ambiguous edge(s) in the whole repository, so ambiguity is being recorded \
-             rather than silently picked",
+            "  {} ambiguous edge(s) in the whole repository",
             ambiguous.len()
         );
+        // Stated carefully, because the honest answer depends on whether the resolver has run.
+        // Zero ambiguous edges alongside a large pending count means *nothing has had to choose
+        // yet*, which is not the same as "ambiguity is being recorded correctly". Printing the
+        // latter would claim a capability this build does not have.
+        let pending = store.stats().expect("stats").pending_relations;
+        if pending > 0 {
+            println!(
+                "  with {pending} edge(s) still pending, so no reference has been forced to \
+                 choose between these two declarations yet"
+            );
+        }
     }
 }
 
