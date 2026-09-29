@@ -96,7 +96,9 @@ fn fresh_store(root: &Path) -> Store {
 /// has at least one edge. Picking "the most connected symbol" would be a quality claim, and this
 /// probe makes none.
 fn pick_a_target(store: &Store, root: &Path) -> Option<EntityId> {
-    let discovery = FileDiscovery::new(root, DiscoveryOptions::default()).discover().ok()?;
+    let discovery = FileDiscovery::new(root, DiscoveryOptions::default())
+        .discover()
+        .ok()?;
     for file in discovery.files() {
         if !file.path.as_str().ends_with(".rs") {
             continue;
@@ -172,7 +174,9 @@ fn report_walks(store: &Store, target: &EntityId) {
     let query = Query::new(store);
     for depth in [1_u32, 2, 3] {
         let started = Instant::now();
-        let walk = query.dependents(target, depth).expect("dependents must not fail");
+        let walk = query
+            .dependents(target, depth)
+            .expect("dependents must not fail");
         assert!(
             walk.steps.iter().all(|step| &step.id != target),
             "D-0007: `dependents` must never include its own target"
@@ -247,7 +251,10 @@ fn report_packs(store: &Store, target: &EntityId) {
     match query.peek(&name, affordable) {
         Ok(pack) => {
             assert_pack_is_honest(&pack);
-            println!("---- {affordable} tokens ----\n{}", summary(&pack, affordable, std::time::Duration::ZERO));
+            println!(
+                "---- {affordable} tokens ----\n{}",
+                summary(&pack, affordable, std::time::Duration::ZERO)
+            );
             println!("---- rendered ----\n{}", pack.render(true));
         }
         Err(error) => println!("a budget of {affordable} was refused: {error}"),

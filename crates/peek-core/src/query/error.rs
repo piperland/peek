@@ -61,6 +61,8 @@ pub enum QueryError {
     /// silence is the answer, which is the defect D-0009 exists to prevent. `minimum` is the
     /// cost of the empty report, obtainable ahead of time from
     /// [`crate::query::Query::minimum_budget`].
-    #[error("a budget of {requested} tokens cannot hold the {minimum}-token report; raise the budget or ask a narrower question")]
+    #[error(
+        "a budget of {requested} tokens cannot hold the {minimum}-token report; raise the budget or ask a narrower question"
+    )]
     BudgetTooSmall { requested: u64, minimum: u64 },
 }

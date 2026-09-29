@@ -33,12 +33,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::model::entity::{Entity, EntityId, EntityKind};
 use crate::model::language::Language;
 use crate::model::path::RepoPath;
-use crate::model::relation::{
-    Evidence, Relation, RelationKind, ResolutionState, UnresolvedReason,
-};
+use crate::model::relation::{Evidence, Relation, RelationKind, ResolutionState, UnresolvedReason};
 use crate::model::span::Span;
 use crate::query::{
-    BudgetStatus, ContextPack, Cost, Direction, InclusionReason, Matched, Omitted, OmissionReason,
+    BudgetStatus, ContextPack, Cost, Direction, InclusionReason, Matched, OmissionReason, Omitted,
     Query, QueryError, QueryOptions, Walk, WalkRequest,
 };
 use crate::store::{IndexUpdate, RepoId, Store};
@@ -94,8 +92,12 @@ fn entity(file: &str, kind: EntityKind, qualified_name: &str, line: u32) -> Enti
     Entity {
         id: id(file, kind, qualified_name),
         name: qualified_name.to_owned(),
-        signature: Some(format!("fn {qualified_name}(request: &Request) -> Result<Receipt>")),
-        doc: Some(format!("Handles {qualified_name} for the payments service.")),
+        signature: Some(format!(
+            "fn {qualified_name}(request: &Request) -> Result<Receipt>"
+        )),
+        doc: Some(format!(
+            "Handles {qualified_name} for the payments service."
+        )),
         span: Span::new(start, start + 60, line, 1, line, 40),
         language: Some(Language::Rust),
         is_test: false,
@@ -378,7 +380,10 @@ fn a_resolved_edge_reports_the_evidence_the_resolver_recorded() {
         "`Resolved` carries no basis by design: the evidence class is the whole argument, and \
          inventing a sentence here is the `Edge.reason` defect D-0003 removed"
     );
-    assert_eq!(answered.relation.span, edge.span, "the span is the recorded span");
+    assert_eq!(
+        answered.relation.span, edge.span,
+        "the span is the recorded span"
+    );
 }
 
 #[test]
@@ -401,7 +406,10 @@ fn an_inferred_edge_reports_the_basis_the_resolver_wrote() {
         Some("the only StripeGateway declared in this crate"),
         "the basis must be the resolver's own words, not a paraphrase"
     );
-    assert_eq!(answered.evidence_class.as_deref(), Some("qualified_name_in_scope"));
+    assert_eq!(
+        answered.evidence_class.as_deref(),
+        Some("qualified_name_in_scope")
+    );
     assert!(
         answered.state.contains("inferred"),
         "the state must say it is an inference: {}",
@@ -497,15 +505,26 @@ fn the_chain_takes_one_path_and_says_how_many_edges_it_passed_over() {
         chain = explained.chain
     );
     let first = &explained.chain[0];
-    assert_eq!(first.id, process_id(), "the import binding is the strongest edge");
-    assert_eq!(first.alternatives, 3, "three edges reach settle; one was taken");
+    assert_eq!(
+        first.id,
+        process_id(),
+        "the import binding is the strongest edge"
+    );
+    assert_eq!(
+        first.alternatives, 3,
+        "three edges reach settle; one was taken"
+    );
     assert_eq!(first.distance, 1);
     assert!(
         first.chosen_because.contains("strongest"),
         "the rule must be disclosed: {}",
         first.chosen_because
     );
-    assert!(first.chosen_because.contains("import_binding"), "{}", first.chosen_because);
+    assert!(
+        first.chosen_because.contains("import_binding"),
+        "{}",
+        first.chosen_because
+    );
 }
 
 #[test]
@@ -640,7 +659,8 @@ fn a_walk_terminates_on_a_cycle_and_says_it_found_one() {
          is a second path to an entity already found: {walk:?}"
     );
     assert_eq!(
-        walk.closed - walk.revisits, 1,
+        walk.closed - walk.revisits,
+        1,
         "exactly one of them turned back to the target itself: {walk:?}"
     );
     assert_eq!(walk.revisits, 1, "`audit → process` only: {walk:?}");
@@ -668,7 +688,10 @@ fn a_walk_follows_an_inferred_edge_and_the_caller_can_tell() {
         .iter()
         .find(|step| step.id == handler_id())
         .expect("handler implements the gateway");
-    assert!(step.is_inferred(), "the step must say it arrived by inference");
+    assert!(
+        step.is_inferred(),
+        "the step must say it arrived by inference"
+    );
     assert_eq!(followed.followed_inferred, 1);
     assert!(
         step.state().contains("inferred"),
@@ -768,7 +791,10 @@ fn a_budget_too_small_to_hold_the_report_is_refused_rather_than_exceeded() {
     assert!(minimum > 0, "the empty report costs something");
 
     match query.peek("process", minimum - 1) {
-        Err(QueryError::BudgetTooSmall { requested, minimum: told }) => {
+        Err(QueryError::BudgetTooSmall {
+            requested,
+            minimum: told,
+        }) => {
             assert_eq!(requested, minimum - 1);
             assert_eq!(told, minimum, "the error must state what would have worked");
         }
@@ -865,7 +891,11 @@ fn every_included_declaration_states_why_it_is_included() {
     );
     for unit in &pack.units {
         let reason = unit.reason.describe();
-        assert!(!reason.is_empty(), "{} has no stated reason", unit.entity.id);
+        assert!(
+            !reason.is_empty(),
+            "{} has no stated reason",
+            unit.entity.id
+        );
         assert!(
             unit.render().contains(&reason),
             "the rendered unit must carry its own reason: {}",
@@ -923,7 +953,9 @@ fn every_edge_in_the_pack_carries_its_resolution_state() {
     }
 
     assert!(
-        states.iter().any(|state| state.contains("ambiguous (2 candidates)")),
+        states
+            .iter()
+            .any(|state| state.contains("ambiguous (2 candidates)")),
         "the ambiguous call must survive into the pack with its count: {states:?}"
     );
     assert!(
@@ -1078,7 +1110,10 @@ fn a_budget_that_cannot_hold_the_target_reports_a_refusal_rather_than_a_slice() 
         .expect("a budget equal to the report is accepted, then refused the target");
 
     assert_eq!(pack.budget.status, BudgetStatus::Insufficient);
-    assert!(pack.units.is_empty(), "there is no such thing as half a target");
+    assert!(
+        pack.units.is_empty(),
+        "there is no such thing as half a target"
+    );
     assert!(
         pack.omitted
             .iter()
@@ -1148,11 +1183,18 @@ fn a_bare_name_resolves_to_a_declaration_and_arrives_with_its_container() {
     // that can find it — and the containment edge is what brings its type along.
     let (store, _dir) = fixture();
     let query = query(&store);
-    let pack = query.peek("append", generous(&query)).expect("compile the method");
+    let pack = query
+        .peek("append", generous(&query))
+        .expect("compile the method");
 
     assert_eq!(pack.target.matched, Matched::Name);
     assert_eq!(pack.target.id(), &append_id());
-    assert_eq!(pack.units.len(), 2, "the method and what contains it: {ids:?}", ids = pack.unit_ids());
+    assert_eq!(
+        pack.units.len(),
+        2,
+        "the method and what contains it: {ids:?}",
+        ids = pack.unit_ids()
+    );
     assert_eq!(pack.units[0].reason, InclusionReason::Target);
     assert!(
         matches!(pack.units[1].reason, InclusionReason::Container { .. }),
@@ -1168,7 +1210,10 @@ fn an_unknown_target_says_which_of_the_three_lookups_missed() {
     let query = query(&store);
 
     match query.peek("no_such_symbol", generous(&query)) {
-        Err(QueryError::UnknownTarget { query: asked, detail }) => {
+        Err(QueryError::UnknownTarget {
+            query: asked,
+            detail,
+        }) => {
             assert_eq!(asked, "no_such_symbol");
             assert!(
                 detail.contains("not a repository path"),
@@ -1202,7 +1247,10 @@ fn a_file_target_compiles_the_declarations_it_contains() {
     assert_eq!(pack.target.kind(), EntityKind::File);
     let names: Vec<&str> = pack.units.iter().map(|u| u.entity.id.name()).collect();
     for expected in ["settle", "reconcile", "audit"] {
-        assert!(names.contains(&expected), "{expected} missing from {names:?}");
+        assert!(
+            names.contains(&expected),
+            "{expected} missing from {names:?}"
+        );
     }
     assert_eq!(pack.units[0].reason, InclusionReason::Target);
     for unit in &pack.units[1..] {
@@ -1227,7 +1275,8 @@ fn a_symbol_target_and_a_file_target_give_different_answers() {
 
     assert_eq!(by_path.target.matched, Matched::Path);
     assert_eq!(
-        by_name.target.matched, Matched::QualifiedName,
+        by_name.target.matched,
+        Matched::QualifiedName,
         "a top-level function's qualified name *is* its bare name, so the qualified-name lookup \
          answers first — the order `resolve_target` documents"
     );
@@ -1253,8 +1302,18 @@ fn a_symbol_target_and_a_file_target_give_different_answers() {
          {ids:?}",
         ids = by_name.unit_ids()
     );
-    assert_eq!(by_path.budget.status, BudgetStatus::Complete, "{}", by_path.report);
-    assert_eq!(by_name.budget.status, BudgetStatus::Complete, "{}", by_name.report);
+    assert_eq!(
+        by_path.budget.status,
+        BudgetStatus::Complete,
+        "{}",
+        by_path.report
+    );
+    assert_eq!(
+        by_name.budget.status,
+        BudgetStatus::Complete,
+        "{}",
+        by_name.report
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1332,11 +1391,10 @@ fn a_relations_cost_is_recorded_where_it_can_be_checked() {
         !pack.units[0].entity.doc.as_deref().unwrap_or("").is_empty(),
         "the fixture's declarations carry a doc comment, so the price covers more than a name"
     );
-    assert!(matches!(
-        pack.units[0].entity.span,
-        Some(_),
-        "a declaration in the fixture has a span, so the rendered line has a position"
-    ));
+    // A declaration in the fixture has a span, so the rendered line has a position. `matches!`
+    // takes the expression and the pattern and nothing else, so the reason for the assertion is a
+    // comment rather than a third argument.
+    assert!(matches!(pack.units[0].entity.span, Some(_)));
 }
 
 #[test]

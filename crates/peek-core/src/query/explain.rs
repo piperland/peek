@@ -64,8 +64,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::entity::{Entity, EntityId};
 use crate::model::relation::{Relation, RelationKey, ResolutionState};
-use crate::query::{Query, QueryOptions};
 use crate::query::error::QueryError;
+use crate::query::{Query, QueryOptions};
 
 /// Which side of the subject an edge is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -330,8 +330,12 @@ pub(crate) fn explain_entity(query: &Query<'_>, id: &EntityId) -> Result<Explana
         });
     };
 
-    let outgoing = query.store().outgoing(id, None, query.options().relations_per_entity)?;
-    let incoming = query.store().incoming(id, None, query.options().relations_per_entity)?;
+    let outgoing = query
+        .store()
+        .outgoing(id, None, query.options().relations_per_entity)?;
+    let incoming = query
+        .store()
+        .incoming(id, None, query.options().relations_per_entity)?;
 
     let mut notes: Vec<String> = Vec::new();
     if outgoing.len() >= query.options().relations_per_entity {
@@ -381,16 +385,21 @@ pub(crate) fn explain_relation(
     relation: &Relation,
 ) -> Result<Explanation, QueryError> {
     let mut notes: Vec<String> = Vec::new();
-    let mut edges: Vec<ExplainedEdge> =
-        vec![convert(EdgeSide::Outgoing, relation.clone(), &mut notes, query)?];
+    let mut edges: Vec<ExplainedEdge> = vec![convert(
+        EdgeSide::Outgoing,
+        relation.clone(),
+        &mut notes,
+        query,
+    )?];
 
     // The edges arriving at the relation's source are the second half of the answer. They are
     // the same fact a chain walks, but the chain picks one and these are all of them, so a caller
     // can see the alternatives without having to re-derive them.
     if query.store().entity(&relation.source)?.is_some() {
-        let incoming = query
-            .store()
-            .incoming(&relation.source, None, query.options().relations_per_entity)?;
+        let incoming =
+            query
+                .store()
+                .incoming(&relation.source, None, query.options().relations_per_entity)?;
         if incoming.len() >= query.options().relations_per_entity {
             notes.push(format!(
                 "only the first {} relations of {} were read; there may be more",
@@ -454,10 +463,11 @@ fn convert(
             // that does not is a real, reportable state — the resolver found more than one match
             // and then failed to record them. Re-reading the rows is honest, because the rows are
             // the authority; reporting "ambiguous (0 candidates)" would not be.
-            let from_store =
-                query
-                    .store()
-                    .ambiguous_candidates(&relation.source, relation.kind, &relation.target_name)?;
+            let from_store = query.store().ambiguous_candidates(
+                &relation.source,
+                relation.kind,
+                &relation.target_name,
+            )?;
             if from_store.is_empty() {
                 notes.push(format!(
                     "`{}` is ambiguous but no candidate row exists for it; the resolver found \
@@ -477,10 +487,7 @@ fn convert(
         }
     }
     let state = relation.resolution.describe();
-    let evidence_class = relation
-        .resolution
-        .evidence_class()
-        .map(str::to_owned);
+    let evidence_class = relation.resolution.evidence_class().map(str::to_owned);
     let basis = basis_of(&relation.resolution);
     Ok(ExplainedEdge {
         side,
@@ -522,7 +529,9 @@ fn build_chain(
     let mut node = start.clone();
 
     for distance in 1..=depth {
-        let read = query.store().incoming(&node, None, options.relations_per_entity)?;
+        let read = query
+            .store()
+            .incoming(&node, None, options.relations_per_entity)?;
         if read.len() >= options.relations_per_entity {
             notes.push(format!(
                 "the chain read only the first {} relations of {}; it may have missed a stronger \

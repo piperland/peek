@@ -158,9 +158,17 @@ mod tests {
     fn a_cost_rounds_up_so_no_text_is_free() {
         let counter = TokenCounter::default();
         assert_eq!(counter.count(""), 0);
-        assert_eq!(counter.count("a"), 1, "one byte is a third of a token, and rounds up to one");
+        assert_eq!(
+            counter.count("a"),
+            1,
+            "one byte is a third of a token, and rounds up to one"
+        );
         assert_eq!(counter.count("abc"), 1);
-        assert_eq!(counter.count("abcd"), 2, "four bytes is one token and a bit");
+        assert_eq!(
+            counter.count("abcd"),
+            2,
+            "four bytes is one token and a bit"
+        );
         assert_eq!(counter.count(&"x".repeat(300)), 100);
     }
 

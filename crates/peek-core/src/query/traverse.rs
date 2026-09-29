@@ -102,11 +102,10 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use serde::{Deserialize, Serialize};
 
 use crate::model::entity::{Entity, EntityId, EntityKind};
-use crate::model::relation::{Evidence, Relation, RelationKey, RelationKind, ResolutionState};
+use crate::model::relation::{Evidence, Relation, RelationKind, ResolutionState};
 use crate::model::span::Span;
 use crate::query::QueryOptions;
 use crate::query::error::QueryError;
-use crate::query::structural_target;
 use crate::store::Store;
 
 /// Which way a walk goes.
@@ -273,7 +272,9 @@ impl Walk {
 
     /// The steps at one distance, in order.
     pub fn at_distance(&self, distance: u32) -> impl Iterator<Item = &Step> {
-        self.steps.iter().filter(move |step| step.distance == distance)
+        self.steps
+            .iter()
+            .filter(move |step| step.distance == distance)
     }
 
     /// The greatest distance reached, or `None` for an empty walk.
@@ -371,7 +372,9 @@ pub(crate) fn walk(
         result.visited += 1;
 
         let edges = match request.direction {
-            Direction::Inbound => store.incoming(&node, request.kind, options.relations_per_entity)?,
+            Direction::Inbound => {
+                store.incoming(&node, request.kind, options.relations_per_entity)?
+            }
             Direction::Outbound => {
                 store.outgoing(&node, request.kind, options.relations_per_entity)?
             }

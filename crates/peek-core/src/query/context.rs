@@ -422,7 +422,10 @@ impl InclusionReason {
                 format!("it calls `{}`, {distance} hop away.", of.display())
             }
             InclusionReason::Referenced { of, kind, distance } => {
-                format!("`{}` names it as a `{kind}` target, {distance} hop away.", of.display())
+                format!(
+                    "`{}` names it as a `{kind}` target, {distance} hop away.",
+                    of.display()
+                )
             }
         }
     }
@@ -1060,7 +1063,10 @@ fn neighbourhood(
             incident.extend(edges);
         }
         Err(error) => {
-            notes.push(format!("the relations of {} could not be read: {error}", id.display()));
+            notes.push(format!(
+                "the relations of {} could not be read: {error}",
+                id.display()
+            ));
         }
     }
     match store.outgoing(&id, None, options.relations_per_entity) {
@@ -1410,7 +1416,13 @@ mod tests {
         // Two candidates with the same identity are the same candidate; two with different
         // identities must order somehow, and the identity components guarantee they do.
         let target = RankKey::of(&id("a"), &InclusionReason::Target);
-        let later = RankKey::of(&id("b"), &InclusionReason::Callee { of: id("a"), distance: 1 });
+        let later = RankKey::of(
+            &id("b"),
+            &InclusionReason::Callee {
+                of: id("a"),
+                distance: 1,
+            },
+        );
         assert!(target < later, "the target outranks everything");
         assert_ne!(target, later);
     }
