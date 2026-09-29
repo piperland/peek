@@ -185,7 +185,7 @@ pub fn status(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAn
                 stats.relation_count
             ))
         },
-        "advice": if partition { Value::Null } else { Value::String("run `doctor`; a state that does not partition means the index was written by something that does not agree with this build") },
+        "advice": if partition { Value::Null } else { Value::String("run `doctor`; a state that does not partition means the index was written by something that does not agree with this build".to_owned()) },
         "candidates": [],
         "repository": root,
         "index_path": path.display().to_string(),

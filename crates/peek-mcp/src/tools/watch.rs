@@ -168,7 +168,7 @@ pub fn stop(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAnsw
         "advice": if stopped.stopped_cleanly {
             Value::Null
         } else {
-            Value::String("run `doctor`; a watcher that did not stop cleanly may have left the index behind an uncommitted batch")
+            Value::String("run `doctor`; a watcher that did not stop cleanly may have left the index behind an uncommitted batch".to_owned())
         },
         "candidates": [],
         "watch_id": stopped.id,
