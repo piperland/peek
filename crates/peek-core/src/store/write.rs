@@ -27,7 +27,6 @@ use rusqlite::params;
 use rusqlite::types::Value;
 
 use crate::model::entity::Entity;
-use crate::model::path::RepoPath;
 use crate::model::relation::{Relation, ResolutionState, UnresolvedReason};
 use crate::model::span::Span;
 
@@ -545,7 +544,6 @@ fn optional_language_to_sql(
 #[cfg(test)]
 mod tests {
     use super::{INITIAL_GENERATION, ScopeParams, scope_clause};
-    use crate::model::path::RepoPath;
     use crate::store::update::Removal;
 
     fn path(s: &str) -> RepoPath {
