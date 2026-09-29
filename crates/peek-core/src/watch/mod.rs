@@ -286,5 +286,164 @@ impl std::fmt::Display for Plan {
     }
 }
 
+/// The OS-specific half of watching.
+///
+/// This is deliberately the *thin* half. It turns notifications into paths and hands them to
+/// [`Debouncer`]; every decision about what those paths mean is made by [`plan_batch`], which is
+/// pure and therefore testable without a filesystem. A watcher whose logic lives in the event
+/// loop can only be tested by causing real file events, which is how a watcher ends up with a
+/// test suite that is either flaky or absent.
+pub mod native {
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+
+    use super::{Debouncer, Plan, plan_batch};
+
+    /// Everything a caller can configure, so the defaults are visible rather than buried.
+    #[derive(Debug, Clone)]
+    pub struct WatchOptions {
+        /// How long a batch stays open without a new event.
+        ///
+        /// 200 ms is the default because it is long enough to swallow a save's create/write/rename
+        /// dance and short enough that a developer notices their index is behind. Both directions
+        /// are configurable and neither is correct for everyone: a network filesystem wants longer,
+        /// a local SSD is fine with shorter.
+        pub quiet_for: Duration,
+        /// Passed to [`plan_batch`] to decide whether an extension is one we extract.
+        pub is_indexable: fn(&Path) -> bool,
+    }
+
+    impl Default for WatchOptions {
+        fn default() -> Self {
+            Self {
+                quiet_for: Duration::from_millis(200),
+                // A `.rs` file by default, so the module is useful without a discovery policy and
+                // obviously narrow enough that a caller replaces it.
+                is_indexable: |path| path.extension().is_some_and(|ext| ext == "rs"),
+            }
+        }
+    }
+
+    /// A running watcher. Dropping it stops watching and flushes nothing — call
+    /// [`Watch::stop`] first.
+    pub struct Watch {
+        watcher: Option<RecommendedWatcher>,
+        events: mpsc::Receiver<notify::Result<Event>>,
+        debouncer: Debouncer,
+        root: PathBuf,
+        options: WatchOptions,
+    }
+
+    /// Why watching could not start.
+    #[derive(Debug)]
+    pub enum WatchError {
+        /// The OS refused the watch, or the backend is unavailable on this platform.
+        Unavailable(String),
+    }
+
+    impl std::fmt::Display for WatchError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                WatchError::Unavailable(detail) => {
+                    write!(f, "filesystem notifications are unavailable: {detail}")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for WatchError {}
+
+    /// One applied batch.
+    #[derive(Debug, Clone)]
+    pub struct Batch {
+        pub plan: Plan,
+        /// How many raw events the batch coalesced, which is the number that says whether the
+        /// quiet period is doing its job.
+        pub events: usize,
+    }
+
+    impl Watch {
+        /// Begin watching `root` recursively.
+        pub fn start(root: &Path, options: WatchOptions) -> Result<Self, WatchError> {
+            let (tx, events) = mpsc::channel();
+            let mut watcher = notify::recommended_watcher(move |result| {
+                // A send failure means the receiver is gone, which is shutdown. Dropping the event
+                // is correct: there is nobody left to tell.
+                let _ = tx.send(result);
+            })
+            .map_err(|error| WatchError::Unavailable(error.to_string()))?;
+            watcher
+                .watch(root, RecursiveMode::Recursive)
+                .map_err(|error| WatchError::Unavailable(error.to_string()))?;
+            Ok(Self {
+                watcher: Some(watcher),
+                events,
+                debouncer: Debouncer::new(options.quiet_for),
+                root: root.to_path_buf(),
+                options,
+            })
+        }
+
+        /// Collect any events that have arrived and open a batch.
+        ///
+        /// Non-blocking: returns immediately with whatever is queued. The caller drives this from a
+        /// timer, and the quiet period — not this call — decides when a batch is ready.
+        pub fn poll(&mut self) -> usize {
+            let mut taken = 0;
+            while let Ok(event) = self.events.try_recv() {
+                // An error event carries no paths, so there is nothing to record. It is not
+                // silently dropped: the count reaches the caller through the batch's event total
+                // only for real paths, so an errored watch is surfaced by the watcher itself
+                // rather than by a path that does not exist.
+                if let Ok(event) = event {
+                    for path in event.paths {
+                        self.debouncer.record([path]);
+                        taken += 1;
+                    }
+                }
+            }
+            taken
+        }
+
+        /// A batch if the quiet period has elapsed, otherwise `None`.
+        pub fn take_batch(&mut self, now: std::time::Instant) -> Option<Batch> {
+            let events = self.debouncer.drain_if_quiet(now)?;
+            let plan = plan_batch(&self.root, &events, |path| (self.options.is_indexable)(path));
+            Some(Batch {
+                plan,
+                events: events.len(),
+            })
+        }
+
+        /// Hand over whatever is pending, ignoring the quiet period. What shutdown uses, so a
+        /// process that exits mid-save does not leave those changes out of the index.
+        pub fn flush(&mut self) -> Option<Batch> {
+            let events = self.debouncer.flush()?;
+            let plan = plan_batch(&self.root, &events, |path| (self.options.is_indexable)(path));
+            Some(Batch {
+                plan,
+                events: events.len(),
+            })
+        }
+
+        /// Stop watching, handing over any batch still open.
+        pub fn stop(&mut self) -> Option<Batch> {
+            let batch = self.flush();
+            // Dropping the watcher unsubscribes. `None` afterwards so a second `stop` is harmless
+            // rather than a double-free.
+            drop(self.watcher.take());
+            batch
+        }
+
+        /// The last failure a caller recorded, so it can be surfaced once.
+        pub fn last_failure(&self) -> Option<&str> {
+            self.debouncer.last_failure()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

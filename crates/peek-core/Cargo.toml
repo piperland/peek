@@ -20,6 +20,7 @@ tree-sitter = { workspace = true }
 tree-sitter-language = { workspace = true }
 tree-sitter-rust = { workspace = true }
 ignore = { workspace = true }
+notify = { workspace = true }
 
 [dev-dependencies]
 # Fixtures are parsed from inline strings; nothing else is needed yet.

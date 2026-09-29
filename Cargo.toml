@@ -31,6 +31,10 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 # Filesystem walking with ignore-file awareness
 ignore = "0.4.23"
 
+# Filesystem notifications for `peek watch`. The planning and the debouncing are pure and tested
+# without it; this is only the OS plumbing, and it lives behind one module.
+notify = "8.2"
+
 [workspace.lints.clippy]
 dbg_macro = "deny"
 todo = "deny"
