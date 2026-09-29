@@ -413,9 +413,10 @@ fn index_status_reports_where_the_index_is_and_never_inside_the_repository() {
 }
 
 #[test]
-fn index_status_reports_the_generation_its_handle_was_opened_at() {
-    // A long-lived reader beside a running watcher serves a stale generation unless the tool says
-    // so. This asserts the two figures are present and equal when nothing has committed.
+fn index_status_says_an_unchanged_handle_is_current() {
+    // The other half of the claim, and the half that is deterministic: a session that has not
+    // written anything since it opened its reader is not behind, and the tool says so rather than
+    // leaving the field to be guessed at.
     let mut fixture = indexed("status-generation");
     let first = call(&mut fixture.session, "index_status", json!({}));
     let second = call(&mut fixture.session, "index_status", json!({}));
@@ -423,8 +424,65 @@ fn index_status_reports_the_generation_its_handle_was_opened_at() {
         first["opened_at_generation"], first["generation"],
         "the handle is opened before the figure is read, so the first call already knows it: {first}"
     );
-    assert_eq!(second, first, "and nothing changed between the two: {second}");
     assert_eq!(first["handle_is_stale"], json!(false));
+    assert_eq!(
+        first["recorded_generation"], first["opened_at_generation"],
+        "and the index records what the handle was opened at, because nothing has committed: {first}"
+    );
+    assert_eq!(second, first, "and nothing changed between the two: {second}");
+}
+
+#[test]
+fn index_status_says_the_handle_is_behind_once_anything_commits() {
+    // The claim that the flag is for, and the reason it exists: the session's reader is opened once
+    // and kept, so its cached generation stops being true the moment anything commits beside it.
+    //
+    // A `refresh` is used rather than a watch because it is the same situation with none of the
+    // timing in it. It opens its own short-lived writer, commits and closes, and the reader this
+    // session is holding is untouched — which is precisely the condition the field reports. A
+    // refresh that returned the same generation as the handle would mean the comparison in the
+    // tool is reading the cache twice, which is the defect this replaces.
+    let mut fixture = indexed("status-stale");
+    let before = call(&mut fixture.session, "index_status", json!({}));
+    assert_eq!(before["handle_is_stale"], json!(false));
+
+    fixture.root.write(
+        "src/ui.rs",
+        "\
+pub fn render() -> u32 {
+    30
+}
+
+pub fn decorate() -> u32 {
+    4
+}
+",
+    );
+    let refreshed = call(
+        &mut fixture.session,
+        "index",
+        json!({ "mode": "refresh", "paths": ["src/ui.rs"] }),
+    );
+    assert_eq!(refreshed["outcome"], json!("ok"), "the refresh applied: {refreshed}");
+
+    let after = call(&mut fixture.session, "index_status", json!({}));
+    assert_eq!(
+        after["opened_at_generation"],
+        before["opened_at_generation"],
+        "the handle is still the one this session opened, and it still reports what it was opened \
+         at: {after}"
+    );
+    assert_eq!(
+        after["recorded_generation"],
+        refreshed["report"]["generation"],
+        "the index records the generation the refresh committed: {after}"
+    );
+    assert_eq!(
+        after["handle_is_stale"],
+        json!(true),
+        "and the tool says the handle is behind rather than serving the cached figure as current: \
+         {after}"
+    );
 }
 
 #[test]
@@ -1876,6 +1934,12 @@ fn a_watch_keeps_the_index_current_as_a_file_changes() {
     // platform whose notifications do not work. It polls for the change with a deadline rather than
     // sleeping a fixed amount, so it is as fast as the platform allows and as slow as it must be.
     let mut fixture = indexed("watch-refreshes");
+    let opened = call(&mut fixture.session, "index_status", json!({}));
+    assert_eq!(
+        opened["handle_is_stale"],
+        json!(false),
+        "the handle starts out current: {opened}"
+    );
     let started = call(
         &mut fixture.session,
         "watch_start",
@@ -1905,6 +1969,19 @@ pub fn decorate() -> u32 {
         let status = call(&mut fixture.session, "index_status", json!({}));
         applied = status["watch"]["applied"].as_u64().unwrap_or(0);
         if applied > 0 {
+            // The commit happens before the counter moves, so a non-zero `applied` is a committed
+            // refresh — and this is where the session's own reader has fallen behind.
+            assert_eq!(
+                status["handle_is_stale"],
+                json!(true),
+                "a watcher committed beside a reader this session opened earlier, so the handle is \
+                 behind and the tool has to say so: {status}"
+            );
+            assert!(
+                status["recorded_generation"].as_u64()
+                    > status["opened_at_generation"].as_u64(),
+                "and it is the index that moved on, not the handle: {status}"
+            );
             break;
         }
     }

@@ -21,8 +21,9 @@
 //!
 //! The consequence worth stating is that a long-lived reader's cached generation goes stale the
 //! moment a watcher commits. [`crate::tools::index::status`] therefore reports the generation the
-//! handle was opened at *and* the generation the store currently records, and says whether they
-//! differ, rather than quietly serving a number that is no longer true.
+//! handle was opened at *and* the generation the index currently records — the second read from
+//! the database rather than from the handle — and says whether they differ, rather than quietly
+//! serving a number that is no longer true.
 //!
 //! # Logging
 //!
@@ -232,6 +233,10 @@ impl Session {
     }
 
     /// The generation the reader was opened at, which goes stale when a watcher commits.
+    ///
+    /// The other half of the pair is [`Store::stored_generation`], and a caller that reports
+    /// staleness compares them; see [`crate::tools::index`] for why that comparison is the only
+    /// thing the field is for.
     #[must_use]
     pub fn opened_at_generation(&self) -> u64 {
         self.opened_at_generation

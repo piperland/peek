@@ -20,8 +20,14 @@
 //! [`Store::stats`] reports the generation its handle was *opened at*, because that is the value
 //! the store caches and re-reading it would make one field mean two things. A long-lived reader
 //! beside a running watcher therefore reports a number that is no longer true. So this tool
-//! reports the handle's generation, the generation currently stored, and whether they differ —
-//! rather than quietly serving a stale figure.
+//! reports the handle's generation, the generation the index **currently records** — read from the
+//! database, not from the cache — and whether they differ, rather than quietly serving a stale
+//! figure under a field that says it is current.
+//!
+//! The second number is a second read of the same file, so it is not free; it is a single row in a
+//! table the status call has already counted twice over. That is the price of a caller being able
+//! to tell "this index is what I measured" from "this handle is behind what I measured", which is
+//! the only thing this tool's generation fields exist to say.
 
 use std::path::{Path, PathBuf};
 
@@ -151,6 +157,13 @@ pub fn status(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAn
         .map_err(|error| ToolError::failed(format!("the index could not be measured: {error}")))?;
     let durability = session.reader()?.durability().as_str().to_owned();
     let opened_at = session.opened_at_generation();
+    // Read from the database rather than from the handle's cache, which is the whole point: this
+    // is the number the index carries *now*, and it moves when a watcher commits.
+    let recorded = session.reader()?.stored_generation().map_err(|error| {
+        ToolError::failed(format!(
+            "the index's recorded generation could not be read: {error}"
+        ))
+    })?;
     let states = ResolutionStates::of(&stats);
     let accounted = states.total();
     let partition = accounted == stats.relation_count;
@@ -174,7 +187,10 @@ pub fn status(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAn
         "schema_version": stats.schema_version,
         "generation": stats.generation,
         "opened_at_generation": opened_at,
-        "handle_is_stale": stats.generation != opened_at,
+        // What the index records at the moment of this call. The two above are this handle's, and
+        // the two being different is the only thing `handle_is_stale` means.
+        "recorded_generation": recorded,
+        "handle_is_stale": recorded != opened_at,
         "durability": durability,
         "states_partition": partition,
         "resolution_states": states,
