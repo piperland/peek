@@ -403,10 +403,7 @@ impl ScopeParams {
                 // So `["src/", "src0")` is exactly the subtree — and because `RepoPath` cannot end
                 // in a separator, `lower` always ends in `/` and incrementing it never carries.
                 let path = removal.path().as_str();
-                (
-                    Some(format!("{path}/")),
-                    Some(format!("{path}0")),
-                )
+                (Some(format!("{path}/")), Some(format!("{path}0")))
             }
         };
         Self {
@@ -547,7 +544,7 @@ fn optional_language_to_sql(
 
 #[cfg(test)]
 mod tests {
-    use super::{INITIAL_GENERATION, ScopeParams, like_pattern, scope_clause};
+    use super::{INITIAL_GENERATION, ScopeParams, scope_clause};
     use crate::model::path::RepoPath;
     use crate::store::update::Removal;
 
@@ -643,7 +640,7 @@ mod tests {
         assert_eq!(lower, "src/");
         assert_eq!(upper, "src0");
 
-        let within = |candidate: &str| candidate >= lower && candidate < upper;
+        let within = |candidate: &str| candidate >= lower.as_str() && candidate < upper.as_str();
         assert!(within("src/a.rs"), "a direct child is in the range");
         assert!(within("src/nested/deep.rs"), "a deep descendant is too");
         assert!(within("src/"), "the directory itself sorts at the bound");
@@ -653,7 +650,10 @@ mod tests {
         assert!(!within("sr"), "a shorter path is not");
         assert!(!within("src0/x"), "the exclusive upper bound is excluded");
         assert!(!within("src-old/main.rs"), "a hyphen sibling is not");
-        assert!(!within("other/src/a.rs"), "a same-named path elsewhere is not");
+        assert!(
+            !within("other/src/a.rs"),
+            "a same-named path elsewhere is not"
+        );
 
         // And the equality arm covers the directory's own row, which the range does not.
         assert!(

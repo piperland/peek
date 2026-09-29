@@ -1127,9 +1127,10 @@ fn removing_a_subtree_leaves_a_prefix_sibling_untouched() {
         .expect("commit");
 
     store
-        .apply_update(IndexUpdate::empty().removing_subtree(
-            crate::model::path::RepoPath::new("src").expect("valid path"),
-        ))
+        .apply_update(
+            IndexUpdate::empty()
+                .removing_subtree(crate::model::path::RepoPath::new("src").expect("valid path")),
+        )
         .expect("remove the subtree");
 
     let surviving = store.entities_named("a", 1);
@@ -1149,10 +1150,7 @@ fn removing_a_subtree_leaves_a_prefix_sibling_untouched() {
         );
     }
     assert!(
-        store
-            .entities_named("b", 1)
-            .expect("query")
-            .is_empty(),
+        store.entities_named("b", 1).expect("query").is_empty(),
         "a deep descendant is inside the subtree and must be gone"
     );
 }
