@@ -289,8 +289,14 @@ impl fmt::Display for Evidence {
 }
 
 /// Why a relation could not be resolved.
+///
+/// **The wire form is a bare string**, because every variant here is a unit variant and a unit
+/// variant needs no tag: `{"state":"unresolved","reason":"external"}`. It used to be written as
+/// `{"reason":{"reason":"external"}}`, because this enum carried `#[serde(tag = "reason")]` while
+/// sitting inside a struct field *also* called `reason`. A private `UnresolvedReasonWire` accepts
+/// both on the way in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "reason", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", try_from = "UnresolvedReasonWire")]
 pub enum UnresolvedReason {
     /// The name was found but nothing in the repository matches it.
     NoCandidate,
@@ -308,6 +314,41 @@ pub enum UnresolvedReason {
     Unsupported,
 }
 
+/// The two shapes an [`UnresolvedReason`] is found in on the way in.
+///
+/// **The wrapped shape is not obsolete data; it is what is on disk.** `ResolutionState` is
+/// persisted: the store writes it to `resolution_json` and reads it back with `from_str`, so every
+/// index built by an earlier release holds the wrapped form for its unresolved relations. Writing
+/// one shape and refusing the other would turn correct data into `StoreError::Corrupt` and force
+/// every index to be rebuilt to read a value that never changed meaning — so the deserialiser
+/// accepts both and the serialiser writes one. A `SCHEMA_VERSION` bump would have been the other
+/// answer, and it would have cost a migration and a rebuild for a change no reader needs.
+///
+/// A variant added to the enum needs no change here: [`UnresolvedReason::parse`] is the only place
+/// a spelling is matched, and a spelling it does not know is an error rather than a default.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum UnresolvedReasonWire {
+    /// `{"reason":"external"}` — the shape every existing index holds.
+    Wrapped { reason: String },
+    /// `"external"` — the shape this build writes.
+    Bare(String),
+}
+
+impl TryFrom<UnresolvedReasonWire> for UnresolvedReason {
+    type Error = String;
+
+    fn try_from(wire: UnresolvedReasonWire) -> Result<Self, Self::Error> {
+        let text = match wire {
+            UnresolvedReasonWire::Wrapped { reason } | UnresolvedReasonWire::Bare(reason) => reason,
+        };
+        Self::parse(&text).ok_or_else(|| {
+            format!("{text:?} is not an unresolved reason this build knows, so refusing it rather \
+                     than reading it as something else")
+        })
+    }
+}
+
 impl UnresolvedReason {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -317,6 +358,24 @@ impl UnresolvedReason {
             UnresolvedReason::Dynamic => "dynamic",
             UnresolvedReason::ParseError => "parse_error",
             UnresolvedReason::Unsupported => "unsupported",
+        }
+    }
+
+    /// The reason a spelling names, or `None` for a spelling this build does not have.
+    ///
+    /// The inverse of [`Self::as_str`], and the reason it lives here rather than in a caller: a
+    /// stored value this build cannot name is a corrupt row, and the only honest reading of one is
+    /// to refuse it. Defaulting to the nearest known reason would turn a store written by a newer
+    /// build into a confidently wrong answer.
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "no_candidate" => Some(UnresolvedReason::NoCandidate),
+            "ambiguous" => Some(UnresolvedReason::Ambiguous),
+            "external" => Some(UnresolvedReason::External),
+            "dynamic" => Some(UnresolvedReason::Dynamic),
+            "parse_error" => Some(UnresolvedReason::ParseError),
+            "unsupported" => Some(UnresolvedReason::Unsupported),
+            _ => None,
         }
     }
 }
@@ -783,6 +842,105 @@ mod tests {
             let back: ResolutionState = serde_json::from_str(&json).expect("deserialise");
             assert_eq!(back, state, "round trip changed the resolution state");
         }
+    }
+
+    #[test]
+    fn an_unresolved_reason_travels_as_a_bare_string() {
+        // Every `UnresolvedReason` variant is a unit variant, so there is nothing for a tag to
+        // carry, and the field it sits in is already called `reason`. The wire form is therefore
+        // `"reason":"external"` rather than `"reason":{"reason":"external"}` — one vocabulary word
+        // where the reader's model says there is one.
+        let state = ResolutionState::Unresolved {
+            reason: UnresolvedReason::External,
+        };
+        assert_eq!(
+            serde_json::to_string(&state).expect("serialise"),
+            r#"{"state":"unresolved","reason":"external"}"#
+        );
+    }
+
+    #[test]
+    fn a_resolution_state_stored_before_the_flat_reason_is_still_read() {
+        // The reason the deserialiser accepts two shapes rather than one. These are literals: the
+        // exact bytes every index built before the change holds in its `resolution_json` column,
+        // the first of them the stand-in written for *every* ambiguous relation in every index.
+        // Nothing rebuilds and nothing migrates — an index written by the old build is simply still
+        // readable, because the data was never wrong.
+        let stored = [
+            (
+                r#"{"state":"unresolved","reason":{"reason":"ambiguous"}}"#,
+                UnresolvedReason::Ambiguous,
+            ),
+            (
+                r#"{"state":"unresolved","reason":{"reason":"external"}}"#,
+                UnresolvedReason::External,
+            ),
+            (
+                r#"{"state":"unresolved","reason":{"reason":"no_candidate"}}"#,
+                UnresolvedReason::NoCandidate,
+            ),
+        ];
+        for (payload, expected) in stored {
+            let read: ResolutionState = serde_json::from_str(payload)
+                .unwrap_or_else(|error| panic!("{payload} must still decode: {error}"));
+            assert_eq!(
+                read,
+                ResolutionState::Unresolved { reason: expected },
+                "{payload} decoded to the wrong reason"
+            );
+        }
+    }
+
+    #[test]
+    fn both_shapes_of_a_reason_are_the_same_value() {
+        // The pair, side by side: what the store holds and what this build writes name the same
+        // reason. Without this the two above only say that each shape decodes, not that the
+        // change was a change of spelling rather than of meaning.
+        let wrapped: UnresolvedReason =
+            serde_json::from_str(r#"{"reason":"external"}"#).expect("the stored shape");
+        let bare: UnresolvedReason =
+            serde_json::from_str(r#""external""#).expect("the written shape");
+        assert_eq!(wrapped, bare);
+        assert_eq!(serde_json::to_string(&bare).expect("serialise"), r#""external""#);
+    }
+
+    #[test]
+    fn a_reason_spelling_this_build_does_not_have_is_refused_rather_than_guessed() {
+        // A row written by a newer build, or a corrupted one. Substituting the nearest known
+        // reason would report a resolution claim the file never made.
+        let outcome: Result<UnresolvedReason, _> = serde_json::from_str(r#""maybe""#);
+        assert!(outcome.is_err(), "an unknown reason must not decode");
+        let nested: Result<ResolutionState, _> =
+            serde_json::from_str(r#"{"state":"unresolved","reason":{"reason":"maybe"}}"#);
+        assert!(
+            nested.is_err(),
+            "an unknown reason inside the stored shape must not decode either"
+        );
+    }
+
+    #[test]
+    fn parsing_a_reason_spelling_inverts_printing_one() {
+        // `parse` is the only place the two spellings meet, so the pair is pinned here rather
+        // than left to a reader: a variant added without a spelling is a value that cannot be
+        // read back out of a row it was just written into.
+        let every = [
+            UnresolvedReason::NoCandidate,
+            UnresolvedReason::Ambiguous,
+            UnresolvedReason::External,
+            UnresolvedReason::Dynamic,
+            UnresolvedReason::ParseError,
+            UnresolvedReason::Unsupported,
+        ];
+        for reason in every {
+            let spelled = reason.as_str();
+            assert_eq!(
+                UnresolvedReason::parse(spelled),
+                Some(reason.clone()),
+                "{spelled} did not parse back to the reason it was printed from"
+            );
+        }
+        assert_eq!(UnresolvedReason::parse("External"), None);
+        assert_eq!(UnresolvedReason::parse(""), None);
     }
 
     #[test]

@@ -255,22 +255,57 @@ impl Omitted {
 }
 
 /// Why something is not in the pack.
+///
+/// **The wire form is a bare string**, because every variant here is a unit variant and a unit
+/// variant needs no tag: `"reason":"budget_exhausted"`. It used to be written as
+/// `{"reason":{"reason":"budget_exhausted"}}`, because this enum carried `#[serde(tag = "reason")]`
+/// while sitting inside a struct field *also* called `reason`. A private `OmissionReasonWire`
+/// accepts both, so an answer serialised by an older build is still readable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(tag = "reason", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", try_from = "OmissionReasonWire")]
 pub enum OmissionReason {
-    /// It was next in the ranking and the budget was already committed.
+    /// It ranked behind the first declaration that did not fit, so the fill stopped rather than
+    /// skipping ahead.
     ///
-    /// The fill stops rather than skipping to something smaller, so a reduced pack is a prefix of
-    /// the full ranking. Skipping would produce a pack with a hole in it, which is harder to
-    /// reason about than one that is merely short.
+    /// [`BudgetStatus::Reduced`] is a *prefix* of the full ranking, and this is what makes it one:
+    /// the fill stops at the first declaration the budget cannot take, so everything behind it is
+    /// dropped with it. Skipping to a smaller one would produce a pack with a hole in the middle,
+    /// which is harder to reason about than one that is merely short.
     BudgetExhausted,
-    /// One declaration costs more than everything the budget has left for content, so no ordering
-    /// could have helped and no later unit would fit either. Only a larger budget will.
+    /// This one declaration costs more than everything the budget has left for content, so a
+    /// different ordering could not have placed it and only a larger budget will.
     ExceedsBudget,
     /// The declaration was included; this edge was not, because one unit prices at most
     /// `QueryOptions::max_edges_per_unit` edges. The cap is a parameter, so what it hid is a count
     /// rather than a shrug.
     EdgeLimit,
+}
+
+/// The two shapes an [`OmissionReason`] is found in on the way in.
+///
+/// A pack is not persisted by the store, but it does cross a process boundary — the MCP server
+/// serialises one, and a client holding an answer from an older build reads it — so the wrapped
+/// form is out there in the same way. Accepting both costs ten lines; a client that has to be
+/// rebuilt to read a value that did not change meaning is the alternative.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OmissionReasonWire {
+    /// `{"reason":"budget_exhausted"}` — what an older build wrote.
+    Wrapped { reason: String },
+    /// `"budget_exhausted"` — what this build writes.
+    Bare(String),
+}
+
+impl TryFrom<OmissionReasonWire> for OmissionReason {
+    type Error = String;
+
+    fn try_from(wire: OmissionReasonWire) -> Result<Self, Self::Error> {
+        let text = match wire {
+            OmissionReasonWire::Wrapped { reason } | OmissionReasonWire::Bare(reason) => reason,
+        };
+        Self::parse(&text)
+            .ok_or_else(|| format!("{text:?} is not an omission reason this build knows"))
+    }
 }
 
 impl OmissionReason {
@@ -281,6 +316,20 @@ impl OmissionReason {
             OmissionReason::BudgetExhausted => "budget_exhausted",
             OmissionReason::ExceedsBudget => "exceeds_budget",
             OmissionReason::EdgeLimit => "edge_limit",
+        }
+    }
+
+    /// The reason a spelling names, or `None` for a spelling this build does not have.
+    ///
+    /// The inverse of [`Self::as_str`]. A stored reason this build cannot name is refused rather
+    /// than read as the nearest known one, which would be a claim about why something was dropped
+    /// that the answer never made.
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "budget_exhausted" => Some(OmissionReason::BudgetExhausted),
+            "exceeds_budget" => Some(OmissionReason::ExceedsBudget),
+            "edge_limit" => Some(OmissionReason::EdgeLimit),
+            _ => None,
         }
     }
 
@@ -1501,6 +1550,88 @@ mod tests {
                 "{reason:?} may not outrank the thing that was asked for"
             );
         }
+    }
+
+    #[test]
+    fn an_omission_reason_travels_as_a_bare_string() {
+        // The counterpart to `an_unresolved_reason_travels_as_a_bare_string` on the model side: the
+        // reader's model says an omission is `{"reason":"budget_exhausted"}`, and the old encoding
+        // made it `{"reason":{"reason":"budget_exhausted"}}` because this enum carried
+        // `#[serde(tag = "reason")]` inside a struct whose own field is called `reason`.
+        let omission = Omission {
+            subject: "src/a.rs::x".to_owned(),
+            what: Omitted::Unit,
+            reason: OmissionReason::BudgetExhausted,
+            cost: Cost::ZERO,
+        };
+        let json = serde_json::to_string(&omission).expect("serialise");
+        assert!(
+            json.contains(r#""reason":"budget_exhausted""#),
+            "the reason is the bare string the reader's model names: {json}"
+        );
+        assert!(
+            !json.contains(r#""reason":{"#),
+            "and nothing wraps it in a second object: {json}"
+        );
+    }
+
+    #[test]
+    fn an_omission_reason_from_before_the_flat_form_is_still_read() {
+        // A pack is not persisted by the store, but it does cross a process boundary, so an answer
+        // a client holds from an older build arrives wrapped. Reading one is ten lines; making a
+        // client discard it to read a value that never changed meaning is not a trade anyone
+        // should have to make. This is the deserialiser `Omission::reason` is built from, so a
+        // whole record written by an older build decodes through it too.
+        for (payload, expected) in [
+            (
+                r#"{"reason":{"reason":"budget_exhausted"}}"#,
+                OmissionReason::BudgetExhausted,
+            ),
+            (
+                r#"{"reason":{"reason":"edge_limit"}}"#,
+                OmissionReason::EdgeLimit,
+            ),
+            (
+                r#"{"reason":{"reason":"exceeds_budget"}}"#,
+                OmissionReason::ExceedsBudget,
+            ),
+        ] {
+            let read: OmissionReason = serde_json::from_str(payload)
+                .unwrap_or_else(|error| panic!("{payload} must still decode: {error}"));
+            assert_eq!(read, expected, "{payload} decoded to the wrong reason");
+        }
+    }
+
+    #[test]
+    fn an_inclusion_reason_keeps_its_tag_because_its_variants_carry_payloads() {
+        // The one enum in this file that must *not* be flattened. `Callee { of, distance }` has no
+        // meaning without its fields, so the tag is not a second copy of the word "reason" — it is
+        // what says there are fields. Flattening this one because its neighbours were flattened
+        // would throw the payload away.
+        let reason = InclusionReason::Callee {
+            of: id("a"),
+            distance: 1,
+        };
+        let json = serde_json::to_string(&reason).expect("serialise");
+        assert!(
+            json.starts_with(r#"{"reason":"callee","#),
+            "an inclusion reason is tagged and carries its fields: {json}"
+        );
+        let back: InclusionReason = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, reason);
+    }
+
+    #[test]
+    fn an_omission_reason_spelling_this_build_does_not_have_is_refused() {
+        // The same refusal as on the model side: a spelling from a newer build is not read as the
+        // nearest known one, because that would be a claim about why something was dropped.
+        let outcome: Result<OmissionReason, _> = serde_json::from_str(r#""ran_out""#);
+        assert!(outcome.is_err(), "an unknown omission reason must not decode");
+        let wrapped: Result<OmissionReason, _> = serde_json::from_str(r#"{"reason":"ran_out"}"#);
+        assert!(
+            wrapped.is_err(),
+            "and it must not decode in the wrapped shape either"
+        );
     }
 
     #[test]
