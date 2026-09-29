@@ -66,6 +66,27 @@ impl Install {
         &self.root
     }
 
+    /// The resolved database file. The index lives in a directory named for the repository
+    /// identity, so a test that guessed the filename would be testing nothing.
+    fn database(&self) -> PathBuf {
+        let repo = RepoId::discover(self.path()).expect("derive a repository id");
+        self.index.join(repo.as_str()).join("index.db")
+    }
+
+    /// Fold the write-ahead log into the database, as any real caller does before it looks.
+    ///
+    /// Without this a small fixture leaves a log larger than the database, and — more importantly
+    /// — everything written is *in the log*. A corruption applied to the database file is then
+    /// invisible, because SQLite reads the log. Three of these tests were silently proving
+    /// nothing for exactly that reason, which is the failure mode this project keeps running
+    /// into: a test that cannot fail is worse than no test.
+    fn settle(&self) {
+        let repo = RepoId::discover(self.path()).expect("derive a repository id");
+        if let Ok(store) = Store::open(&self.database(), &repo) {
+            let _ = store.checkpoint();
+        }
+    }
+
     /// A diagnosis with the index directory this install owns.
     ///
     /// The override is what makes the index location deterministic; without it `doctor` would
@@ -73,13 +94,14 @@ impl Install {
     /// developer's actual one.
     fn diagnose(&self) -> Diagnosis {
         paths::set_root_override(Some(self.index.clone()));
+        self.settle();
         diagnose(self.path())
     }
 
     /// A store opened against this install's index, for breaking it on purpose.
     fn store(&self) -> Store {
         let repo = RepoId::discover(self.path()).expect("derive a repository id");
-        Store::open(&self.index.join("index.db"), &repo).expect("open the store")
+        Store::open(&self.database(), &repo).expect("open the store")
     }
 }
 
@@ -134,7 +156,7 @@ fn an_index_that_cannot_be_opened_is_a_failure_that_names_what_to_do() {
     // unopenable: a file where the database should be that is not a database.
     let install = Install::empty("unopenable");
     let repo = RepoId::discover(install.path()).expect("derive a repository id");
-    let database = install.index.join(repo.as_str()).join("index.db");
+    let database = install.database();
     fs::create_dir_all(database.parent().expect("the index has a parent")).expect("make the dir");
     fs::write(&database, b"this is not a sqlite database, it is a sentence").expect("write it");
 
@@ -252,7 +274,7 @@ fn a_damaged_index_fails_the_integrity_check_and_offers_a_rebuild() {
     .expect("index the repository");
     drop(install.store());
 
-    let database = install.index.join("index.db");
+    let database = install.database();
     let bytes = fs::read(&database).expect("read the database");
     assert!(bytes.len() > 512, "there is a database to damage");
     // Truncated to a length that is not a whole number of pages. This is the corruption SQLite's
@@ -296,7 +318,7 @@ fn a_store_from_a_different_shape_is_refused_rather_than_guessed_at() {
     drop(store);
 
     // Rewrite the recorded version to a value this build does not speak.
-    let database = install.index.join("index.db");
+    let database = install.database();
     let connection = rusqlite::Connection::open(&database).expect("open the database");
     connection
         .execute(
@@ -326,7 +348,7 @@ fn an_index_holding_rows_with_no_generation_is_reported_as_impossible() {
     // cheapest possible evidence of it deserves a check of its own.
     let install = Install::empty("no-generation");
     let store = install.store();
-    let connection = rusqlite::Connection::open(install.index.join("index.db")).expect("open");
+    let connection = rusqlite::Connection::open(install.database()).expect("open");
     // Insert a row behind the store's back, with foreign keys and checks off, then leave the
     // generation where it is.
     connection
@@ -380,7 +402,7 @@ fn a_dangling_edge_is_caught_even_with_the_guards_disabled() {
     drop(store);
 
     // Now break it behind the store's back: the target row goes, the edge stays.
-    let connection = rusqlite::Connection::open(install.index.join("index.db")).expect("open");
+    let connection = rusqlite::Connection::open(install.database()).expect("open");
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF; PRAGMA ignore_check_constraints = ON;",
@@ -521,7 +543,7 @@ fn a_weaker_durability_is_reported_as_a_warning() {
     let install = Install::empty("weak-durability");
     let repo = RepoId::discover(install.path()).expect("derive a repository id");
     let mut store = Store::open_with(
-        &install.index.join("index.db"),
+        &install.database(),
         &repo,
         Durability::Normal,
     )
