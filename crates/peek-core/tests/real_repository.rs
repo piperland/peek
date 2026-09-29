@@ -26,7 +26,6 @@ use std::time::Instant;
 use peek_core::discover::DiscoveryOptions;
 use peek_core::indexer::{self, open_store};
 use peek_core::model::{EntityKind, Language, RelationKind, RepoPath, ResolutionState};
-use peek_core::store::Store;
 
 /// The queries whose plans matter, with the shape each one is expected to take.
 ///
@@ -67,8 +66,7 @@ const PLANS: &[(&str, &str)] = &[
 #[ignore = "needs PEEK_PROBE_REPO to point at a real repository"]
 fn report_on_a_real_repository() {
     let root = PathBuf::from(
-        std::env::var("PEEK_PROBE_REPO")
-            .expect("set PEEK_PROBE_REPO to the repository to index"),
+        std::env::var("PEEK_PROBE_REPO").expect("set PEEK_PROBE_REPO to the repository to index"),
     );
     assert!(root.is_dir(), "{} is not a directory", root.display());
 
@@ -151,9 +149,18 @@ fn report_graph(store: &peek_core::store::Store, build_time: std::time::Duration
     println!("generation:          {}", stats.generation);
     println!("database bytes:      {}", stats.file_size_bytes);
     println!("wal bytes:           {}", stats.wal_size_bytes);
-    println!("bytes per relation:  {:.0}", stats.file_size_bytes as f64 / relations as f64);
-    println!("bytes per entity:    {:.0}", stats.file_size_bytes as f64 / entities as f64);
-    println!("relations per entity: {:.2}", relations as f64 / entities as f64);
+    println!(
+        "bytes per relation:  {:.0}",
+        stats.file_size_bytes as f64 / relations as f64
+    );
+    println!(
+        "bytes per entity:    {:.0}",
+        stats.file_size_bytes as f64 / entities as f64
+    );
+    println!(
+        "relations per entity: {:.2}",
+        relations as f64 / entities as f64
+    );
     if build_time.as_secs_f64() > 0.0 {
         println!(
             "relations per second: {:.0}",
@@ -226,7 +233,11 @@ fn report_a_real_symbol(store: &peek_core::store::Store, root: &std::path::Path)
         "\n  fn {} at {}:{}",
         function.qualified_name(),
         function.path().as_str(),
-        function.span.start_line
+        // A `File` entity has no span of its own, so this is optional rather than assumed.
+        function
+            .span
+            .map(|span| span.start_line.to_string())
+            .unwrap_or_else(|| "unknown".to_owned())
     );
 
     let edges = store
@@ -273,7 +284,9 @@ fn report_a_real_symbol(store: &peek_core::store::Store, root: &std::path::Path)
         }
         let ambiguous = store
             .relations_in_state(
-                &ResolutionState::Ambiguous { candidates: Vec::new() },
+                &ResolutionState::Ambiguous {
+                    candidates: Vec::new(),
+                },
                 5,
             )
             .expect("ambiguous relations");
@@ -321,8 +334,14 @@ fn report_incremental(store: &mut peek_core::store::Store, root: &std::path::Pat
 
     println!("touched:    {}", path.display());
     println!("elapsed:    {elapsed:?}");
-    println!("entities:   {} -> {}", before.entity_count, after.entity_count);
-    println!("relations:  {} -> {}", before.relation_count, after.relation_count);
+    println!(
+        "entities:   {} -> {}",
+        before.entity_count, after.entity_count
+    );
+    println!(
+        "relations:  {} -> {}",
+        before.relation_count, after.relation_count
+    );
     println!("generation: {} -> {}", before.generation, after.generation);
     println!("report:     {}", outcome.report().summary());
     println!(
@@ -341,7 +360,11 @@ fn report_deletion(store: &mut peek_core::store::Store, root: &std::path::Path) 
         println!("no Rust file found");
         return;
     };
-    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
     std::fs::remove_file(&path).expect("delete the file");
 
     let outcome = indexer::refresh(
