@@ -1091,7 +1091,15 @@ impl RelationSet {
 /// Returns `None` when the decision is identical to what is already stored, which is what makes
 /// a second pass over an unchanged index a genuine no-op: no row is rewritten, the batch stays
 /// empty, no commit happens, and the generation does not move.
-fn apply_decision(relation: &Relation, decision: Decision) -> Option<Relation> {
+/// Turn a decision into the relation that should replace `relation`, or `None` if nothing changed.
+///
+/// `force` exists for the one case where "nothing changed" is the wrong conclusion. A displaced
+/// edge is re-decided from a snapshot taken *before* the refresh rewrote its row, so comparing the
+/// new decision against that snapshot compares against a state the store no longer holds. The
+/// decision can be correct and the row still be wrong, and skipping the write on "no change" then
+/// leaves a permanently unresolved edge. For those, the write is unconditional: an extra upsert is
+/// cheap, a silently broken edge is not.
+fn apply_decision(relation: &Relation, decision: Decision, force: bool) -> Option<Relation> {
     let (target, resolution) = match decision {
         Decision::Resolved { target, by } => (Some(target), ResolutionState::Resolved { by }),
         Decision::Inferred { target, by, basis } => {
@@ -1100,7 +1108,7 @@ fn apply_decision(relation: &Relation, decision: Decision) -> Option<Relation> {
         Decision::Ambiguous { candidates } => (None, ResolutionState::Ambiguous { candidates }),
         Decision::Unresolved { reason } => (None, ResolutionState::Unresolved { reason }),
     };
-    if target.as_ref() == relation.target.as_ref() && resolution == relation.resolution {
+    if !force && target.as_ref() == relation.target.as_ref() && resolution == relation.resolution {
         return None;
     }
     Some(Relation {
@@ -1135,7 +1143,9 @@ pub fn resolve_all(
             in_scope.insert(relation);
         }
     }
-    decide_and_commit(store, in_scope.into_vec(), options)
+    // A full build has just re-extracted every file, so no relation here was displaced by a
+    // partial write — every row in the store matches its snapshot, and there is nothing to force.
+    decide_and_commit(store, in_scope.into_vec(), options, &BTreeSet::new())
 }
 
 /// Decide the relations belonging to `paths`, the relations that point into them, and the
@@ -1189,7 +1199,7 @@ pub fn resolve_paths(
         }
     }
 
-    let mut report = decide_and_commit(store, in_scope.into_vec(), options)?;
+    let mut report = decide_and_commit(store, in_scope.into_vec(), options, &displaced_keys)?;
     // The displaced edges are counted separately because they are a different population: they
     // are the ones a refresh broke, and a caller repairing a rename needs to know how many it
     // repaired without inferring it from `examined`.
@@ -1214,6 +1224,7 @@ fn decide_and_commit(
     store: &mut Store,
     relations: Vec<Relation>,
     options: ResolutionOptions,
+    force_write: &BTreeSet<RelationKey>,
 ) -> Result<ResolutionReport, StoreError> {
     let mut report = ResolutionReport {
         examined: relations.len() as u64,
@@ -1228,9 +1239,17 @@ fn decide_and_commit(
             if !relation.resolution.is_pending() {
                 report.reconsidered += 1;
             }
+            // A displaced edge is one this pass's own caller has *just rewritten* in the store, by
+            // removing and re-inserting the file its target lived in. Its snapshot in `relations`
+            // is therefore stale by construction, and comparing a fresh decision against a stale
+            // baseline is how a repair silently does nothing: the decision comes out identical to
+            // the snapshot, `apply_decision` reports "no change", and the row stays demoted. So for
+            // a displaced edge the write is unconditional. Writing an unchanged row costs one
+            // upsert; not writing it costs a permanently unresolved edge.
+            let forced = force_write.contains(&relation.natural_key());
             let decision = resolver.decide(relation)?;
             report.record(&decision);
-            if let Some(decided) = apply_decision(relation, decision) {
+            if let Some(decided) = apply_decision(relation, decision, forced) {
                 update = update.with_relation(decided);
             }
         }
