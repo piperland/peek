@@ -337,6 +337,14 @@ pub struct CallToolResult {
     pub structured_content: Option<Value>,
     /// True only when the engine could not answer for a reason the caller cannot fix. See
     /// [`crate::outcome::Outcome::is_error`].
+    ///
+    /// Spelled `isError` on the wire because that is the member the specification names, and a
+    /// client that does not find it reads **every** call as successful — including the one
+    /// outcome this field exists to mark. A field under a name nobody looks for is not a
+    /// conservative default; it is the absence of the thing it promised. The other two
+    /// camel-cased members of this payload are renamed the same way, and a test in
+    /// `tests/protocol.rs` reads all three off the wire rather than off the struct.
+    #[serde(rename = "isError")]
     pub is_error: bool,
 }
 

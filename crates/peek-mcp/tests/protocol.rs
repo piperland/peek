@@ -505,6 +505,50 @@ fn tools_call_without_a_name_is_a_protocol_error_naming_the_tools() {
 }
 
 #[test]
+fn a_tool_result_names_every_member_the_specification_names() {
+    // The other tests in this file reach the wire through a whole session, which is the right place
+    // to check behaviour and the wrong place to check spelling: a member spelled `is_error` still
+    // arrives, still parses, and still leaves a client reading a call that failed as a call that
+    // worked. This asserts the names themselves, off the serialised value, so the rename cannot be
+    // undone by somebody renaming the field back.
+    //
+    // Three members of this payload are camel-cased on the wire and snake-cased in the struct. They
+    // were not all renamed together, which is why the assertion lists all three rather than the one
+    // that happened to be caught.
+    let result = peek_mcp::protocol::CallToolResult::answered(
+        "an answer",
+        json!({ "outcome": "ok" }),
+        true,
+    );
+    let wire = serde_json::to_value(&result).expect("a result is serialisable");
+
+    assert_eq!(
+        wire["isError"],
+        json!(true),
+        "the field that marks a failed call is spelled the way the specification spells it, because \
+         a client that cannot find it treats the failure as a success: {wire}"
+    );
+    assert!(
+        wire.get("is_error").is_none(),
+        "and there is no second spelling of it to read instead: {wire}"
+    );
+    assert_eq!(
+        wire["structuredContent"],
+        json!({ "outcome": "ok" }),
+        "the data half travels under the name the specification gives it: {wire}"
+    );
+    assert_eq!(
+        wire["content"][0]["type"],
+        json!("text"),
+        "and so does the discriminator on a content block: {wire}"
+    );
+    assert!(
+        wire["content"][0].get("kind").is_none(),
+        "the internal name is not the wire name for that one either: {wire}"
+    );
+}
+
+#[test]
 fn every_tool_dispatch_rejects_a_name_that_is_not_a_tool() {
     // Dispatch and catalogue are two `match`es over the same set of names. A name in one and not
     // the other is the shape of a bug that only shows up to a client.
