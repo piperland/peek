@@ -152,7 +152,7 @@ pub fn run(
         let refusal = Refusal::new(
             kind::BUDGET_INSUFFICIENT,
             match floor {
-                Some(floor) => format!(
+                Some(_) => format!(
                     "the target itself does not fit a budget of {minimum_min} token(s) alongside \
                      the {report}-token report",
                     minimum_min = answer.pack.budget.requested_tokens,

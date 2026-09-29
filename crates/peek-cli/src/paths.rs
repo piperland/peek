@@ -276,7 +276,7 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
 /// `peek index` has to notice a file that was **deleted** since the last run, and a deleted file
 /// is not in the discovery walk, so nothing else in the engine can see it. The index's own path
 /// list is the only record that it was there.
-
+///
 /// An earlier version of this function prepared its own `SELECT DISTINCT path FROM entity` through
 /// `Store::conn`, with a comment saying the right fix was a store method. That is what it is now:
 /// `Store::indexed_paths` exists, and this is a thin translation of its error into the CLI's

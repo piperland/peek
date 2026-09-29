@@ -653,7 +653,7 @@ where
     // sources and no precedence rule, so there is nothing to get wrong.
     let (root, rest): (PathBuf, &[OsString]) = match spec.root {
         RootSource::Positional => match given.first() {
-            Some((first, rest)) => (PathBuf::from(first), rest),
+            Some(_) => (PathBuf::from(&given[0]), &given[1..]),
             None => (PathBuf::from("."), given),
         },
         RootSource::Flag => (
@@ -841,6 +841,13 @@ fn scan(tokens: &[OsString]) -> Result<Scan, UsageError> {
                 Some(next)
             }
             (None, None) => None,
+            // A value with no placeholder in the table is a table bug, not a user error, and it
+            // is caught here rather than being silently dropped -- a flag that takes a value
+            // but does not say so would be ignored, which is the failure the table exists to
+            // prevent.
+            (None, Some(_)) => {
+                return Err(UsageError::UnexpectedValue { flag: spec.long });
+            }
         };
 
         if flags.iter().any(|seen| seen.index == found) {
