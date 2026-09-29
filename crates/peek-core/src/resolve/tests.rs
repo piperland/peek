@@ -273,7 +273,7 @@ fn the_module_table_switch_really_turns_the_table_off() {
     tree.write("crates/gamma/src/lib.rs", "pub mod gateway;\n");
     tree.write("crates/gamma/src/gateway.rs", "pub struct Gateway;\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
 
     let candidates = |options: ResolutionOptions| -> Vec<RepoPath> {
         let mut scratch = Store::open(&tree.db, store.repo()).expect("a second handle");
