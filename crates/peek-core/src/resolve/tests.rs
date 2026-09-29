@@ -966,6 +966,185 @@ impl RefuseWrites {
 }
 
 #[test]
+fn a_multi_segment_path_resolves_through_the_module_it_names() {
+    // R3. `crate::payments::Service::charge` names a module the file can locate, and the
+    // extractor recorded that scope precisely so a single-segment path would not have to be
+    // guessed. The engine Peek replaces discarded the receiver and the path alike and was left
+    // with the bare name `charge` (audit B2, R11).
+    let tree = TempTree::new("qualified-scope");
+    tree.write(
+        "src/payments.rs",
+        "pub struct Service;\nimpl Service { pub fn charge(&self) {} }\n",
+    );
+    tree.write("src/app.rs", "fn go() { crate::payments::Service::charge(); }\n");
+
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let call = the_call(&store, "charge");
+    assert_eq!(
+        call.target,
+        Some(id(
+            "src/payments.rs",
+            EntityKind::Method,
+            "Service.charge"
+        )),
+        "the call must land in the module its path named: {}",
+        state_of(&call)
+    );
+    match &call.resolution {
+        ResolutionState::Resolved { by } => assert_eq!(
+            by.class(),
+            "qualified_name_in_scope",
+            "the evidence must name the scope that located it, or explain cannot say why: {}",
+            state_of(&call)
+        ),
+        other => panic!("expected a resolved call, got {other:?}: {}", state_of(&call)),
+    }
+}
+
+#[test]
+fn a_capped_candidate_list_is_truncated_and_the_omitted_candidates_are_counted_not_hidden() {
+    // The cap exists so a pathological name cannot produce an unbounded row. Hiding the fact that
+    // it fired would be worse than the cap: a caller reading `Ambiguous { 32 candidates }` would
+    // have no way to know there were 300.
+    let tree = TempTree::new("candidate-cap");
+    for index in 0..6 {
+        tree.write(&format!("src/m{index}.rs"), "pub fn charge() {}\n");
+    }
+    tree.write("src/driver.rs", "fn go() { charge(); }\n");
+
+    let mut store = tree.index_without_resolving();
+    let report = resolve_all(
+        &mut store,
+        ResolutionOptions::default().with_max_candidates(2),
+    )
+    .expect("resolve");
+
+    let call = the_call(&store, "charge");
+    let candidates = match &call.resolution {
+        ResolutionState::Ambiguous { candidates } => candidates.clone(),
+        other => panic!("six equally supported candidates must be ambiguous: {other:?}"),
+    };
+    assert_eq!(
+        candidates.len(),
+        2,
+        "the cap must bound the stored list: {candidates:?}"
+    );
+    assert!(
+        report.truncated > 0,
+        "and the pass must report that it dropped candidates rather than presenting two as \
+         though they were all: {}",
+        report.summary()
+    );
+    assert!(
+        report.summary().contains("truncated"),
+        "and the summary must say so: {}",
+        report.summary()
+    );
+}
+
+#[test]
+fn a_pass_with_nothing_in_scope_examines_nothing_and_commits_nothing() {
+    // A refresh that changed nothing must cost nothing. The test is deliberately blunt: an empty
+    // scope, no displaced edges, and re-deciding turned off. Every claim in it is one the
+    // implementation could get wrong by doing work anyway, which is exactly the behaviour
+    // contract G8 measures.
+    let tree = TempTree::new("empty-scope");
+    tree.write("src/one.rs", "fn a() {}\n");
+
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
+    let before = store.generation();
+
+    let report = resolve_paths(
+        &mut store,
+        &[],
+        &[],
+        ResolutionOptions::default().with_reconsider_decided(false),
+    )
+    .expect("an empty scope is not an error");
+
+    assert_eq!(report.examined, 0, "nothing was in scope: {}", report.summary());
+    assert_eq!(report.relations_written, 0, "so nothing was written: {}", report.summary());
+    assert!(!report.committed, "and nothing was committed: {}", report.summary());
+    assert_eq!(
+        store.generation(),
+        before,
+        "an empty pass must not churn the store or move the generation"
+    );
+    assert!(report.summary().contains("no commit"), "{}", report.summary());
+}
+
+#[test]
+fn an_ambiguity_widened_by_a_new_file_is_not_re_decided_until_a_full_pass_runs() {
+    // **A known limitation, pinned deliberately.**
+    //
+    // A caller was ambiguous between two `charge`s; a third file appears with a third `charge`.
+    // The stale answer is "ambiguous between two" when the truth is three.
+    //
+    // It cannot be fixed inside a scoped pass with the query surface that exists. An ambiguous
+    // relation carries no `target_path`, so [`Store::incoming`] cannot match it; and there is no
+    // index from a *target name* back to the relations that name it, so the new file's `charge`
+    // cannot be turned into "the edges that mention `charge`". Finding those edges would need
+    // either a new index (a schema change) or a full re-resolve (an O(repository) pass on every
+    // keystroke), and both are worse than a documented gap.
+    //
+    // What *does* fix it is asserted below, so the behaviour is a scheduling fact rather than a
+    // permanent one: re-extracting the caller's file re-emits its edge as `Pending`, and the pass
+    // decides it again with the new file in the index.
+    let tree = TempTree::new("widened-ambiguity");
+    tree.write("src/one.rs", "pub fn charge() {}\n");
+    tree.write("src/two.rs", "pub fn charge() {}\n");
+    tree.write("src/driver.rs", "fn go() { charge(); }\n");
+
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
+    let first = the_call(&store, "charge");
+    let before = match &first.resolution {
+        ResolutionState::Ambiguous { candidates } => candidates.clone(),
+        other => panic!("two same-named functions must be ambiguous, got {other:?}"),
+    };
+    assert_eq!(before.len(), 2, "{before:?}");
+
+    tree.write("src/three.rs", "pub fn charge() {}\n");
+    let _ = refresh(&tree, &mut store, &["src/three.rs"]);
+
+    let after = the_call(&store, "charge");
+    let stale = match &after.resolution {
+        ResolutionState::Ambiguous { candidates } => candidates.clone(),
+        other => panic!("still ambiguous, got {other:?}: {}", state_of(&after)),
+    };
+    assert_eq!(
+        stale,
+        before,
+        "a scoped pass cannot widen an ambiguity it cannot locate, and must not pretend to"
+    );
+
+    // Re-extracting the *caller's* file is what corrects it: the extractor re-emits the edge as
+    // `Pending` with the same target name, and the pass decides it with all three definitions in
+    // the index. The scope is still one file, so this is cheap — the caller had to be touched for
+    // the engine to know its answer had gone stale.
+    tree.write("src/driver.rs", "fn go() { charge(); }\n");
+    let _ = refresh(&tree, &mut store, &["src/driver.rs"]);
+
+    let repaired = the_call(&store, "charge");
+    let widened = match &repaired.resolution {
+        ResolutionState::Ambiguous { candidates } => candidates.clone(),
+        other => panic!("still ambiguous, got {other:?}: {}", state_of(&repaired)),
+    };
+    assert_eq!(
+        widened,
+        vec![
+            id("src/one.rs", EntityKind::Function, "charge"),
+            id("src/three.rs", EntityKind::Function, "charge"),
+            id("src/two.rs", EntityKind::Function, "charge"),
+        ],
+        "re-deciding the caller's own edge must find the third definition, in a stable order"
+    );
+}
+
+#[test]
 fn a_truncated_candidate_lookup_is_reported_rather_than_silently_accepted() {
     // A limit that is not visible is a limit that quietly changes the answer. A file with more
     // entities than the pass will read must be recorded as truncated, so a caller can tell an

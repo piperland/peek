@@ -158,6 +158,20 @@
 //! `resolve_target_id` became the first line of all ten of its queries. When a limit truncates a
 //! candidate set the pass records it in [`ResolutionReport::truncated`], because a limit that is
 //! not visible is a limit that quietly changes the answer.
+//!
+//! # What a scoped pass cannot see
+//!
+//! [`resolve_paths`] re-reads the outgoing edges of the files it was given and the incoming
+//! edges of the entities they declare. That covers the two cases a refresh creates: a new or
+//! changed edge out of a changed file, and an edge that used to point into a changed file.
+//!
+//! It does **not** cover a third: an `Ambiguous` or `Unresolved` edge elsewhere in the index
+//! whose *candidate set* just changed, because a file appeared or an unrelated one was deleted.
+//! Such an edge has no `target_path`, so `Store::incoming` cannot match it, and there is no
+//! index from a target *name* back to the relations that name it. Closing that would need a new
+//! index — a schema change — or a full re-resolve on every edit. Both are worse than the gap, so
+//! the gap is documented here and pinned by a test rather than papered over. A full rebuild does
+//! correct it: the extractor re-emits the edge as `Pending` and the pass decides it again.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -911,7 +925,11 @@ fn reason_for_nothing_found(target_name: &str) -> UnresolvedReason {
 /// Three details of this are compromises and are stated rather than hidden:
 ///
 /// * **There is no module table.** Peek has `EntityKind::Module` and no way to populate it, so a
-///   module path is turned into file paths and each is looked up through the primary key.
+///   module path is turned into file paths and each is looked up through the primary key. This
+///   function is the reason that gap matters, and it is also the argument for closing it: a
+///   `Module` entity per module would replace a handful of seeks with one, and it belongs in the
+///   extractor rather than here — a resolver that invented module rows to speed up its own
+///   lookups would be a second source of truth (contract H5).
 /// * **The anchor list is the referring file's directory and its ancestors.** `crate::` and a
 ///   bare path use the same list, because the crate root is not recorded anywhere; `super::`
 ///   skips one anchor per occurrence. The list stops at [`MAX_ANCHOR_DEPTH`] so a deep
