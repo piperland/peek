@@ -18,7 +18,7 @@
 //!   reply to. A client that sent something malformed and got silence has no way to know the
 //!   server is alive.
 //! * **Every reply is flushed before the loop continues.** See [`crate::writer`].
-//! * **A cancelled request does not run.** See [`Session::cancel`].
+//! * **A cancelled request does not run, and the number is then free.** See [`Session::cancel`].
 //! * **Shutdown stops the watch.** A client that disconnects without calling `watch_stop` must not
 //!   leave a thread holding the SQLite writer.
 //!
@@ -138,8 +138,13 @@ fn dispatch<W: Write>(
             output.send_error(id, RpcError::new(code, message).with_data(data))
         }
         Incoming::Request { id, method, params } => {
-            if session.is_cancelled(&id) {
-                session.log(&format!("request {id} was cancelled and is not being run"));
+            // Taken, not read: a cancellation is about one request, so the number it used is free
+            // again the moment the refusal goes out. See [`Session::take_cancelled`].
+            if session.take_cancelled(&id) {
+                session.log(&format!(
+                    "request {id} was cancelled and is not being run; the number is now free for \
+                     the client to reuse"
+                ));
                 return output.send_error(
                     Some(id),
                     RpcError::new(CODE_INVALID_REQUEST, "this request was cancelled"),

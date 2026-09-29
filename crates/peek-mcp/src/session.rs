@@ -383,10 +383,17 @@ impl Session {
         self.log(&format!("request {} cancelled before it ran", id_key(id)));
     }
 
-    /// Whether a request was cancelled before it was dispatched.
-    #[must_use]
-    pub fn is_cancelled(&self, id: &serde_json::Value) -> bool {
-        self.cancelled.contains(&id_key(id))
+    /// Whether a request was cancelled before it was dispatched, forgetting it in the process.
+    ///
+    /// A cancellation names one request, not one number. JSON-RPC asks only that an id be unique
+    /// among the requests a client has *outstanding*, so a client that cancels, receives the
+    /// refusal, and then issues a new request that happens to pick the same number is conforming —
+    /// and most clients recycle small integers. Remembering the number for the life of the process
+    /// would refuse that second request with a message about a request the client never made, and
+    /// would do so the first time anybody cancelled anything. So the id is spent here, by the one
+    /// call that acts on it.
+    pub fn take_cancelled(&mut self, id: &serde_json::Value) -> bool {
+        self.cancelled.remove(&id_key(id))
     }
 
     /// The text `initialize` sends back: how to use this server, in the terms a model needs.
