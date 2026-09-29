@@ -524,7 +524,7 @@ fn a_name_nothing_in_the_repository_carries_is_unresolved_with_a_reason_and_stil
     let tree = TempTree::new("unknown-name");
     tree.write("src/lib.rs", "fn boot() { nowhere_to_be_found(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "nowhere_to_be_found");
@@ -586,7 +586,7 @@ fn a_qualified_name_the_repository_does_not_contain_is_reported_as_external() {
         "struct MyType;\nimpl std::fmt::Debug for MyType {}\n",
     );
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let implements: Vec<_> = relations_of(&store, RelationKind::Implements)
@@ -846,7 +846,7 @@ fn resolving_an_unchanged_index_again_is_a_no_op_that_moves_no_generation() {
     let tree = TempTree::new("idempotent");
     tree.write("src/lib.rs", "fn helper() {}\nfn main() { helper(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
     assert!(
         first.committed,
@@ -890,7 +890,7 @@ fn a_definition_that_moves_to_another_file_its_callers_are_re_decided() {
     tree.write("src/one.rs", "pub fn charge() {}\n");
     tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
     assert_eq!(
         first.inferred,
@@ -948,7 +948,7 @@ fn a_scoped_pass_decides_the_paths_it_was_given_and_nothing_else() {
     );
     tree.write("src/untouched.rs", "fn go() { not_yet(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let _ = refresh(&tree, &mut store, &["src/settled.rs"]);
 
     let settled = the_call(&store, "already_done");
@@ -1025,7 +1025,7 @@ fn a_failed_resolution_leaves_the_previous_generation_readable() {
     let tree = TempTree::new("failed-pass");
     tree.write("src/lib.rs", "fn helper() {}\nfn main() { helper(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let before = store.generation();
     assert!(before > 0, "the extraction pass committed something");
 
@@ -1177,7 +1177,7 @@ fn a_capped_candidate_list_is_truncated_and_the_omitted_candidates_are_counted_n
     }
     tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let report = resolve_all(
         &mut store,
         ResolutionOptions::default().with_max_candidates(2),
@@ -1216,7 +1216,7 @@ fn a_pass_with_nothing_in_scope_examines_nothing_and_commits_nothing() {
     let tree = TempTree::new("empty-scope");
     tree.write("src/one.rs", "fn helper() {}\nfn go() { helper(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     // The edge is decided first, so a pass that reached outside its scope would have a decided
     // edge to re-examine and this test would fail rather than pass for the wrong reason.
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
@@ -1343,7 +1343,7 @@ fn a_truncated_candidate_lookup_is_reported_rather_than_silently_accepted() {
     }
     tree.write("src/lib.rs", &source);
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let report = resolve_all(
         &mut store,
         ResolutionOptions::default()
@@ -1381,7 +1381,7 @@ fn every_relation_the_pass_examined_is_accounted_for_and_none_is_left_pending() 
         "trait Base {}\ntrait Extended: Base {}\n",
     );
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     assert_eq!(
