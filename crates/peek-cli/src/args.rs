@@ -653,7 +653,7 @@ where
     // sources and no precedence rule, so there is nothing to get wrong.
     let (root, rest): (PathBuf, &[OsString]) = match spec.root {
         RootSource::Positional => match given.first() {
-            Some(given) => (PathBuf::from(given), given.get(1..).unwrap_or_default()),
+            Some((first, rest)) => (PathBuf::from(first), rest),
             None => (PathBuf::from("."), given),
         },
         RootSource::Flag => (

@@ -268,9 +268,11 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
         .map_err(|error| format!("cannot resolve {}: {error}", parent.display()))?;
     Ok(canonical_parent.join(name))
 }
-/// Every repository-relative path the index holds at least one row for.
-/// # Why the store owns this
 
+/// Every repository-relative path the index holds at least one row for.
+///
+/// # Why the store owns this
+///
 /// `peek index` has to notice a file that was **deleted** since the last run, and a deleted file
 /// is not in the discovery walk, so nothing else in the engine can see it. The index's own path
 /// list is the only record that it was there.
@@ -332,10 +334,10 @@ pub fn open_store(location: &Location, command: &'static str) -> Result<Store, F
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
     use super::{Relative, relative_to, resolve_root};
     use crate::args::{self, Command};
     use crate::exit::{EXIT_USAGE, kind};
+    use std::path::Path;
 
     fn temp(label: &str) -> std::path::PathBuf {
         let unique = std::time::SystemTime::now()

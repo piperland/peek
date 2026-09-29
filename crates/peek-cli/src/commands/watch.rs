@@ -185,12 +185,12 @@ pub fn run(
             session.outside_root
         ));
     }
-    if session.ignored_sample.len() < session.ignored_by_reason.values().sum::<u64>() as usize {
+    if session.ignored_sample().len() < session.ignored_by_reason.values().sum::<u64>() as usize {
         did_not.push(format!(
             "{} of the declined paths are itemised above and the rest are counted only; a watcher \
              over a real repository declines thousands of files and naming every one would bury \
              the batch it just applied",
-            session.ignored_sample.len()
+            session.ignored_sample().len()
         ));
     }
     if session.failures.is_empty() {
