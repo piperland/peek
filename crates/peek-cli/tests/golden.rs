@@ -290,7 +290,7 @@ fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped
             );
             for omission in &answer.pack.omitted {
                 assert!(
-                    !omission.reason.describe().is_empty(),
+                    !omission.reason.as_str().is_empty(),
                     "an omission without a reason is a silent omission: {omission:?}"
                 );
             }
