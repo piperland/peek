@@ -101,7 +101,7 @@ impl std::fmt::Display for Outcome {
 /// of every response and a consumer reads one field regardless of which tool it called. No field
 /// is ever omitted: `reason` is `null` on success and `candidates` is `[]` on success, because a
 /// field that appears and disappears is a field whose absence has to be interpreted.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Verdict {
     /// What happened. Never absent.
     pub outcome: Outcome,

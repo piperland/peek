@@ -23,7 +23,7 @@
 //! reports the handle's generation, the generation currently stored, and whether they differ —
 //! rather than quietly serving a stale figure.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -65,14 +65,14 @@ pub fn index(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAns
         };
         return refresh(session, paths);
     }
-    if let Some(paths) = paths
-        && !paths.is_empty()
-    {
-        return Err(ToolError::argument(
-            "`index` in `full` mode walks the whole repository, so `paths` would be ignored",
-            "drop `paths` and call again, or set `mode` to \"refresh\" to re-index only the files \
-             you name",
-        ));
+    if let Some(paths) = paths {
+        if !paths.is_empty() {
+            return Err(ToolError::argument(
+                "`index` in `full` mode walks the whole repository, so `paths` would be ignored",
+                "drop `paths` and call again, or set `mode` to \"refresh\" to re-index only the \
+                 files you name",
+            ));
+        }
     }
 
     session.refuse_if_watching("a full build")?;
@@ -131,7 +131,7 @@ pub fn status(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAn
     args.finish(&[])?;
 
     let root = session.root().display().to_string();
-    let Some(path) = session.index_path().map(ToOwned::to_owned) else {
+    let Some(path) = session.index_path().map(Path::to_path_buf) else {
         return Err(ToolError::failed(format!(
             "no index location could be resolved for {root}"
         )));
@@ -193,7 +193,7 @@ pub fn status(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAn
 fn index_body(view: &IndexReportView, verdict: &Verdict) -> Value {
     let body = IndexBody {
         verdict: verdict.clone(),
-        report: view,
+        report: view.clone(),
     };
     serde_json::to_value(&body).unwrap_or_else(|error| {
         serde_json::json!({

@@ -26,21 +26,33 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use peek_core::query::{Query, QueryError, QueryOptions, Step, Walk, WalkRequest};
+use peek_core::query::{Direction, Query, QueryError, QueryOptions, Step, Walk, WalkRequest};
 
 use crate::outcome::{ToolError, Verdict};
 use crate::params::Args;
 use crate::session::Session;
 use crate::tools::ToolAnswer;
 
-/// Who depends on a target, one hop.
+/// Who uses a target, one hop.
 pub fn callers(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAnswer, ToolError> {
-    walk_tool(session, arguments, "callers", None)
+    walk_tool(
+        session,
+        arguments,
+        "callers",
+        Direction::Inbound,
+        None,
+    )
 }
 
 /// What a target depends on, one hop.
 pub fn callees(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAnswer, ToolError> {
-    walk_tool(session, arguments, "callees", None)
+    walk_tool(
+        session,
+        arguments,
+        "callees",
+        Direction::Outbound,
+        None,
+    )
 }
 
 /// Who depends on a target, `depth` hops.
@@ -48,10 +60,21 @@ pub fn dependents(
     session: &mut Session,
     arguments: Option<&Value>,
 ) -> Result<ToolAnswer, ToolError> {
-    walk_tool(session, arguments, "dependents", Some("depth"))
+    walk_tool(
+        session,
+        arguments,
+        "dependents",
+        Direction::Inbound,
+        Some("depth"),
+    )
 }
 
 /// The one walk, parameterised by which tool asked for it.
+///
+/// `direction` is passed as a value rather than derived from the tool's name. Deriving it would
+/// mean matching on a string, and a typo in that match produces the *opposite graph* under a
+/// confident label — the specific failure the three tool names exist to prevent, reintroduced
+/// inside the implementation of the thing that prevents it.
 ///
 /// `depth_parameter` is `Some` only for `dependents`, because it is the only one of the three whose
 /// definition involves a number of hops. `callers` and `callees` take no `depth`, and a `depth`
@@ -61,6 +84,7 @@ fn walk_tool(
     session: &mut Session,
     arguments: Option<&Value>,
     tool: &'static str,
+    direction: Direction,
     depth_parameter: Option<&'static str>,
 ) -> Result<ToolAnswer, ToolError> {
     let args = Args::new(tool, arguments, crate::tool::hints_for(tool))?;
@@ -89,10 +113,7 @@ fn walk_tool(
             .resolve(&target)
             .map_err(|error| fill_candidates(store, &error))?;
         let request = WalkRequest {
-            direction: match tool {
-                "callees" => peek_core::query::Direction::Outbound,
-                _ => peek_core::query::Direction::Inbound,
-            },
+            direction,
             depth: depth.unwrap_or(1),
             kind,
         };

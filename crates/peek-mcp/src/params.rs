@@ -36,7 +36,8 @@ use crate::outcome::ToolError;
 /// The reader for one call's `arguments` object.
 pub struct Args<'a> {
     tool: &'static str,
-    object: &'a Map<String, Value>,
+    /// The call's arguments, or `None` when the call sent none.
+    object: Option<&'a Map<String, Value>>,
     /// What to say about an argument this tool does not have, keyed by that argument's name.
     ///
     /// The table is the interesting part. A model that reached for the wrong tool has usually
@@ -60,12 +61,12 @@ impl<'a> Args<'a> {
         match arguments {
             None | Some(Value::Null) => Ok(Self {
                 tool,
-                object: &EMPTY,
+                object: None,
                 hints,
             }),
             Some(Value::Object(object)) => Ok(Self {
                 tool,
-                object,
+                object: Some(object),
                 hints,
             }),
             Some(other) => Err(ToolError::argument(
@@ -78,14 +79,27 @@ impl<'a> Args<'a> {
         }
     }
 
+    /// One argument, or `None` for one the call did not send or sent as `null`.
+    ///
+    /// An explicit `null` is treated as absent, which is what a client that always sends every key
+    /// in its template means by it.
+    fn get(&self, name: &str) -> Option<&'a Value> {
+        self.object?.get(name).filter(|value| !value.is_null())
+    }
+
+    /// Every key the call sent, whether or not it means anything to this tool.
+    fn keys(&self) -> impl Iterator<Item = &String> {
+        self.object.into_iter().flat_map(|object| object.keys())
+    }
+
     /// A required string.
     pub fn required_string(
         &self,
         name: &'static str,
         what: &str,
     ) -> Result<String, ToolError> {
-        match self.object.get(name) {
-            None | Some(Value::Null) => Err(self.missing(name, what)),
+        match self.get(name) {
+            None => Err(self.missing(name, what)),
             Some(Value::String(text)) => Ok(text.clone()),
             Some(other) => Err(self.wrong_type(name, "a string", other)),
         }
@@ -94,8 +108,8 @@ impl<'a> Args<'a> {
     /// An optional string. An explicit `null` is the same as absent, which is what a client that
     /// always sends every key means by it.
     pub fn optional_string(&self, name: &'static str) -> Result<Option<String>, ToolError> {
-        match self.object.get(name) {
-            None | Some(Value::Null) => Ok(None),
+        match self.get(name) {
+            None => Ok(None),
             Some(Value::String(text)) => Ok(Some(text.clone())),
             Some(other) => Err(self.wrong_type(name, "a string", other)),
         }
@@ -107,16 +121,16 @@ impl<'a> Args<'a> {
         name: &'static str,
         what: &str,
     ) -> Result<u64, ToolError> {
-        match self.object.get(name) {
-            None | Some(Value::Null) => Err(self.missing(name, what)),
+        match self.get(name) {
+            None => Err(self.missing(name, what)),
             Some(value) => self.as_u64(name, value),
         }
     }
 
     /// An optional non-negative integer.
     pub fn optional_u64(&self, name: &'static str) -> Result<Option<u64>, ToolError> {
-        match self.object.get(name) {
-            None | Some(Value::Null) => Ok(None),
+        match self.get(name) {
+            None => Ok(None),
             Some(value) => self.as_u64(name, value).map(Some),
         }
     }
@@ -139,8 +153,8 @@ impl<'a> Args<'a> {
 
     /// An optional boolean.
     pub fn optional_bool(&self, name: &'static str) -> Result<Option<bool>, ToolError> {
-        match self.object.get(name) {
-            None | Some(Value::Null) => Ok(None),
+        match self.get(name) {
+            None => Ok(None),
             Some(Value::Bool(flag)) => Ok(Some(*flag)),
             Some(other) => Err(self.wrong_type(name, "true or false", other)),
         }
@@ -151,8 +165,8 @@ impl<'a> Args<'a> {
         &self,
         name: &'static str,
     ) -> Result<Option<Vec<String>>, ToolError> {
-        match self.object.get(name) {
-            None | Some(Value::Null) => Ok(None),
+        match self.get(name) {
+            None => Ok(None),
             Some(Value::Array(items)) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
@@ -183,14 +197,14 @@ impl<'a> Args<'a> {
     /// meaningless one is refused rather than half-honoured. Half-honouring is the defect: the
     /// caller believes the meaningless argument did something.
     pub fn finish(&self, accepted: &[&'static str]) -> Result<(), ToolError> {
-        for name in self.object.keys() {
+        for name in self.keys() {
             if accepted.contains(&name.as_str()) {
                 continue;
             }
             let advice = self
                 .hints
                 .iter()
-                .find(|(hinted, _)| *hinted == name)
+                .find(|(hinted, _)| *hinted == name.as_str())
                 .map_or_else(
                     || {
                         format!(
@@ -267,9 +281,6 @@ impl<'a> Args<'a> {
         )
     }
 }
-
-/// The empty object, for a call that sent no `arguments` at all.
-static EMPTY: Map<String, Value> = Map::new();
 
 /// What a caller sent, in words.
 ///

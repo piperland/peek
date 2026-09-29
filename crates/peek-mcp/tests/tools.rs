@@ -25,6 +25,13 @@
 //! parses is not tested. Where a test needs a number it derives it from the engine — a budget from
 //! `minimum_budget`, a threshold from a first answer — rather than writing a literal nobody measured.
 
+// `expect` and `panic` are denied workspace-wide, on the grounds that in production code they hide
+// a real failure behind a panic. `peek-core`'s unit tests are exempted through that crate's
+// `lib.rs`; an integration test is a separate crate and does not inherit that, so it is exempted
+// here instead. The justification is the same one: a test that fails inside an `expect` has
+// already failed, and a message naming what went wrong is worth more than a panic location.
+#![allow(clippy::expect_used, clippy::panic)]
+
 use std::path::{Path, PathBuf};
 
 use peek_core::model::entity::{EntityId, EntityKind};
@@ -60,10 +67,10 @@ impl Drop for Fixture {
 /// The index lives outside the repository, under the OS cache root, named for the repository's
 /// identity. Removing it here is the only reason these tests leave nothing in a developer's cache.
 fn remove_index(root: &Path) {
-    if let Ok(repo) = RepoId::discover(root)
-        && let Ok(directory) = store::paths::index_dir(&repo)
-    {
-        let _ = std::fs::remove_dir_all(directory);
+    if let Ok(repo) = RepoId::discover(root) {
+        if let Ok(directory) = store::paths::index_dir(&repo) {
+            let _ = std::fs::remove_dir_all(directory);
+        }
     }
 }
 
@@ -692,26 +699,46 @@ fn doctor_on_a_repository_with_no_index_reports_an_empty_index() {
 
 #[test]
 fn doctor_serialises_its_vocabulary_as_the_words_the_engine_prints() {
-    // The engine's `Severity` and `Check` are serialised by derives in `peek-core`. This is what
-    // stops the JSON and the terminal report drifting into two vocabularies.
+    // The engine's `Severity` and `Check` are serialised by derives in `peek-core`, which have to
+    // agree with the `as_str` the terminal report uses. This is what stops the JSON and the report
+    // drifting into two vocabularies.
     let mut fixture = indexed("doctor-vocabulary");
-    let diagnosis = call(&mut fixture.session, "doctor", json!({}));
-    let known: Vec<&str> = peek_mcp::tools::doctor::checks().to_vec();
-    for finding in diagnosis["findings"].as_array().expect("an array") {
+    let first = call(&mut fixture.session, "doctor", json!({}));
+    let second = call(&mut fixture.session, "doctor", json!({}));
+    assert_eq!(
+        first, second,
+        "two diagnoses of an unchanged index are the same document"
+    );
+
+    let mut seen: Vec<&str> = Vec::new();
+    for finding in first["findings"].as_array().expect("an array") {
         let check = finding["check"].as_str().expect("a named check");
+        let severity = finding["severity"].as_str().expect("a severity");
         assert!(
-            known.contains(&check),
-            "`{check}` is serialised but is not a name this build's engine knows"
+            !check.is_empty()
+                && check
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '_'),
+            "`{check}` is a machine-readable name, and this is what one looks like"
+        );
+        assert!(
+            ["pass", "notice", "warn", "fail"].contains(&severity),
+            "`{check}` has a severity this build does not define: {severity}"
+        );
+        if !seen.contains(&check) {
+            seen.push(check);
+        }
+    }
+    for expected in ["index_openable", "integrity", "schema_version", "durability"] {
+        assert!(
+            seen.contains(&expected),
+            "the `{expected}` check ran, and its name is the one the engine prints: {seen:?}"
         );
     }
-    let worst = diagnosis["worst"].as_str().expect("a worst severity");
+    let worst = first["worst"].as_str().expect("a worst severity");
     assert!(
-        ["pass", "notice", "warn", "fail"].contains(&worst),
-        "the worst severity is one this build defines: {worst}"
-    );
-    assert!(
-        diagnosis["counts"][worst].as_u64().is_some_and(|n| n > 0),
-        "and the count for it is not zero, so it was actually observed: {diagnosis}"
+        first["counts"][worst].as_u64().is_some_and(|count| count > 0),
+        "and the count for the worst severity is not zero, so it was actually observed: {first}"
     );
 }
 
