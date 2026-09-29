@@ -526,7 +526,7 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
         .as_ref()
         .expect("a full build runs the resolution pass");
     assert_eq!(
-        resolution.examined as u64, report.relations_pending,
+        resolution.examined, report.relations_pending,
         "the resolver must see every relation the extractor left pending: {report:?}"
     );
     assert_eq!(

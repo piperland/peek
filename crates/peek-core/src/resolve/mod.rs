@@ -877,7 +877,7 @@ impl<'s> Resolver<'s> {
             };
         }
         // `dedup_by` can empty the list, so this is not a "there is one" assumption.
-        let Some(mut only) = found.pop() else {
+        let Some(only) = found.pop() else {
             return Decision::Unresolved {
                 reason: UnresolvedReason::NoCandidate,
             };
