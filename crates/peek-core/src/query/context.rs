@@ -736,7 +736,7 @@ fn price_edges(
         return (Vec::new(), Cost::ZERO, Vec::new());
     }
     let mut ordered: Vec<&Relation> = edges.iter().collect();
-    ordered.sort_by(|a, b| edge_rank(a).cmp(&edge_rank(b)));
+    ordered.sort_by_key(|edge| edge_rank(edge));
     ordered.dedup_by(|a, b| a.natural_key() == b.natural_key());
 
     let mut packed: Vec<ContextEdge> = Vec::new();
@@ -1112,7 +1112,7 @@ fn neighbourhood(
         // The declaration that encloses a symbol. `incident` holds every edge at the target, so
         // the edges that *contain* it are the ones whose source is somebody else.
         for edge in &incident {
-            if !edge.kind.is_structural() || !edge.is_followable() || &edge.source == &id {
+            if !edge.kind.is_structural() || !edge.is_followable() || edge.source == id {
                 continue;
             }
             offer(
@@ -1132,7 +1132,7 @@ fn neighbourhood(
             continue;
         }
         let (other, reason) = match edge.target.as_ref() {
-            Some(reached) if &edge.source == &id => (
+            Some(reached) if edge.source == id => (
                 reached.clone(),
                 match edge.kind {
                     RelationKind::Calls => InclusionReason::Callee {
@@ -1154,7 +1154,7 @@ fn neighbourhood(
                 },
             ),
         };
-        if &other == &id {
+        if other == id {
             continue;
         }
         // Borrowed for the lookup, then moved into the offer. The order matters: the row is read
