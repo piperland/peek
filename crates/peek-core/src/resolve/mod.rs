@@ -1258,14 +1258,24 @@ fn decide_and_commit(
                 // So a forced decision's target is *checked* rather than trusted. A target that is
                 // no longer in the index is not a resolution, it is a reference to something that
                 // has left, and that is `Unresolved` with a reason.
-                if forced
-                    && let Some(target) = decided.target.clone()
-                    && !store.entity(&target)?.is_some()
-                {
-                    decided.target = None;
-                    decided.resolution = ResolutionState::Unresolved {
-                        reason: UnresolvedReason::NoCandidate,
-                    };
+                if forced {
+                    // Both ends. The *source* is the one that bites: a file that declared a
+                    // symbol usually also made calls, and those relations were read into the
+                    // snapshot before the deletion removed them. Re-inserting one is a foreign
+                    // key violation on `source_path`, and because the write is one transaction the
+                    // violation aborts the deletion that caused it — a file cannot be removed
+                    // because an edge out of it was repaired.
+                    if !store.entity(&decided.source)?.is_some() {
+                        continue;
+                    }
+                    if let Some(target) = decided.target.clone()
+                        && !store.entity(&target)?.is_some()
+                    {
+                        decided.target = None;
+                        decided.resolution = ResolutionState::Unresolved {
+                            reason: UnresolvedReason::NoCandidate,
+                        };
+                    }
                 }
                 update = update.with_relation(decided);
             }
