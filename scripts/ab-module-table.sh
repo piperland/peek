@@ -20,6 +20,25 @@
 #     broken or the table never fires, and the script says so rather than printing two equal rows
 #     and letting the reader conclude "no effect".
 #
+# The metric, and why the previous one could not see it
+#
+# **resolved share = resolved / relations.** The share of relations the index can *prove*, over
+# the whole graph. Not a rate over a subset of the states, and not the decided rate.
+#
+# The first version of this script reported `(resolved + inferred) / relations` — the decided
+# rate — and that is the wrong shape for the question. The module table's work is largely to
+# turn `inferred` into `resolved`: the same edge, reached by an import binding or a located
+# module rather than by a repository-wide uniqueness check. That is movement *inside* decided, so
+# a rate over the decided pair is blind to it by construction, and the arms came out within
+# 0.4 percentage points of each other on five repositories while the table was demonstrably
+# firing. Counting `Resolved` on its own puts the proof and the claim in different numerators, so
+# the movement is visible.
+#
+# The `ambiguous` count is printed next to it on both arms for the same reason in the other
+# direction: ambiguity is what the table exists to reduce, and a single rate would let that count
+# rise while the rate improved. Every state is printed, so any other figure can be recomputed from
+# the same run rather than re-measured.
+#
 # Usage, inside the verification sandbox:
 #
 #   PEEK_PROBE_WORK=/tmp/probe bash scripts/ab-module-table.sh
@@ -53,7 +72,8 @@ field() {
   echo "$value"
 }
 
-# One repository, one arm. Prints `slug entities relations resolved inferred ambiguous unresolved`.
+# One repository, one arm. Prints
+# `slug entities relations resolved inferred ambiguous unresolved pending`.
 run_one() {
   local arm="$1" slug="$2" dir="$3"
   local index="$OUT/index-$arm-$slug"
@@ -66,18 +86,19 @@ run_one() {
     tail -5 "$log" | sed 's/^/    /' >&2
     return 1
   fi
-  printf '%s %s %s %s %s %s %s\n' \
+  printf '%s %s %s %s %s %s %s %s\n' \
     "$slug" \
     "$(field "$log" '^entities:')" \
     "$(field "$log" '^relations:')" \
     "$(field "$log" '^resolved:')" \
     "$(field "$log" '^inferred:')" \
     "$(field "$log" '^ambiguous:')" \
-    "$(field "$log" '^unresolved:')"
+    "$(field "$log" '^unresolved:')" \
+    "$(field "$log" '^pending:')"
 }
 
-printf '%-22s %10s %10s %10s %10s %10s\n' \
-  'repository/figure' 'table off' 'table on' 'delta' 'decided off' 'decided on'
+printf '%-22s %10s %10s %10s %9s%% %9s%%\n' \
+  'repository/figure' 'relations' 'resolved' 'delta' 'share off' 'share on'
 printf -- '-------------------------------------------------------------------------------------\n'
 
 failures=0
@@ -98,36 +119,42 @@ for slug in $REPOS; do
   off=$(run_one 0 "$safe" "$dir") || { failures=$((failures + 1)); continue; }
   on=$(run_one 1 "$safe" "$dir") || { failures=$((failures + 1)); continue; }
 
-  # `run_one` prints `slug entities relations resolved inferred ambiguous unresolved`, so the slug
-  # occupies `$1` and the first *figure* is `$2`. Getting this off by one is not a cosmetic slip:
-  # it makes `relations` read back as the entity count, which produces a denominator that is not
-  # the graph and a decide rate near 90% on a repository whose real rate is 44%. The partition
-  # assertion below is what caught it, and it is the reason that assertion is here at all.
+  # `run_one` prints `slug entities relations resolved inferred ambiguous unresolved pending`, so
+  # the slug occupies `$1` and the first *figure* is `$2`. Getting this off by one is not a
+  # cosmetic slip: it makes `relations` read back as the entity count, which produces a
+  # denominator that is not the graph and a share near 90% on a repository whose real share is
+  # 36%. The partition assertion below is what caught it, and it is the reason that assertion is
+  # here at all.
   # shellcheck disable=SC2086
   set -- $off
-  o_ent=$2; o_rel=$3; o_res=$4; o_inf=$5; o_amb=$6; o_unr=$7
+  o_ent=$2; o_rel=$3; o_res=$4; o_inf=$5; o_amb=$6; o_unr=$7; o_pen=$8
   # shellcheck disable=SC2086
   set -- $on
-  n_ent=$2; n_rel=$3; n_res=$4; n_inf=$5; n_amb=$6; n_unr=$7
+  n_ent=$2; n_rel=$3; n_res=$4; n_inf=$5; n_amb=$6; n_unr=$7; n_pen=$8
 
-  # Decided is `resolved + inferred` over the relation count, the same definition the spread uses,
-  # and the states must partition. A figure computed over a subset of the states is a share of
-  # something that is not the graph.
-  o_total=$((o_res + o_inf + o_amb + o_unr))
-  n_total=$((n_res + n_inf + n_amb + n_unr))
+  # The states must partition on both arms, over all five the probe counts, and the partition is
+  # asserted rather than assumed because a rate computed over a subset of them is a share of
+  # something that is not the graph. `pending` is in the sum because the probe asserts it in its
+  # own right: leaving it out is what let a stale index pass as a measured one.
+  o_total=$((o_res + o_inf + o_amb + o_unr + o_pen))
+  n_total=$((n_res + n_inf + n_amb + n_unr + n_pen))
   o_rate=0; n_rate=0
-  [ "$o_total" -gt 0 ] 2>/dev/null && o_rate=$(awk "BEGIN{printf \"%.1f\", 100*($o_res+$o_inf)/$o_total}")
-  [ "$n_total" -gt 0 ] 2>/dev/null && n_rate=$(awk "BEGIN{printf \"%.1f\", 100*($n_res+$n_inf)/$n_total}")
+  [ "$o_total" -gt 0 ] 2>/dev/null && o_rate=$(awk "BEGIN{printf \"%.1f\", 100*$o_res/$o_total}")
+  [ "$n_total" -gt 0 ] 2>/dev/null && n_rate=$(awk "BEGIN{printf \"%.1f\", 100*$n_res/$n_total}")
 
   note=""
   [ "$o_total" -ne "$o_rel" ] 2>/dev/null && note="off-arm states do not partition ($o_total vs $o_rel)"
   [ "$n_total" -ne "$n_rel" ] 2>/dev/null && note="$note on-arm states do not partition ($n_total vs $n_rel)"
-  [ "$o_ent" = "$n_ent" ] && [ "$o_rel" = "$n_rel" ] && [ "$o_res" = "$n_res" ] && [ "$o_amb" = "$n_amb" ] && \
+  # Compared across the whole state vector, not just the two the rate is built from: a difference
+  # hidden in `inferred` is the whole point of the metric, so an equality check that ignored it
+  # would call two different indexes identical.
+  [ "$o_ent" = "$n_ent" ] && [ "$o_rel" = "$n_rel" ] && [ "$o_res" = "$n_res" ] && \
+    [ "$o_inf" = "$n_inf" ] && [ "$o_amb" = "$n_amb" ] && [ "$o_unr" = "$n_unr" ] && \
     note="$note ARMS ARE IDENTICAL - the switch may be doing nothing, or the table never fires"
 
   delta=$(awk "BEGIN{printf \"%+.1f\", $n_rate - $o_rate}")
   printf '%-22s %10s %10s %10s %9s%% %9s%%  %s\n' \
-    "$slug" "$o_rel" "$n_rel" "${delta}pp" "$o_rate" "$n_rate" "$note"
+    "$slug" "$o_rel" "$n_res/$n_rel" "${delta}pp" "$o_rate" "$n_rate" "$note"
   printf '%-22s %10s %10s %10s %10s %10s\n' \
     '  ambiguous / inferred' "$o_amb / $o_inf" "$n_amb / $n_inf" "" "" ""
 done
@@ -138,6 +165,8 @@ if [ "$failures" -eq 0 ]; then
 else
   echo "$failures repository/arm(s) failed; see $OUT"
 fi
-echo "decide rate is (resolved + inferred) / relations, and the states partition on both arms"
+echo "resolved share is resolved / relations - the proofs, not the claims"
+echo "ambiguous is printed on both arms because that is the count the table exists to reduce"
+echo "the five states partition on both arms; decided rate is (resolved + inferred) / relations"
 echo "logs: $OUT"
 exit "$failures"
