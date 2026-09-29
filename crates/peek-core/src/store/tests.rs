@@ -1096,13 +1096,25 @@ fn a_subtree_removal_is_served_by_an_index_seek_rather_than_a_table_scan() {
         &store,
         "SELECT path FROM entity WHERE (path = ?1 OR (path >= ?2 AND path < ?3))",
     );
+    // The plan is a `MULTI-INDEX OR` with **two** seeks on the primary key, one per arm. That is
+    // the shape the `LIKE` arm could not produce.
     assert!(
-        plan.contains("USING INDEX"),
-        "a subtree scope must be served by an index, not a scan: {plan}"
+        plan.contains("MULTI-INDEX OR"),
+        "both arms must be planned independently, which is what an OR over one index cannot do: \
+         {plan}"
+    );
+    assert_eq!(
+        plan.matches("sqlite_autoindex_entity_1").count(),
+        2,
+        "one seek per arm, both on the primary key: {plan}"
     );
     assert!(
-        !plan.contains("SCAN entity USING COVERING INDEX entity_by_qualified_name"),
-        "the old plan shape has come back: {plan}"
+        plan.contains("path>? AND path<?") || plan.contains("path>? AND path<?"),
+        "the second arm must be a range seek: {plan}"
+    );
+    assert!(
+        !plan.contains("SCAN entity"),
+        "nothing may fall back to a table scan: {plan}"
     );
     assert!(!plan.contains("TEMP B-TREE"), "plan: {plan}");
 }

@@ -384,8 +384,8 @@ fn demote_incoming(
 /// payload are owned here, so the bindings handed to SQLite cannot outlive them.
 ///
 /// The parameter *count* varies with the removal variant, and it has to: SQLite rejects a bind
-/// for an index the statement does not declare, so a single-file removal must not offer the
-/// `LIKE` pattern that only the subtree clause uses.
+/// for an index the statement does not declare, so a single-file removal must not offer the two
+/// range bounds that only the subtree clause uses.
 struct ScopeParams {
     path: String,
     /// Only bound for a subtree removal: the inclusive start of the descendants' range.
@@ -558,16 +558,16 @@ mod tests {
     }
 
     #[test]
-    fn a_file_removal_binds_one_parameter_and_a_subtree_binds_two() {
-        // SQLite rejects a bind for a placeholder the statement never declared, so binding the
-        // `LIKE` pattern to a single-file removal would be an error, not a harmless extra.
+    fn a_file_removal_binds_one_parameter_and_a_subtree_binds_three() {
+        // SQLite rejects a bind for a placeholder the statement never declared, so binding the two
+        // range bounds to a single-file removal would be an error, not a harmless extra.
         let file = ScopeParams::new(&Removal::RemoveFile(path("src/a.rs")));
         assert_eq!(file.scope_len(), 1);
         assert_eq!(file.scope().len(), 1);
 
         let subtree = ScopeParams::new(&Removal::RemoveSubtree(path("src")));
-        assert_eq!(subtree.scope_len(), 2);
-        assert_eq!(subtree.scope().len(), 2);
+        assert_eq!(subtree.scope_len(), 3);
+        assert_eq!(subtree.scope().len(), 3);
     }
 
     #[test]
@@ -581,7 +581,7 @@ mod tests {
         assert_eq!(file.with_payload(&rusqlite::types::Value::Null).len(), 2);
 
         let subtree = ScopeParams::new(&Removal::RemoveSubtree(path("src")));
-        assert_eq!(subtree.with_payload(&rusqlite::types::Value::Null).len(), 3);
+        assert_eq!(subtree.with_payload(&rusqlite::types::Value::Null).len(), 4);
     }
 
     #[test]
@@ -595,7 +595,7 @@ mod tests {
         let removal = Removal::RemoveSubtree(path("src"));
         assert_eq!(
             scope_clause("path", &removal, 1),
-            "(path = ?1 OR path LIKE ?2 ESCAPE '\\')"
+            "(path = ?1 OR (path >= ?2 AND path < ?3))"
         );
     }
 
