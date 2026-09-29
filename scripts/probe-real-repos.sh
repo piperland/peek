@@ -59,13 +59,14 @@ field() {
 # repository that cannot be cloned is a fact about the run and is recorded as one.
 probe_one() {
   local slug="$1" url="$2" why="$3"
-  local dir="$REPOS_DIR/${slug//\//__}"
+  local safe="${slug//\//__}"          # `owner/name` is a fine slug and a terrible filename
+  local dir="$REPOS_DIR/$safe"
 
   if [ ! -d "$dir/.git" ]; then
     echo "cloning $slug ..."
-    if ! git clone --depth 1 --quiet "$url" "$dir" 2>"$OUT/$slug.clone.err"; then
+    if ! git clone --depth 1 --quiet "$url" "$dir" 2>"$OUT/$safe.clone.err"; then
       echo "  CLONE FAILED: $slug"
-      sed 's/^/    /' "$OUT/$slug.clone.err" | head -5
+      sed 's/^/    /' "$OUT/$safe.clone.err" | head -5
       return 0
     fi
   fi
@@ -76,7 +77,7 @@ probe_one() {
   rm -rf "$INDEX_DIR/$slug"
   mkdir -p "$INDEX_DIR/$slug"
 
-  local log="$OUT/$slug.log"
+  local log="$OUT/$safe.log"
   if PEEK_PROBE_REPO="$dir" PEEK_INDEX_DIR="$INDEX_DIR/$slug" \
      cargo test --test real_repository --release -- --ignored --nocapture \
      >"$log" 2>&1; then
@@ -98,7 +99,7 @@ probe_one() {
     "$(field "$log" '^unresolved:')" \
     "$(field "$log" '^orphans:')" \
     "$(field "$log" '^wal bytes:')" \
-    >"$OUT/$slug.row"
+    >"$OUT/$safe.row"
 }
 
 printf '%-22s %8s %8s %9s %8s %9s %7s\n' \
@@ -110,9 +111,9 @@ ROWS="$OUT/rows.txt"
 
 while IFS='|' read -r slug url why; do
   [ -z "$slug" ] && continue
-  echo "$why" >"$OUT/$slug.why"
+  echo "$why" >"$OUT/$safe.why"
   probe_one "$slug" "$url" "$why"
-  [ -f "$OUT/$slug.row" ] && cat "$OUT/$slug.row" | cut -d'|' -f1-7 >>"$ROWS"
+  [ -f "$OUT/$safe.row" ] && cat "$OUT/$safe.row" | cut -d'|' -f1-7 >>"$ROWS"
 done <<EOF
 $DEFAULT_SET
 EOF
@@ -143,7 +144,7 @@ echo "=== invariant check ==="
 failures=0
 for slug_dir in "$OUT"/*.log; do
   [ -e "$slug_dir" ] || continue
-  slug=$(basename "$slug_dir" .log)
+  slug=$(basename "$slug_dir" .log | tr "__" "/")
   grep -q "^orphans: *0$" "$slug_dir" || { echo "  ORPHANS: $slug"; failures=$((failures+1)); }
   grep -q "^pending: *0$" "$slug_dir" || { echo "  PENDING REMAINS: $slug"; failures=$((failures+1)); }
   grep -q "integrity_check: ok" "$slug_dir" || { echo "  INTEGRITY: $slug"; failures=$((failures+1)); }
