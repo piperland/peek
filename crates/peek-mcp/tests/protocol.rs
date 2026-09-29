@@ -72,7 +72,8 @@ fn drive(root: &std::path::Path, messages: &[Value]) -> Driven {
 fn drive_raw(root: &std::path::Path, bytes: Vec<u8>) -> Vec<u8> {
     let mut session = Session::new(root, Box::new(StderrLog));
     let mut output = ProtocolWriter::new(Vec::new());
-    serve(&mut session, Cursor::new(bytes), &mut output).expect("a bad line does not end a session");
+    serve(&mut session, Cursor::new(bytes), &mut output)
+        .expect("a bad line does not end a session");
     output.into_inner()
 }
 
@@ -103,7 +104,11 @@ fn initialize_states_the_version_the_server_implements_and_its_own_name() {
     let dir = TempDir::new("initialize");
     let driven = drive(
         dir.path(),
-        &[request(1, "initialize", json!({ "protocolVersion": "2025-06-18" }))],
+        &[request(
+            1,
+            "initialize",
+            json!({ "protocolVersion": "2025-06-18" }),
+        )],
     );
     let replies = replies(&driven.stdout);
     assert_eq!(replies.len(), 1, "one request, one reply: {replies:?}");
@@ -113,7 +118,8 @@ fn initialize_states_the_version_the_server_implements_and_its_own_name() {
     assert_eq!(result["protocolVersion"], "2025-06-18");
     assert_eq!(result["serverInfo"]["name"], "peek");
     assert_eq!(
-        result["serverInfo"]["version"], peek_mcp::VERSION,
+        result["serverInfo"]["version"],
+        peek_mcp::VERSION,
         "the version in `initialize` is the library's, not a second constant written here"
     );
     assert!(
@@ -121,7 +127,9 @@ fn initialize_states_the_version_the_server_implements_and_its_own_name() {
         "the tool capability is declared: {result}"
     );
     assert!(
-        result["instructions"].as_str().is_some_and(|text| !text.is_empty()),
+        result["instructions"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()),
         "a server that can be misused should say how to use it: {result}"
     );
     assert!(
@@ -136,7 +144,11 @@ fn the_version_answered_is_the_one_the_client_asked_for_when_it_is_known() {
     let dir = TempDir::new("negotiate-known");
     let driven = drive(
         dir.path(),
-        &[request(1, "initialize", json!({ "protocolVersion": "2024-11-05" }))],
+        &[request(
+            1,
+            "initialize",
+            json!({ "protocolVersion": "2024-11-05" }),
+        )],
     );
     assert_eq!(
         replies(&driven.stdout)[0]["result"]["protocolVersion"],
@@ -155,7 +167,11 @@ fn the_version_answered_is_one_this_build_implements_when_the_client_asks_for_an
         let dir = TempDir::new("negotiate-unknown");
         let driven = drive(
             dir.path(),
-            &[request(1, "initialize", json!({ "protocolVersion": asked }))],
+            &[request(
+                1,
+                "initialize",
+                json!({ "protocolVersion": asked }),
+            )],
         );
         let answered = replies(&driven.stdout)[0]["result"]["protocolVersion"]
             .as_str()
@@ -166,7 +182,10 @@ fn the_version_answered_is_one_this_build_implements_when_the_client_asks_for_an
             peek_mcp::protocol::PROTOCOL_VERSION,
             "a client asking for {asked:?} is answered with the version this build implements"
         );
-        assert_ne!(answered, asked, "and never with an echo of what it asked for");
+        assert_ne!(
+            answered, asked,
+            "and never with an echo of what it asked for"
+        );
     }
 }
 
@@ -206,7 +225,10 @@ fn a_notification_is_never_answered() {
         1,
         "two notifications and one request produce exactly one reply: {replies:?}"
     );
-    assert_eq!(replies[0]["id"], 1, "the reply is the request's, not a notification's");
+    assert_eq!(
+        replies[0]["id"], 1,
+        "the reply is the request's, not a notification's"
+    );
 }
 
 #[test]
@@ -237,7 +259,11 @@ fn a_line_that_is_not_json_is_a_parse_error_with_no_id() {
     input.push(b'\n');
 
     let replies = replies(&drive_raw(dir.path(), input));
-    assert_eq!(replies.len(), 2, "the bad line and then the good one: {replies:?}");
+    assert_eq!(
+        replies.len(),
+        2,
+        "the bad line and then the good one: {replies:?}"
+    );
     assert_eq!(replies[0]["error"]["code"], -32700);
     assert_eq!(
         replies[0]["id"],
@@ -317,7 +343,11 @@ fn a_final_line_without_a_newline_is_still_answered() {
         "this test is about a line with no terminator, so it must not have one"
     );
     let replies = replies(&drive_raw(dir.path(), input));
-    assert_eq!(replies.len(), 1, "the last request was answered: {replies:?}");
+    assert_eq!(
+        replies.len(),
+        1,
+        "the last request was answered: {replies:?}"
+    );
     assert_eq!(replies[0]["id"], 1);
 }
 
@@ -337,7 +367,11 @@ fn a_message_over_the_line_limit_is_refused_and_the_stream_continues() {
     input.push(b'\n');
 
     let replies = replies(&drive_raw(dir.path(), input));
-    assert_eq!(replies.len(), 2, "the refusal and then the answer: {replies:?}");
+    assert_eq!(
+        replies.len(),
+        2,
+        "the refusal and then the answer: {replies:?}"
+    );
     assert_eq!(replies[0]["error"]["code"], -32600);
     assert_eq!(
         replies[0]["id"],
@@ -374,7 +408,11 @@ fn an_over_long_message_is_refused_on_the_id_it_carried() {
     input.push(b'\n');
 
     let replies = replies(&drive_raw(dir.path(), input));
-    assert_eq!(replies.len(), 2, "the refusal and then the answer: {replies:?}");
+    assert_eq!(
+        replies.len(),
+        2,
+        "the refusal and then the answer: {replies:?}"
+    );
     assert_eq!(replies[0]["error"]["code"], -32600);
     assert_eq!(
         replies[0]["id"],

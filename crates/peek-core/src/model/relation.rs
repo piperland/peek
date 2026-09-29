@@ -151,7 +151,15 @@ impl RelationKind {
 /// fall out of step with it. The order is the order the variants are declared in — structural
 /// first, then module, usage, types, hierarchy, behaviour — which is the order that reads as a
 /// grouping rather than as an accident.
-pub const ALL_RELATION_KINDS: [RelationKind; 27] = [
+///
+/// **A slice rather than a fixed-length array.** It was `[RelationKind; 27]` while holding 26
+/// entries, and the type in the annotation is a number somebody has to keep in step with a list
+/// that has to be kept in step with an enum. A hand-counted length is a third thing to maintain and
+/// the only one of the three that fails to compile, so it is not worth carrying: `.len()` answers
+/// the question it was there to answer, and a variant that reaches the list without reaching a
+/// caller is caught by `the_listed_kinds_are_the_ones_the_enum_has`, which checks the actual
+/// invariant rather than a count.
+pub const ALL_RELATION_KINDS: &[RelationKind] = &[
     RelationKind::Defines,
     RelationKind::Contains,
     RelationKind::Owns,
@@ -186,7 +194,10 @@ pub const ALL_RELATION_KINDS: [RelationKind; 27] = [
 /// caller who is told a kind is wrong and not what the right ones are will simply guess again.
 #[must_use]
 pub fn relation_kind_names() -> Vec<&'static str> {
-    ALL_RELATION_KINDS.iter().map(|kind| kind.as_str()).collect()
+    ALL_RELATION_KINDS
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect()
 }
 
 impl fmt::Display for RelationKind {
@@ -917,16 +928,41 @@ mod tests {
         // `ALL_RELATION_KINDS` is what a surface offers as its vocabulary. If a kind is added to
         // the enum and not to the list, a caller is silently unable to ask for it — the same shape
         // of defect as the predecessor's `--kind nonsense` becoming "no filter", one level up.
-        // The count is a literal rather than a derived number so that adding a variant without
-        // updating the list fails here instead of quietly narrowing the vocabulary.
-        assert_eq!(ALL_RELATION_KINDS.len(), 27);
+        //
+        // This used to assert `ALL_RELATION_KINDS.len() == 27`, with a comment saying the literal
+        // was deliberate so that adding a variant without updating the list would fail here. It
+        // would not have. The literal said nothing about which kinds were listed, so a variant
+        // added to the enum and missed from the list left it passing — and the annotation said 27
+        // while the list held 26, so the array length and the assertion agreed with each other and
+        // disagreed with reality. Neither was reachable: the crate had never been built.
+        //
+        // The range is derived from the enum rather than written out. `RelationKind` is a fieldless
+        // enum, so a cast is its discriminant, and the last variant's discriminant is one past the
+        // last. Adding a variant above the last therefore widens the range and is checked without
+        // anything here being edited; adding one below it is a compile error, because the
+        // discriminants are the enum's and inserting a variant renumbers them.
+        let listed: std::collections::BTreeSet<usize> =
+            ALL_RELATION_KINDS.iter().map(|kind| *kind as usize).collect();
+        let highest = RelationKind::Subscribes as usize;
+        for discriminant in 0..=highest {
+            assert!(
+                listed.contains(&discriminant),
+                "a relation kind the enum declares is missing from ALL_RELATION_KINDS, so no \
+                 surface can ask for it: discriminant {discriminant}"
+            );
+        }
+        assert_eq!(
+            listed.len(),
+            highest + 1,
+            "ALL_RELATION_KINDS must list every kind once, with no duplicates and no extras"
+        );
     }
 
     #[test]
     fn parsing_a_kind_name_inverts_printing_one() {
         // A surface that accepts a kind as text has to refuse an unknown one, and refusing needs
         // this to be a true inverse rather than a second list that can drift from the enum.
-        for kind in ALL_RELATION_KINDS {
+        for kind in ALL_RELATION_KINDS.iter().copied() {
             let spelled = kind.as_str();
             assert_eq!(
                 RelationKind::parse(spelled),
@@ -935,7 +971,11 @@ mod tests {
             );
         }
         assert_eq!(RelationKind::parse("nonsense"), None);
-        assert_eq!(RelationKind::parse("Calls"), None, "the spelling is lowercase");
+        assert_eq!(
+            RelationKind::parse("Calls"),
+            None,
+            "the spelling is lowercase"
+        );
         assert_eq!(relation_kind_names().len(), ALL_RELATION_KINDS.len());
     }
 }

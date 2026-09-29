@@ -149,9 +149,10 @@ impl Session {
         let index_path = repo
             .as_ref()
             .and_then(|repo| store::paths::index_path(repo).ok());
-        let summary = index_path
-            .as_ref()
-            .map_or_else(|| "unresolved".to_owned(), |path| path.display().to_string());
+        let summary = index_path.as_ref().map_or_else(
+            || "unresolved".to_owned(),
+            |path| path.display().to_string(),
+        );
         let mut session = Self {
             root: root.to_path_buf(),
             repo,
@@ -473,7 +474,10 @@ impl RunningWatch {
             // A finished handle is how a watcher that died is visible: the thread cannot report
             // itself, and a status line that said "running" until the process exited would be a
             // claim nobody could check.
-            running: self.join.as_ref().is_some_and(|handle| !handle.is_finished()),
+            running: self
+                .join
+                .as_ref()
+                .is_some_and(|handle| !handle.is_finished()),
             applied: self.counters.applied(),
             failed: self.counters.failed(),
             reports_superseded: self.counters.superseded(),

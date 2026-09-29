@@ -38,11 +38,7 @@ use peek_core::store::Store;
 ///
 /// `options` is the caller's own, rather than the default, so a lookup runs under the same limits
 /// the answer it is about to produce will be built with.
-pub fn resolve(
-    store: &Store,
-    options: QueryOptions,
-    target: &str,
-) -> Result<EntityId, QueryError> {
+pub fn resolve(store: &Store, options: QueryOptions, target: &str) -> Result<EntityId, QueryError> {
     let query = Query::with_options(store, options);
     // The smallest budget that can hold the engine's own report. Compilation then has no room for
     // content, so the pack comes back with nothing in it but the target.

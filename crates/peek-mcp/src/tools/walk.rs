@@ -36,24 +36,12 @@ use crate::tools::target;
 
 /// Who uses a target, one hop.
 pub fn callers(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAnswer, ToolError> {
-    walk_tool(
-        session,
-        arguments,
-        "callers",
-        Direction::Inbound,
-        None,
-    )
+    walk_tool(session, arguments, "callers", Direction::Inbound, None)
 }
 
 /// What a target depends on, one hop.
 pub fn callees(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAnswer, ToolError> {
-    walk_tool(
-        session,
-        arguments,
-        "callees",
-        Direction::Outbound,
-        None,
-    )
+    walk_tool(session, arguments, "callees", Direction::Outbound, None)
 }
 
 /// Who depends on a target, `depth` hops.
@@ -126,7 +114,8 @@ fn walk_tool(
     session.log(&format!(
         "{tool} {target}: {} step(s) at {} hop(s), {inferred} by inference, {} relation(s) read{}",
         walk.steps.len(),
-        walk.max_distance().map_or_else(|| "no".to_owned(), |d| d.to_string()),
+        walk.max_distance()
+            .map_or_else(|| "no".to_owned(), |d| d.to_string()),
         walk.inspected,
         if walk.bounded { ", bound reached" } else { "" }
     ));
@@ -163,15 +152,18 @@ fn walk_tool(
         options: walk.options,
     };
     let text = render(&walk);
-    Ok(ToolAnswer::new(text, serde_json::to_value(&body).unwrap_or_else(|error| {
-        serde_json::json!({
-            "outcome": "failed",
-            "reason": format!("the walk could not be encoded: {error}"),
-            "advice": Value::Null,
-            "candidates": [],
-            "steps": [],
-        })
-    })))
+    Ok(ToolAnswer::new(
+        text,
+        serde_json::to_value(&body).unwrap_or_else(|error| {
+            serde_json::json!({
+                "outcome": "failed",
+                "reason": format!("the walk could not be encoded: {error}"),
+                "advice": Value::Null,
+                "candidates": [],
+                "steps": [],
+            })
+        }),
+    ))
 }
 
 /// The structured body of a walk.

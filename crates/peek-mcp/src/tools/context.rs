@@ -164,22 +164,22 @@ pub fn context(session: &mut Session, arguments: Option<&Value>) -> Result<ToolA
         uncertain_edges: pack
             .edges()
             .filter(|edge| {
-                edge.relation
-                    .resolution
-                    .is_ambiguous()
-                    || edge.relation.resolution.is_unresolved()
+                edge.relation.resolution.is_ambiguous() || edge.relation.resolution.is_unresolved()
             })
             .count(),
     };
-    Ok(ToolAnswer::new(text, serde_json::to_value(&body).unwrap_or_else(|error| {
-        serde_json::json!({
-            "outcome": Outcome::Failed.as_str(),
-            "reason": format!("the context pack could not be encoded: {error}"),
-            "advice": Value::Null,
-            "candidates": [],
-            "pack": Value::Null,
-        })
-    })))
+    Ok(ToolAnswer::new(
+        text,
+        serde_json::to_value(&body).unwrap_or_else(|error| {
+            serde_json::json!({
+                "outcome": Outcome::Failed.as_str(),
+                "reason": format!("the context pack could not be encoded: {error}"),
+                "advice": Value::Null,
+                "candidates": [],
+                "pack": Value::Null,
+            })
+        }),
+    ))
 }
 
 /// The structured body of a compiled pack.

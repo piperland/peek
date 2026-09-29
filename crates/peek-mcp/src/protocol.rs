@@ -83,10 +83,7 @@ pub enum Incoming {
         params: Value,
     },
     /// A call that expects no reply. **Never** answered — see the module documentation.
-    Notification {
-        method: String,
-        params: Value,
-    },
+    Notification { method: String, params: Value },
     /// Bytes that are not a request this server can route. Carries the reply to write, if one is
     /// owed, so the caller never has to decide whether an unparseable line was a request.
     Unroutable {
@@ -169,7 +166,9 @@ pub fn classify(line: &str) -> Option<Incoming> {
         Some(Value::String(version)) => {
             return Some(unroutable(
                 CODE_INVALID_REQUEST,
-                format!("`jsonrpc` must be the string \"{JSONRPC_VERSION}\"; this line said {version:?}"),
+                format!(
+                    "`jsonrpc` must be the string \"{JSONRPC_VERSION}\"; this line said {version:?}"
+                ),
             ));
         }
         Some(_) => {
@@ -191,7 +190,10 @@ pub fn classify(line: &str) -> Option<Incoming> {
         Some(other) => {
             return Some(unroutable(
                 CODE_INVALID_REQUEST,
-                format!("`method` must be a string; this line holds {}", describe(other)),
+                format!(
+                    "`method` must be a string; this line holds {}",
+                    describe(other)
+                ),
             ));
         }
         None => {

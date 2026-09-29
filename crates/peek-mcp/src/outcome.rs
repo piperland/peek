@@ -140,7 +140,11 @@ impl Verdict {
 
     /// A verdict naming the tool that would fix it.
     #[must_use]
-    pub fn advising(outcome: Outcome, reason: impl Into<String>, advice: impl Into<String>) -> Self {
+    pub fn advising(
+        outcome: Outcome,
+        reason: impl Into<String>,
+        advice: impl Into<String>,
+    ) -> Self {
         Self {
             outcome,
             reason: Some(reason.into()),
@@ -205,10 +209,14 @@ impl Verdict {
                     "a budget of {requested} token(s) cannot hold the {minimum}-token report that \
                      would say what was dropped"
                 ),
-                format!("ask for at least {minimum} tokens; the report is charged against the \
-                         budget, so a smaller one cannot be honoured without lying about the cost"),
+                format!(
+                    "ask for at least {minimum} tokens; the report is charged against the \
+                         budget, so a smaller one cannot be honoured without lying about the cost"
+                ),
             ),
-            QueryError::Store(inner) => Self::of(Outcome::Failed, format!("the index store: {inner}")),
+            QueryError::Store(inner) => {
+                Self::of(Outcome::Failed, format!("the index store: {inner}"))
+            }
         }
     }
 }

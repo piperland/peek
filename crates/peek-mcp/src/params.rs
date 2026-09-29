@@ -93,11 +93,7 @@ impl<'a> Args<'a> {
     }
 
     /// A required string.
-    pub fn required_string(
-        &self,
-        name: &'static str,
-        what: &str,
-    ) -> Result<String, ToolError> {
+    pub fn required_string(&self, name: &'static str, what: &str) -> Result<String, ToolError> {
         match self.get(name) {
             None => Err(self.missing(name, what)),
             Some(Value::String(text)) => Ok(text.clone()),
@@ -116,11 +112,7 @@ impl<'a> Args<'a> {
     }
 
     /// A required non-negative integer.
-    pub fn required_u64(
-        &self,
-        name: &'static str,
-        what: &str,
-    ) -> Result<u64, ToolError> {
+    pub fn required_u64(&self, name: &'static str, what: &str) -> Result<u64, ToolError> {
         match self.get(name) {
             None => Err(self.missing(name, what)),
             Some(value) => self.as_u64(name, value),
@@ -242,15 +234,17 @@ impl<'a> Args<'a> {
         let Some(text) = self.optional_string(name)? else {
             return Ok(None);
         };
-        peek_core::model::RelationKind::parse(&text).map(Some).ok_or_else(|| {
-            ToolError::argument(
-                format!("`{text}` is not a relation kind this build has"),
-                format!(
-                    "the kinds are: {}",
-                    peek_core::model::relation_kind_names().join(", ")
-                ),
-            )
-        })
+        peek_core::model::RelationKind::parse(&text)
+            .map(Some)
+            .ok_or_else(|| {
+                ToolError::argument(
+                    format!("`{text}` is not a relation kind this build has"),
+                    format!(
+                        "the kinds are: {}",
+                        peek_core::model::relation_kind_names().join(", ")
+                    ),
+                )
+            })
     }
 
     fn as_u64(&self, name: &'static str, value: &Value) -> Result<u64, ToolError> {

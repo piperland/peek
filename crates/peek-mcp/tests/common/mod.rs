@@ -61,13 +61,31 @@ pub fn sources() -> Vec<(&'static str, &'static str)> {
         ("src/tool.rs", include_str!("../../src/tool.rs")),
         ("src/writer.rs", include_str!("../../src/writer.rs")),
         ("src/tools/mod.rs", include_str!("../../src/tools/mod.rs")),
-        ("src/tools/context.rs", include_str!("../../src/tools/context.rs")),
-        ("src/tools/doctor.rs", include_str!("../../src/tools/doctor.rs")),
-        ("src/tools/explain.rs", include_str!("../../src/tools/explain.rs")),
-        ("src/tools/index.rs", include_str!("../../src/tools/index.rs")),
-        ("src/tools/target.rs", include_str!("../../src/tools/target.rs")),
+        (
+            "src/tools/context.rs",
+            include_str!("../../src/tools/context.rs"),
+        ),
+        (
+            "src/tools/doctor.rs",
+            include_str!("../../src/tools/doctor.rs"),
+        ),
+        (
+            "src/tools/explain.rs",
+            include_str!("../../src/tools/explain.rs"),
+        ),
+        (
+            "src/tools/index.rs",
+            include_str!("../../src/tools/index.rs"),
+        ),
+        (
+            "src/tools/target.rs",
+            include_str!("../../src/tools/target.rs"),
+        ),
         ("src/tools/walk.rs", include_str!("../../src/tools/walk.rs")),
-        ("src/tools/watch.rs", include_str!("../../src/tools/watch.rs")),
+        (
+            "src/tools/watch.rs",
+            include_str!("../../src/tools/watch.rs"),
+        ),
     ]
 }
 
@@ -105,7 +123,9 @@ pub fn names_stdout(source: &str) -> Vec<Offence> {
 /// that prints, or a route to the process's standard output. A line that does both is reported
 /// once.
 pub fn writes_to_stdout(source: &str) -> Vec<Offence> {
-    offences(source, |line| calls_print_macro(line) || has_identifier(line, "stdout"))
+    offences(source, |line| {
+        calls_print_macro(line) || has_identifier(line, "stdout")
+    })
 }
 
 /// Whether [`code_only`] read the whole of `source`.
@@ -304,7 +324,9 @@ fn char_literal_end(bytes: &[u8], body: usize) -> Option<usize> {
             // The longest escape is four bytes, so a closing apostrophe further away than that
             // belongs to a later lifetime.
             let limit = body.saturating_add(10).min(bytes.len());
-            (body + 1..limit).find(|index| bytes[*index] == b'\'').map(|index| index + 1)
+            (body + 1..limit)
+                .find(|index| bytes[*index] == b'\'')
+                .map(|index| index + 1)
         }
         Some(_) if bytes.get(body + 1) == Some(&b'\'') => Some(body + 2),
         _ => None,

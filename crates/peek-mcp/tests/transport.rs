@@ -77,9 +77,7 @@ impl Server {
             let mut pipe: ChildStderr = stderr;
             let mut buffer = Vec::new();
             if pipe.read_to_end(&mut buffer).is_ok() {
-                let mut slot = sink
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut slot = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 slot.push_str(&String::from_utf8_lossy(&buffer));
             }
         });
@@ -208,13 +206,12 @@ fn the_binary_speaks_only_protocol_on_stdout_and_diagnostics_on_stderr() {
 
     // A full session. Every `read` above asserts that the line it received is JSON, so each of
     // these steps is a check that stdout carried nothing else.
-    let initialize = server
-        .send_and_read(json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": { "protocolVersion": "2025-06-18" }
-        }));
+    let initialize = server.send_and_read(json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2025-06-18" }
+    }));
     assert_eq!(initialize["result"]["serverInfo"]["name"], "peek");
 
     // A notification, which must produce no line at all. If one appeared, the next read below
@@ -230,8 +227,7 @@ fn the_binary_speaks_only_protocol_on_stdout_and_diagnostics_on_stderr() {
 
     let refused = server.call(3, "index_status", json!({}));
     assert_eq!(
-        refused["result"]["structuredContent"]["outcome"],
-        "not_indexed",
+        refused["result"]["structuredContent"]["outcome"], "not_indexed",
         "a repository that has never been indexed says so: {refused}"
     );
     assert_eq!(
@@ -254,11 +250,17 @@ fn the_binary_speaks_only_protocol_on_stdout_and_diagnostics_on_stderr() {
         "and so did the index: {status}"
     );
 
-    let pack = server.call(6, "context", json!({ "target": "entry", "budget_tokens": 4000 }));
+    let pack = server.call(
+        6,
+        "context",
+        json!({ "target": "entry", "budget_tokens": 4000 }),
+    );
     let content = &pack["result"]["content"][0];
     assert_eq!(content["type"], "text", "a text block is present: {pack}");
     assert!(
-        content["text"].as_str().is_some_and(|text| !text.is_empty()),
+        content["text"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()),
         "and it says something: {pack}"
     );
     let structured = &pack["result"]["structuredContent"];
@@ -282,7 +284,10 @@ fn the_binary_speaks_only_protocol_on_stdout_and_diagnostics_on_stderr() {
     assert_eq!(unknown["error"]["code"], -32601);
 
     let ping = server.send_and_read(json!({ "jsonrpc": "2.0", "id": 8, "method": "ping" }));
-    assert_eq!(ping["id"], 8, "the stream is still in step after the refusal: {ping}");
+    assert_eq!(
+        ping["id"], 8,
+        "the stream is still in step after the refusal: {ping}"
+    );
 
     let stderr = server.finish();
     assert!(
@@ -312,7 +317,10 @@ fn the_binary_writes_its_help_to_stderr_so_stdout_stays_a_protocol_channel() {
         String::from_utf8_lossy(&output.stdout)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("USAGE"), "the usage text is on stderr: {stderr}");
+    assert!(
+        stderr.contains("USAGE"),
+        "the usage text is on stderr: {stderr}"
+    );
     assert!(
         stderr.contains("context"),
         "and it lists the tools, so a person can see the surface: {stderr}"
@@ -422,10 +430,7 @@ fn the_stdout_scan_reads_code_and_cannot_be_satisfied_by_prose() {
             "a lifetime",
             "let note: &'static str = \"text naming a printing macro\";\n",
         ),
-        (
-            "a character literal",
-            "let brace = '{';\n",
-        ),
+        ("a character literal", "let brace = '{';\n"),
     ];
     for (label, source) in prose {
         assert_eq!(
@@ -441,7 +446,10 @@ fn the_stdout_scan_reads_code_and_cannot_be_satisfied_by_prose() {
         ("a bare call", "    println!(\"ready\");\n"),
         ("a discarded call", "    let _ = println!(\"ready\");\n"),
         ("a qualified call", "    std::println!(\"ready\");\n"),
-        ("a write to a handle", "    writeln!(io::stdout(), \"ready\").ok();\n"),
+        (
+            "a write to a handle",
+            "    writeln!(io::stdout(), \"ready\").ok();\n",
+        ),
         ("a bare handle", "    let out = std::io::stdout();\n"),
         ("a use of the module", "use std::io::stdout;\n"),
     ] {
@@ -459,7 +467,13 @@ fn the_binary_never_opens_a_socket() {
     // a policy one, and the cheapest way to keep it structural is to assert that nothing in the
     // crate reaches for a network API.
     for (name, source) in sources() {
-        for forbidden in ["TcpListener", "TcpStream", "UdpSocket", "reqwest", "hyper::"] {
+        for forbidden in [
+            "TcpListener",
+            "TcpStream",
+            "UdpSocket",
+            "reqwest",
+            "hyper::",
+        ] {
             assert!(
                 !source.contains(forbidden),
                 "{name} names `{forbidden}`; this server has no network socket and M1/M3 are \

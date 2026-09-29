@@ -47,7 +47,9 @@ use crate::tools::ToolAnswer;
 /// Build the whole index, or refresh named files.
 pub fn index(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAnswer, ToolError> {
     let args = Args::new("index", arguments, crate::tool::hints_for("index"))?;
-    let mode = args.optional_string("mode")?.unwrap_or_else(|| "full".to_owned());
+    let mode = args
+        .optional_string("mode")?
+        .unwrap_or_else(|| "full".to_owned());
     let paths = args.optional_string_array("paths")?;
     args.finish(&["mode", "paths"])?;
 
@@ -84,41 +86,35 @@ pub fn index(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAns
     session.refuse_if_watching("a full build")?;
     let root = session.root().to_path_buf();
     let mut store = session.writer()?;
-    let outcome = indexer::build_full(&mut store, &root, DiscoveryOptions::default()).map_err(
-        |error| {
+    let outcome =
+        indexer::build_full(&mut store, &root, DiscoveryOptions::default()).map_err(|error| {
             ToolError::failed(format!(
                 "the index for {} could not be built: {error}",
                 root.display()
             ))
-        },
-    )?;
+        })?;
     let view = IndexReportView::of(&outcome);
     session.log(&format!("index: {}", view.summary));
-    Ok(ToolAnswer::new(view.render(), index_body(&view, &Verdict::ok())))
+    Ok(ToolAnswer::new(
+        view.render(),
+        index_body(&view, &Verdict::ok()),
+    ))
 }
 
 /// Re-extract and re-resolve the named files.
 fn refresh(session: &mut Session, paths: &[String]) -> Result<ToolAnswer, ToolError> {
     session.refuse_if_watching("a refresh")?;
     let root = session.root().to_path_buf();
-    let absolute: Vec<PathBuf> = paths
-        .iter()
-        .map(|path| root.join(path))
-        .collect();
+    let absolute: Vec<PathBuf> = paths.iter().map(|path| root.join(path)).collect();
     let mut store = session.writer()?;
-    let outcome = indexer::refresh(
-        &mut store,
-        &root,
-        &absolute,
-        &DiscoveryOptions::default(),
-    )
-    .map_err(|error| {
-        ToolError::failed(format!(
-            "the refresh of {} path(s) under {} could not be applied: {error}",
-            paths.len(),
-            root.display()
-        ))
-    })?;
+    let outcome = indexer::refresh(&mut store, &root, &absolute, &DiscoveryOptions::default())
+        .map_err(|error| {
+            ToolError::failed(format!(
+                "the refresh of {} path(s) under {} could not be applied: {error}",
+                paths.len(),
+                root.display()
+            ))
+        })?;
     let view = IndexReportView::of(&outcome);
     session.log(&format!("refresh: {}", view.summary));
     Ok(ToolAnswer::new(

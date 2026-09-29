@@ -324,7 +324,8 @@ fn dispatch<W: Write>(
                     if let Some(id) = params.get("requestId") {
                         session.cancel(id);
                     } else {
-                        session.log("a cancellation arrived with no requestId, so it names nothing");
+                        session
+                            .log("a cancellation arrived with no requestId, so it names nothing");
                     }
                 }
                 other => session.log(&format!(
@@ -432,16 +433,18 @@ fn call<W: Write>(
     } = answer;
     output.send_result(
         id,
-        serde_json::to_value(protocol::CallToolResult::answered(text, structured, is_error))
-            .unwrap_or_else(|error| {
-                json!({
-                    "content": [{
-                        "type": "text",
-                        "text": format!("the answer could not be encoded: {error}"),
-                    }],
-                    "isError": true
-                })
-            }),
+        serde_json::to_value(protocol::CallToolResult::answered(
+            text, structured, is_error,
+        ))
+        .unwrap_or_else(|error| {
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("the answer could not be encoded: {error}"),
+                }],
+                "isError": true
+            })
+        }),
     )
 }
 

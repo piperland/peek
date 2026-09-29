@@ -63,8 +63,7 @@ fn a_cancelled_request_id_can_be_reused_by_the_client() {
         "the first request is the one that was cancelled, so refusing it is right: {replies:?}"
     );
     assert_eq!(
-        replies[1]["id"],
-        7,
+        replies[1]["id"], 7,
         "the reply belongs to the request that asked for it"
     );
     assert!(
@@ -164,13 +163,11 @@ fn an_oversized_request_is_answered_on_the_id_it_carried() {
     assert_eq!(replies.len(), 2, "{replies:?}");
     let refusal = &replies[0];
     assert_eq!(
-        refusal["error"]["code"],
-        -32600,
+        refusal["error"]["code"], -32600,
         "an over-long line is an invalid request: {refusal}"
     );
     assert_eq!(
-        refusal["id"],
-        42,
+        refusal["id"], 42,
         "the refusal is owed to the request that was refused. Answering with a null id leaves the \
          client waiting for a reply to 42 that is never coming: {refusal}"
     );

@@ -66,8 +66,7 @@ impl Tool {
     /// The schema as a string, for a caller that wants to read it.
     #[must_use]
     pub fn schema_text(&self) -> String {
-        serde_json::to_string_pretty(&self.input_schema)
-            .unwrap_or_else(|_| "{}".to_owned())
+        serde_json::to_string_pretty(&self.input_schema).unwrap_or_else(|_| "{}".to_owned())
     }
 }
 
@@ -182,27 +181,21 @@ pub fn hints_for(tool: &str) -> &'static [(&'static str, &'static str)] {
                  no other limit",
             ),
         ],
-        "doctor" => &[
-            (
-                "target",
-                "`doctor` diagnoses the whole index, not one target; ask about a target with \
+        "doctor" => &[(
+            "target",
+            "`doctor` diagnoses the whole index, not one target; ask about a target with \
                  `context` or `explain`",
-            ),
-        ],
-        "watch_start" => &[
-            (
-                "target",
-                "`watch_start` watches the whole repository; to refresh specific files once, call \
+        )],
+        "watch_start" => &[(
+            "target",
+            "`watch_start` watches the whole repository; to refresh specific files once, call \
                  `index` with `mode` set to `refresh`",
-            ),
-        ],
-        "watch_stop" => &[
-            (
-                "target",
-                "`watch_stop` stops the running watch; it takes the `watch_id` that \
+        )],
+        "watch_stop" => &[(
+            "target",
+            "`watch_stop` stops the running watch; it takes the `watch_id` that \
                  `watch_start` returned",
-            ),
-        ],
+        )],
         _ => &[],
     }
 }
@@ -301,9 +294,11 @@ context: it is not budgeted and a highly connected declaration will produce a lo
             vec![
                 (
                     "target",
-                    required_string("A repository path, a qualified name such as `Type.method`, or a \
+                    required_string(
+                        "A repository path, a qualified name such as `Type.method`, or a \
                                     bare name. Looked up in that order; an ambiguous name returns \
-                                    every candidate rather than picking one."),
+                                    every candidate rather than picking one.",
+                    ),
                 ),
                 (
                     "chain_depth",
@@ -352,8 +347,10 @@ declaration itself — this returns identities and edges, not source.",
         input_schema: walk_schema(
             vec![(
                 "target",
-                required_string("A repository path, a qualified name such as `Type.method`, or a \
-                                bare name."),
+                required_string(
+                    "A repository path, a qualified name such as `Type.method`, or a \
+                                bare name.",
+                ),
             )],
             true,
         ),
@@ -378,8 +375,10 @@ anyone can act on.",
         input_schema: walk_schema(
             vec![(
                 "target",
-                required_string("A repository path, a qualified name such as `Type.method`, or a \
-                                bare name."),
+                required_string(
+                    "A repository path, a qualified name such as `Type.method`, or a \
+                                bare name.",
+                ),
             )],
             true,
         ),
@@ -409,8 +408,10 @@ returns identities and edges, not source.",
             vec![
                 (
                     "target",
-                    required_string("A repository path, a qualified name such as `Type.method`, or a \
-                                    bare name."),
+                    required_string(
+                        "A repository path, a qualified name such as `Type.method`, or a \
+                                    bare name.",
+                    ),
                 ),
                 (
                     "depth",
@@ -461,8 +462,10 @@ it without a budget: the number is required, and refusing to guess one is the po
             vec![
                 (
                     "target",
-                    required_string("A repository path, a qualified name such as `Type.method`, or a \
-                                    bare name."),
+                    required_string(
+                        "A repository path, a qualified name such as `Type.method`, or a \
+                                    bare name.",
+                    ),
                 ),
                 (
                     "budget_tokens",

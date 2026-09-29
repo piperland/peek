@@ -334,7 +334,9 @@ impl SharedState {
 /// server. What is behind it is two `Option`s that are only ever replaced wholesale, so a stale
 /// read cannot produce a half-written state.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// What the watcher thread counts.

@@ -35,9 +35,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use peek_mcp::Session;
+use peek_mcp::StderrLog;
 use peek_mcp::server::serve;
 use peek_mcp::writer::ProtocolWriter;
-use peek_mcp::StderrLog;
 
 const USAGE: &str = "\
 peek-mcp — the Peek MCP server, over stdio

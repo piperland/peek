@@ -78,8 +78,8 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(label: &str) -> Self {
-        let path = std::env::temp_dir()
-            .join(format!("peek-mcp-fixture-{label}-{}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("peek-mcp-fixture-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create a temporary repository");
         Self(path)
@@ -367,7 +367,9 @@ fn a_full_build_names_every_file_it_refused_to_index() {
     let built = call(&mut session, "index", json!({ "mode": "full" }));
     let report = &built["report"];
     assert!(
-        report["files_skipped"].as_u64().is_some_and(|count| count > 0),
+        report["files_skipped"]
+            .as_u64()
+            .is_some_and(|count| count > 0),
         "a file that cannot be decoded is counted as skipped: {report}"
     );
     assert!(
@@ -380,7 +382,11 @@ fn a_full_build_names_every_file_it_refused_to_index() {
         .as_array()
         .expect("an array")
         .iter()
-        .any(|file| file["path"].as_str().is_some_and(|p| p.contains("broken.rs")));
+        .any(|file| {
+            file["path"]
+                .as_str()
+                .is_some_and(|p| p.contains("broken.rs"))
+        });
     let named_in_text = built["text"]
         .as_str()
         .is_some_and(|text| text.contains("broken.rs"));
@@ -406,7 +412,9 @@ fn index_status_reports_where_the_index_is_and_never_inside_the_repository() {
     );
     assert_eq!(status["states_partition"], json!(true));
     assert!(
-        status["stats"]["entity_count"].as_u64().is_some_and(|count| count > 0),
+        status["stats"]["entity_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0),
         "a real index holds entities: {status}"
     );
     assert_eq!(status["durability"], json!("FULL"));
@@ -430,7 +438,10 @@ fn index_status_says_an_unchanged_handle_is_current() {
         first["recorded_generation"], first["opened_at_generation"],
         "and the index records what the handle was opened at, because nothing has: {first}"
     );
-    assert_eq!(second, first, "and nothing changed between the two: {second}");
+    assert_eq!(
+        second, first,
+        "and nothing changed between the two: {second}"
+    );
 }
 
 #[test]
@@ -464,18 +475,20 @@ pub fn decorate() -> u32 {
         "index",
         json!({ "mode": "refresh", "paths": ["src/ui.rs"] }),
     );
-    assert_eq!(refreshed["outcome"], json!("ok"), "the refresh applied: {refreshed}");
+    assert_eq!(
+        refreshed["outcome"],
+        json!("ok"),
+        "the refresh applied: {refreshed}"
+    );
 
     let after = call(&mut fixture.session, "index_status", json!({}));
     assert_eq!(
-        after["opened_at_generation"],
-        before["opened_at_generation"],
+        after["opened_at_generation"], before["opened_at_generation"],
         "the handle is still the one this session opened, and it still reports what it was opened \
          at: {after}"
     );
     assert_eq!(
-        after["recorded_generation"],
-        refreshed["report"]["generation"],
+        after["recorded_generation"], refreshed["report"]["generation"],
         "the index records the generation the refresh committed: {after}"
     );
     assert_eq!(
@@ -489,7 +502,13 @@ pub fn decorate() -> u32 {
 #[test]
 fn a_query_tool_on_an_unindexed_repository_says_not_indexed_and_creates_nothing() {
     let mut fixture = unindexed("not-indexed");
-    for name in ["index_status", "explain", "callers", "callees", "dependents"] {
+    for name in [
+        "index_status",
+        "explain",
+        "callers",
+        "callees",
+        "dependents",
+    ] {
         let mut arguments = json!({});
         if name != "index_status" {
             arguments["target"] = json!("process");
@@ -614,7 +633,11 @@ pub fn decorate() -> u32 {
         "dependents",
         json!({ "target": "decorate", "depth": 1 }),
     );
-    assert_eq!(found["outcome"], json!("ok"), "the added function is indexed: {found}");
+    assert_eq!(
+        found["outcome"],
+        json!("ok"),
+        "the added function is indexed: {found}"
+    );
 
     std::fs::remove_file(fixture.root.path().join("src/ui.rs")).expect("delete one file");
     let removed = call(
@@ -674,7 +697,10 @@ fn full_mode_with_paths_is_refused_rather_than_ignoring_them() {
         error.verdict_reason
     );
     assert!(
-        error.advice.as_deref().is_some_and(|a| a.contains("refresh")),
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|a| a.contains("refresh")),
         "the advice names the mode that would do what was wanted: {:?}",
         error.advice
     );
@@ -700,7 +726,9 @@ fn an_unknown_mode_is_refused_with_both_modes_named() {
 fn doctor_runs_every_check_and_reports_the_measurement_behind_each_one() {
     let mut fixture = indexed("doctor-healthy");
     let diagnosis = call(&mut fixture.session, "doctor", json!({}));
-    let findings = diagnosis["findings"].as_array().expect("an array of findings");
+    let findings = diagnosis["findings"]
+        .as_array()
+        .expect("an array of findings");
     assert!(
         findings.len() >= 8,
         "doctor has twelve checks and must run them rather than skip the ones it dislikes: \
@@ -714,7 +742,9 @@ fn doctor_runs_every_check_and_reports_the_measurement_behind_each_one() {
             "`{check}` has a severity this build does not define: {severity}"
         );
         assert!(
-            finding["detail"].as_str().is_some_and(|text| !text.is_empty()),
+            finding["detail"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()),
             "`{check}` must state the measurement it was derived from even on a pass: {finding}"
         );
         assert!(
@@ -774,10 +804,7 @@ fn doctor_serialises_its_vocabulary_as_the_words_the_engine_prints() {
         let check = finding["check"].as_str().expect("a named check");
         let severity = finding["severity"].as_str().expect("a severity");
         assert!(
-            !check.is_empty()
-                && check
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c == '_'),
+            !check.is_empty() && check.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
             "`{check}` is a machine-readable name, and this is what one looks like"
         );
         assert!(
@@ -788,7 +815,12 @@ fn doctor_serialises_its_vocabulary_as_the_words_the_engine_prints() {
             seen.push(check);
         }
     }
-    for expected in ["index_openable", "integrity", "schema_version", "durability"] {
+    for expected in [
+        "index_openable",
+        "integrity",
+        "schema_version",
+        "durability",
+    ] {
         assert!(
             seen.contains(&expected),
             "the `{expected}` check ran, and its name is the one the engine prints: {seen:?}"
@@ -796,7 +828,9 @@ fn doctor_serialises_its_vocabulary_as_the_words_the_engine_prints() {
     }
     let worst = first["worst"].as_str().expect("a worst severity");
     assert!(
-        first["counts"][worst].as_u64().is_some_and(|count| count > 0),
+        first["counts"][worst]
+            .as_u64()
+            .is_some_and(|count| count > 0),
         "and the count for the worst severity is not zero, so it was actually observed: {first}"
     );
 }
@@ -804,10 +838,17 @@ fn doctor_serialises_its_vocabulary_as_the_words_the_engine_prints() {
 #[test]
 fn doctor_refuses_an_argument_it_does_not_take() {
     let mut fixture = indexed("doctor-argument");
-    let error = refuse(&mut fixture.session, "doctor", json!({ "target": "process" }));
+    let error = refuse(
+        &mut fixture.session,
+        "doctor",
+        json!({ "target": "process" }),
+    );
     assert_eq!(error.outcome, Outcome::Refused);
     assert!(
-        error.advice.as_deref().is_some_and(|a| a.contains("context")),
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|a| a.contains("context")),
         "the advice names a tool that does take a target: {:?}",
         error.advice
     );
@@ -839,11 +880,15 @@ fn an_ambiguous_target_returns_candidates_rather_than_picking_one() {
         );
         for candidate in candidates {
             assert!(
-                candidate["path"].as_str().is_some_and(|p| p.ends_with(".rs")),
+                candidate["path"]
+                    .as_str()
+                    .is_some_and(|p| p.ends_with(".rs")),
                 "a candidate says which file it is in, or the caller cannot choose: {candidate}"
             );
             assert!(
-                candidate["start_line"].as_u64().is_some_and(|line| line > 0),
+                candidate["start_line"]
+                    .as_u64()
+                    .is_some_and(|line| line > 0),
                 "a candidate says where to open it: {candidate}"
             );
             assert!(
@@ -851,12 +896,17 @@ fn an_ambiguous_target_returns_candidates_rather_than_picking_one() {
                 "the identity is carried so the caller can pass it straight back: {candidate}"
             );
             assert!(
-                candidate["kind"].as_str().is_some_and(|kind| !kind.is_empty()),
+                candidate["kind"]
+                    .as_str()
+                    .is_some_and(|kind| !kind.is_empty()),
                 "and what kind of declaration it is: {candidate}"
             );
         }
         assert!(
-            error.advice.as_deref().is_some_and(|a| a.contains("target")),
+            error
+                .advice
+                .as_deref()
+                .is_some_and(|a| a.contains("target")),
             "`{name}` says how to ask again: {:?}",
             error.advice
         );
@@ -867,7 +917,11 @@ fn an_ambiguous_target_returns_candidates_rather_than_picking_one() {
 fn an_unknown_target_names_which_of_the_three_lookups_missed() {
     let mut fixture = indexed("unknown-target");
     for name in ["explain", "callers", "callees", "dependents"] {
-        let error = refuse(&mut fixture.session, name, json!({ "target": "no_such_symbol" }));
+        let error = refuse(
+            &mut fixture.session,
+            name,
+            json!({ "target": "no_such_symbol" }),
+        );
         assert_eq!(
             error.outcome,
             Outcome::UnknownTarget,
@@ -898,17 +952,27 @@ fn an_ambiguous_edge_reaches_the_caller_with_its_candidate_list() {
     // D-0009: an ambiguous edge presented as fact is worse than no edge, because the consumer
     // cannot tell a guess from a proof.
     let mut fixture = indexed("ambiguous-edge");
-    let explained = call(&mut fixture.session, "explain", json!({ "target": "process" }));
+    let explained = call(
+        &mut fixture.session,
+        "explain",
+        json!({ "target": "process" }),
+    );
     let ambiguous = explained["uncertain"]
         .as_array()
         .expect("an array")
         .iter()
         .find(|edge| edge["relation"]["resolution"]["state"] == json!("ambiguous"))
-        .unwrap_or_else(|| panic!("the planted ambiguity must survive into the answer: {explained}"));
+        .unwrap_or_else(|| {
+            panic!("the planted ambiguity must survive into the answer: {explained}")
+        });
     let candidates = ambiguous["relation"]["resolution"]["candidates"]
         .as_array()
         .expect("an ambiguous edge carries its candidates in the relation itself");
-    assert_eq!(candidates.len(), 2, "both candidates are present: {ambiguous}");
+    assert_eq!(
+        candidates.len(),
+        2,
+        "both candidates are present: {ambiguous}"
+    );
     assert!(
         ambiguous["state"]
             .as_str()
@@ -929,7 +993,11 @@ fn an_ambiguous_edge_reaches_the_caller_with_its_candidate_list() {
 #[test]
 fn an_unresolved_edge_reaches_the_caller_with_its_reason() {
     let mut fixture = indexed("unresolved-edge");
-    let explained = call(&mut fixture.session, "explain", json!({ "target": "process" }));
+    let explained = call(
+        &mut fixture.session,
+        "explain",
+        json!({ "target": "process" }),
+    );
     let unresolved = explained["uncertain"]
         .as_array()
         .expect("an array")
@@ -961,9 +1029,16 @@ fn an_unresolved_edge_reaches_the_caller_with_its_reason() {
 #[test]
 fn explain_lists_every_edge_at_the_target_with_its_state_and_span() {
     let mut fixture = indexed("explain-edges");
-    let explained = call(&mut fixture.session, "explain", json!({ "target": "process" }));
+    let explained = call(
+        &mut fixture.session,
+        "explain",
+        json!({ "target": "process" }),
+    );
     let edges = explained["edges"].as_array().expect("an array");
-    assert!(!edges.is_empty(), "the fixture's target has edges: {explained}");
+    assert!(
+        !edges.is_empty(),
+        "the fixture's target has edges: {explained}"
+    );
     for edge in edges {
         assert!(
             edge["state"].as_str().is_some_and(|text| !text.is_empty()),
@@ -1005,7 +1080,11 @@ fn explain_carries_the_evidence_of_a_proven_edge_and_no_invented_basis() {
     // D-0003: a call resolved by an import binding and one resolved by a globally unique name must
     // be distinguishable. The predecessor's constant `Edge.reason` made them byte-identical.
     let mut fixture = indexed("explain-evidence");
-    let explained = call(&mut fixture.session, "explain", json!({ "target": "handler" }));
+    let explained = call(
+        &mut fixture.session,
+        "explain",
+        json!({ "target": "handler" }),
+    );
     let proven = explained["edges"]
         .as_array()
         .expect("an array")
@@ -1047,7 +1126,10 @@ fn explain_refuses_a_budget_and_names_the_tool_that_takes_one() {
         json!({ "target": "process", "budget_tokens": 4000 }),
     );
     assert!(
-        error.advice.as_deref().is_some_and(|a| a.contains("context")),
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|a| a.contains("context")),
         "an unbounded answer is not what a budgeted answer is for: {:?}",
         error.advice
     );
@@ -1060,10 +1142,17 @@ fn explain_refuses_a_budget_and_names_the_tool_that_takes_one() {
 #[test]
 fn callers_returns_what_depends_on_the_target_at_distance_one() {
     let mut fixture = indexed("callers-one-hop");
-    let walk = call(&mut fixture.session, "callers", json!({ "target": "settle" }));
+    let walk = call(
+        &mut fixture.session,
+        "callers",
+        json!({ "target": "settle" }),
+    );
     assert_eq!(walk["outcome"], json!("ok"));
     let steps = walk["steps"].as_array().expect("an array");
-    assert!(!steps.is_empty(), "the fixture's `settle` has callers: {walk}");
+    assert!(
+        !steps.is_empty(),
+        "the fixture's `settle` has callers: {walk}"
+    );
     for step in steps {
         assert_eq!(
             step["distance"].as_u64(),
@@ -1071,7 +1160,11 @@ fn callers_returns_what_depends_on_the_target_at_distance_one() {
             "`callers` is one hop by definition: {step}"
         );
     }
-    assert_eq!(walk["request"]["depth"], json!(1), "the request is echoed: {walk}");
+    assert_eq!(
+        walk["request"]["depth"],
+        json!(1),
+        "the request is echoed: {walk}"
+    );
     assert_eq!(walk["request"]["direction"], json!("inbound"));
     assert!(
         steps
@@ -1094,7 +1187,11 @@ fn callers_returns_what_depends_on_the_target_at_distance_one() {
 #[test]
 fn callees_returns_what_the_target_uses() {
     let mut fixture = indexed("callees-one-hop");
-    let walk = call(&mut fixture.session, "callees", json!({ "target": "process" }));
+    let walk = call(
+        &mut fixture.session,
+        "callees",
+        json!({ "target": "process" }),
+    );
     let steps = walk["steps"].as_array().expect("an array");
     assert!(
         steps
@@ -1191,7 +1288,9 @@ fn a_walk_reports_whether_a_limit_stopped_it() {
         "the entities expanded are reported: {walk}"
     );
     assert!(
-        walk["headline"].as_str().is_some_and(|text| text.contains("relation(s) read")),
+        walk["headline"]
+            .as_str()
+            .is_some_and(|text| text.contains("relation(s) read")),
         "and the headline says how much was read: {walk}"
     );
 }
@@ -1199,7 +1298,11 @@ fn a_walk_reports_whether_a_limit_stopped_it() {
 #[test]
 fn a_walk_step_carries_the_whole_relation_it_arrived_on() {
     let mut fixture = indexed("walk-relation");
-    let walk = call(&mut fixture.session, "callers", json!({ "target": "settle" }));
+    let walk = call(
+        &mut fixture.session,
+        "callers",
+        json!({ "target": "settle" }),
+    );
     for step in walk["steps"].as_array().expect("an array") {
         let relation = &step["via"];
         for key in ["kind", "source", "target_name", "span", "resolution"] {
@@ -1209,7 +1312,9 @@ fn a_walk_step_carries_the_whole_relation_it_arrived_on() {
             );
         }
         assert!(
-            step["declaration"]["path"].as_str().is_some_and(|p| p.ends_with(".rs")),
+            step["declaration"]["path"]
+                .as_str()
+                .is_some_and(|p| p.ends_with(".rs")),
             "a step says which file to open, or an identity is not an answer: {step}"
         );
         assert!(
@@ -1217,7 +1322,9 @@ fn a_walk_step_carries_the_whole_relation_it_arrived_on() {
             "a step says which line: {step}"
         );
         assert!(
-            step["declaration"]["qualified_name"].as_str().is_some_and(|n| !n.is_empty()),
+            step["declaration"]["qualified_name"]
+                .as_str()
+                .is_some_and(|n| !n.is_empty()),
             "a step says what it is: {step}"
         );
     }
@@ -1267,7 +1374,10 @@ fn callers_and_callees_refuse_a_depth_and_name_dependents() {
         );
         assert_eq!(error.outcome, Outcome::Refused);
         assert!(
-            error.advice.as_deref().is_some_and(|a| a.contains("dependents")),
+            error
+                .advice
+                .as_deref()
+                .is_some_and(|a| a.contains("dependents")),
             "`{name}` must say which tool takes a depth rather than silently ignoring one: {:?}",
             error.advice
         );
@@ -1277,7 +1387,11 @@ fn callers_and_callees_refuse_a_depth_and_name_dependents() {
 #[test]
 fn a_walk_can_be_told_not_to_follow_inferred_edges() {
     let mut fixture = indexed("walk-no-inferred");
-    let with = call(&mut fixture.session, "callers", json!({ "target": "settle" }));
+    let with = call(
+        &mut fixture.session,
+        "callers",
+        json!({ "target": "settle" }),
+    );
     let without = call(
         &mut fixture.session,
         "callers",
@@ -1301,7 +1415,9 @@ fn a_walk_can_be_told_not_to_follow_inferred_edges() {
 
 /// The smallest budget the compiler will accept, read from the engine.
 fn floor(session: &mut Session) -> u64 {
-    session.minimum_budget().expect("an indexed repository has a floor")
+    session
+        .minimum_budget()
+        .expect("an indexed repository has a floor")
 }
 
 /// A budget `multiple` times the floor.
@@ -1326,7 +1442,10 @@ fn a_context_pack_costs_no_more_than_the_budget_at_every_budget_tried() {
         let requested = report["requested_tokens"].as_u64().expect("a count");
         let spent = report["spent_tokens"].as_u64().expect("a count");
         let expected = floor(&mut fixture.session) * multiple;
-        assert_eq!(requested, expected, "the pack reports the budget it was given");
+        assert_eq!(
+            requested, expected,
+            "the pack reports the budget it was given"
+        );
         assert!(
             spent <= requested,
             "at a budget of {requested} the pack cost {spent}; the budget is a ceiling, not a target"
@@ -1417,7 +1536,10 @@ fn a_reduced_pack_names_what_it_dropped_and_what_it_would_have_cost() {
         "some budget between the floor and a roomy one must reduce the pack rather than complete it",
     );
     let omissions = pack["pack"]["omitted"].as_array().expect("an array");
-    assert!(!omissions.is_empty(), "a reduced pack has omissions: {pack}");
+    assert!(
+        !omissions.is_empty(),
+        "a reduced pack has omissions: {pack}"
+    );
     for omission in omissions {
         for key in ["subject", "what", "reason", "cost"] {
             assert!(
@@ -1476,7 +1598,10 @@ fn a_budget_below_the_floor_is_refused_with_the_minimum_rather_than_exceeded() {
         "the refusal names the smallest budget that would have been accepted, as a number"
     );
     assert!(
-        error.advice.as_deref().is_some_and(|a| a.contains(&floor.to_string())),
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|a| a.contains(&floor.to_string())),
         "the advice quotes it too, for a caller that reads the sentence: {:?}",
         error.advice
     );
@@ -1552,13 +1677,16 @@ fn a_pack_too_small_for_the_target_itself_is_a_refusal_not_a_slice() {
     assert!(
         pack["pack"]["budget"]["spent_tokens"]
             .as_u64()
-            .is_some_and(|spent| spent <= pack["pack"]["budget"]["requested_tokens"]
-                .as_u64()
-                .unwrap_or(0)),
+            .is_some_and(|spent| spent
+                <= pack["pack"]["budget"]["requested_tokens"]
+                    .as_u64()
+                    .unwrap_or(0)),
         "even a refusal costs no more than the budget it was given: {pack}"
     );
     assert!(
-        pack["reason"].as_str().is_some_and(|text| text.contains("refusal")),
+        pack["reason"]
+            .as_str()
+            .is_some_and(|text| text.contains("refusal")),
         "and it says that it is one: {pack}"
     );
 }
@@ -1567,7 +1695,11 @@ fn a_pack_too_small_for_the_target_itself_is_a_refusal_not_a_slice() {
 fn a_complete_pack_says_the_neighbourhood_was_exhausted() {
     let mut fixture = indexed("context-complete");
     let pack = budgeted(&mut fixture.session, "process", 400);
-    assert_eq!(pack["outcome"], json!("ok"), "a roomy budget completes: {pack}");
+    assert_eq!(
+        pack["outcome"],
+        json!("ok"),
+        "a roomy budget completes: {pack}"
+    );
     assert_eq!(
         pack["pack"]["omitted"].as_array().map(Vec::len),
         Some(0),
@@ -1592,7 +1724,9 @@ fn a_pack_carries_the_engines_own_budget_arithmetic_unchanged() {
     let pack = budgeted(&mut fixture.session, "process", 400);
     let units = pack["pack"]["unit_cost"]["tokens"].as_u64();
     let edges = pack["pack"]["edge_cost"]["tokens"].as_u64();
-    let spent = pack["pack"]["budget"]["spent_tokens"].as_u64().expect("a count");
+    let spent = pack["pack"]["budget"]["spent_tokens"]
+        .as_u64()
+        .expect("a count");
     // The engine does not serialise those two helpers, so the sum is taken from the parts the pack
     // does carry — which is the point: a caller can add the pack up itself.
     let summed: u64 = pack["pack"]["units"]
@@ -1611,7 +1745,9 @@ fn a_pack_carries_the_engines_own_budget_arithmetic_unchanged() {
     );
     let _ = (units, edges);
     assert!(
-        pack["pack"]["budget"]["counter"]["chars_per_token"].as_u64().is_some(),
+        pack["pack"]["budget"]["counter"]["chars_per_token"]
+            .as_u64()
+            .is_some(),
         "the counting rule travels with the pack, so the arithmetic can be reproduced: {pack}"
     );
     assert!(
@@ -1677,7 +1813,9 @@ fn every_edge_in_a_pack_carries_its_resolution_state_and_its_candidates() {
         "and names what it is ambiguous between: {pack}"
     );
     assert!(
-        pack["uncertain_edges"].as_u64().is_some_and(|count| count > 0),
+        pack["uncertain_edges"]
+            .as_u64()
+            .is_some_and(|count| count > 0),
         "and the pack counts the edges the engine could not decide: {pack}"
     );
 }
@@ -1691,7 +1829,10 @@ fn context_refuses_an_argument_it_does_not_take_and_names_the_right_tool() {
         json!({ "target": "process", "budget_tokens": 1000, "depth": 2 }),
     );
     assert!(
-        error.advice.as_deref().is_some_and(|a| a.contains("dependents")),
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|a| a.contains("dependents")),
         "a depth is a traversal parameter, not a context one: {:?}",
         error.advice
     );
@@ -1714,7 +1855,10 @@ fn two_identical_calls_against_an_unchanged_index_return_the_same_bytes() {
         ("callers", json!({ "target": "settle" })),
         ("callees", json!({ "target": "process" })),
         ("dependents", json!({ "target": "settle", "depth": 2 })),
-        ("context", json!({ "target": "process", "budget_tokens": 20_000 })),
+        (
+            "context",
+            json!({ "target": "process", "budget_tokens": 20_000 }),
+        ),
     ] {
         let first = call(&mut fixture.session, name, arguments.clone());
         let second = call(&mut fixture.session, name, arguments);
@@ -1759,7 +1903,11 @@ fn watch_start_reports_what_it_watches_and_how_to_stop_it_then_stops_cleanly() {
     );
     assert_eq!(started["outcome"], json!("ok"));
     let id = started["watch_id"].as_u64().expect("an id");
-    assert!(started["root"].as_str().is_some_and(|root| !root.is_empty()));
+    assert!(
+        started["root"]
+            .as_str()
+            .is_some_and(|root| !root.is_empty())
+    );
     assert!(
         started["watching"]
             .as_array()
@@ -1778,7 +1926,11 @@ fn watch_start_reports_what_it_watches_and_how_to_stop_it_then_stops_cleanly() {
     );
     assert_eq!(started["state"]["running"], json!(true));
 
-    let stopped = call(&mut fixture.session, "watch_stop", json!({ "watch_id": id }));
+    let stopped = call(
+        &mut fixture.session,
+        "watch_stop",
+        json!({ "watch_id": id }),
+    );
     assert_eq!(stopped["outcome"], json!("ok"));
     assert_eq!(stopped["stopped_cleanly"], json!(true));
     assert_eq!(stopped["watch_id"], json!(id));
@@ -1815,9 +1967,17 @@ fn watch_start_refuses_on_a_repository_with_no_index() {
 #[test]
 fn a_second_watch_is_refused_with_the_id_of_the_running_one() {
     let mut fixture = indexed("watch-twice");
-    let first = call(&mut fixture.session, "watch_start", json!({ "quiet_for_ms": 50 }));
+    let first = call(
+        &mut fixture.session,
+        "watch_start",
+        json!({ "quiet_for_ms": 50 }),
+    );
     let id = first["watch_id"].as_u64().expect("an id");
-    let error = refuse(&mut fixture.session, "watch_start", json!({ "quiet_for_ms": 50 }));
+    let error = refuse(
+        &mut fixture.session,
+        "watch_start",
+        json!({ "quiet_for_ms": 50 }),
+    );
     assert_eq!(error.outcome, Outcome::Refused);
     assert!(
         error.verdict_reason.contains(&id.to_string()),
@@ -1825,11 +1985,18 @@ fn a_second_watch_is_refused_with_the_id_of_the_running_one() {
         error.verdict_reason
     );
     assert!(
-        error.advice.as_deref().is_some_and(|a| a.contains("watch_stop")),
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|a| a.contains("watch_stop")),
         "the advice names the tool that frees it: {:?}",
         error.advice
     );
-    call(&mut fixture.session, "watch_stop", json!({ "watch_id": id }));
+    call(
+        &mut fixture.session,
+        "watch_stop",
+        json!({ "watch_id": id }),
+    );
 }
 
 #[test]
@@ -1837,7 +2004,11 @@ fn a_write_is_refused_while_a_watch_holds_the_writer() {
     // SQLite admits one writer. A second one would either block for the busy timeout or fail, and
     // saying so up front names the cause rather than reporting a timeout.
     let mut fixture = indexed("watch-write");
-    let started = call(&mut fixture.session, "watch_start", json!({ "quiet_for_ms": 50 }));
+    let started = call(
+        &mut fixture.session,
+        "watch_start",
+        json!({ "quiet_for_ms": 50 }),
+    );
     let id = started["watch_id"].as_u64().expect("an id");
     let error = refuse(&mut fixture.session, "index", json!({ "mode": "full" }));
     assert_eq!(error.outcome, Outcome::Refused);
@@ -1847,11 +2018,18 @@ fn a_write_is_refused_while_a_watch_holds_the_writer() {
         error.verdict_reason
     );
     assert!(
-        error.advice.as_deref().is_some_and(|a| a.contains(&id.to_string())),
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|a| a.contains(&id.to_string())),
         "and the watch to stop first: {:?}",
         error.advice
     );
-    call(&mut fixture.session, "watch_stop", json!({ "watch_id": id }));
+    call(
+        &mut fixture.session,
+        "watch_stop",
+        json!({ "watch_id": id }),
+    );
 }
 
 #[test]
@@ -1860,7 +2038,10 @@ fn watch_stop_without_a_watch_is_refused_rather_than_succeeding() {
     let error = refuse(&mut fixture.session, "watch_stop", json!({}));
     assert_eq!(error.outcome, Outcome::Refused);
     assert!(
-        error.advice.as_deref().is_some_and(|a| a.contains("watch_start")),
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|a| a.contains("watch_start")),
         "the refusal names the tool that would make the call meaningful: {:?}",
         error.advice
     );
@@ -1869,32 +2050,59 @@ fn watch_stop_without_a_watch_is_refused_rather_than_succeeding() {
 #[test]
 fn watch_stop_with_the_wrong_id_is_refused_with_the_running_one() {
     let mut fixture = indexed("watch-stop-wrong-id");
-    let started = call(&mut fixture.session, "watch_start", json!({ "quiet_for_ms": 50 }));
+    let started = call(
+        &mut fixture.session,
+        "watch_start",
+        json!({ "quiet_for_ms": 50 }),
+    );
     let id = started["watch_id"].as_u64().expect("an id");
-    let error = refuse(&mut fixture.session, "watch_stop", json!({ "watch_id": id + 41 }));
+    let error = refuse(
+        &mut fixture.session,
+        "watch_stop",
+        json!({ "watch_id": id + 41 }),
+    );
     assert_eq!(error.outcome, Outcome::Refused);
     assert!(
-        error.advice.as_deref().is_some_and(|a| a.contains(&id.to_string())),
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|a| a.contains(&id.to_string())),
         "the refusal names the watch that is running: {:?}",
         error.advice
     );
-    call(&mut fixture.session, "watch_stop", json!({ "watch_id": id }));
+    call(
+        &mut fixture.session,
+        "watch_stop",
+        json!({ "watch_id": id }),
+    );
 }
 
 #[test]
 fn watch_stop_without_an_id_stops_the_running_watch() {
     let mut fixture = indexed("watch-stop-implicit");
-    let started = call(&mut fixture.session, "watch_start", json!({ "quiet_for_ms": 50 }));
+    let started = call(
+        &mut fixture.session,
+        "watch_start",
+        json!({ "quiet_for_ms": 50 }),
+    );
     let id = started["watch_id"].as_u64().expect("an id");
     let stopped = call(&mut fixture.session, "watch_stop", json!({}));
-    assert_eq!(stopped["watch_id"], json!(id), "the running one is stopped: {stopped}");
+    assert_eq!(
+        stopped["watch_id"],
+        json!(id),
+        "the running one is stopped: {stopped}"
+    );
     assert_eq!(stopped["stopped_cleanly"], json!(true));
 }
 
 #[test]
 fn index_status_shows_that_a_watch_is_running() {
     let mut fixture = indexed("watch-status");
-    let started = call(&mut fixture.session, "watch_start", json!({ "quiet_for_ms": 50 }));
+    let started = call(
+        &mut fixture.session,
+        "watch_start",
+        json!({ "quiet_for_ms": 50 }),
+    );
     let id = started["watch_id"].as_u64().expect("an id");
     let status = call(&mut fixture.session, "index_status", json!({}));
     assert_eq!(status["watch"]["id"], json!(id));
@@ -1905,7 +2113,11 @@ fn index_status_shows_that_a_watch_is_running() {
         status["watch"]["last_refresh"].is_null(),
         "nothing has been applied yet: {status}"
     );
-    call(&mut fixture.session, "watch_stop", json!({ "watch_id": id }));
+    call(
+        &mut fixture.session,
+        "watch_stop",
+        json!({ "watch_id": id }),
+    );
     let after = call(&mut fixture.session, "index_status", json!({}));
     assert!(
         after["watch"].is_null(),
@@ -1979,14 +2191,17 @@ pub fn decorate() -> u32 {
                  behind and the tool has to say so: {status}"
             );
             assert!(
-                status["recorded_generation"].as_u64()
-                    > status["opened_at_generation"].as_u64(),
+                status["recorded_generation"].as_u64() > status["opened_at_generation"].as_u64(),
                 "and it is the index that moved on, not the handle: {status}"
             );
             break;
         }
     }
-    let stopped = call(&mut fixture.session, "watch_stop", json!({ "watch_id": id }));
+    let stopped = call(
+        &mut fixture.session,
+        "watch_stop",
+        json!({ "watch_id": id }),
+    );
     assert_eq!(
         stopped["stopped_cleanly"],
         json!(true),
@@ -2005,7 +2220,10 @@ pub fn decorate() -> u32 {
         json!({ "target": "decorate", "depth": 1 }),
     );
     assert!(
-        matches!(found["outcome"].as_str(), Some("ok") | Some("unknown_target")),
+        matches!(
+            found["outcome"].as_str(),
+            Some("ok") | Some("unknown_target")
+        ),
         "the index answers either way, which is what consistency means here: {found}"
     );
 }
@@ -2059,7 +2277,10 @@ fn a_missing_required_argument_names_itself_and_says_what_it_is_for() {
         error.verdict_reason
     );
     assert!(
-        error.advice.as_deref().is_some_and(|a| a.contains("qualified name")),
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|a| a.contains("qualified name")),
         "and says what shape of value it wants: {:?}",
         error.advice
     );

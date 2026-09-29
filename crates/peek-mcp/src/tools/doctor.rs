@@ -48,21 +48,24 @@ pub fn doctor(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAn
     ));
     Ok(ToolAnswer::new(
         diagnosis.report(),
-        body(&diagnosis, &Verdict {
-            outcome: if diagnosis.is_healthy() {
-                Outcome::Ok
-            } else {
-                Outcome::Refused
+        body(
+            &diagnosis,
+            &Verdict {
+                outcome: if diagnosis.is_healthy() {
+                    Outcome::Ok
+                } else {
+                    Outcome::Refused
+                },
+                reason: None,
+                advice: diagnosis.worst_finding().and_then(|finding| {
+                    finding
+                        .action
+                        .as_ref()
+                        .map(|action| format!("{}: {action}", finding.check.as_str()))
+                }),
+                candidates: Vec::new(),
             },
-            reason: None,
-            advice: diagnosis.worst_finding().and_then(|finding| {
-                finding
-                    .action
-                    .as_ref()
-                    .map(|action| format!("{}: {action}", finding.check.as_str()))
-            }),
-            candidates: Vec::new(),
-        }),
+        ),
     ))
 }
 
@@ -134,4 +137,3 @@ fn body(diagnosis: &Diagnosis, verdict: &Verdict) -> Value {
         })
     })
 }
-
