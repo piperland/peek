@@ -43,7 +43,7 @@
 //!
 //! # The tool surface
 //!
-//! Nine tools, and the reasoning for each is in [`tool`]. They are thin by construction:
+//! Ten tools, and the reasoning for each is in [`tool`]. They are thin by construction:
 //!
 //! | Tool | Answers |
 //! |---|---|
