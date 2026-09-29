@@ -304,7 +304,7 @@ fn the_watch_command_refuses_a_repository_with_no_index() {
     let invocation = args::parse(owned).expect("parse");
     // Scoped by the fixture, so the refusal below is about *this* repository and not about
     // whatever the process would otherwise have found cached.
-    let failure = fixture::with_index_root(repository, || {
+    let failure = fixture::with_index_root(&repository, || {
         let mut silent = Silent;
         run_invocation(&invocation, &mut silent).expect_err("must be refused")
     });
