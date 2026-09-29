@@ -173,12 +173,7 @@ fn state_of(relation: &crate::model::Relation) -> String {
 /// choose a rung the same way, and the target is dropped rather than carried, because a pending
 /// row that still names a target is a decided edge wearing a pending hat. The second handle is
 /// closed before this returns, so the next arm opens the index on its own.
-fn decide_under(
-    tree: &TempTree,
-    store: &Store,
-    kind: RelationKind,
-    table: bool,
-) -> Vec<Relation> {
+fn decide_under(tree: &TempTree, store: &Store, kind: RelationKind, table: bool) -> Vec<Relation> {
     let mut scratch = Store::open(&tree.db, store.repo()).expect("a second handle");
     let mut update = crate::store::IndexUpdate::empty();
     for relation in relations_of(store, kind) {
@@ -1687,7 +1682,11 @@ fn a_qualified_call_through_a_type_is_placed_only_by_dropping_the_type_from_the_
 
     assert_eq!(
         call.target,
-        Some(id("crates/alpha/src/gateway.rs", EntityKind::Method, "Service.charge")),
+        Some(id(
+            "crates/alpha/src/gateway.rs",
+            EntityKind::Method,
+            "Service.charge"
+        )),
         "the path reaches the module that declares the type: {}",
         state_of(call)
     );
