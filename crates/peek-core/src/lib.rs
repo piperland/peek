@@ -20,6 +20,7 @@ pub mod indexer;
 pub mod model;
 pub mod resolve;
 pub mod store;
+pub mod watch;
 
 #[cfg(test)]
 mod tests {
