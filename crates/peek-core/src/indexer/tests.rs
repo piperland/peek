@@ -547,7 +547,7 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
         RelationKind::Calls,
         source.clone(),
         "not_yet_resolved",
-        Span::new(0, 10, 1, 0, 1, 9),
+        Span::new(0, 10, 1, 0, 1, 9).expect("a forward span is valid"),
         Evidence::NameOnly,
         "a reference the resolver has not looked at",
     );
