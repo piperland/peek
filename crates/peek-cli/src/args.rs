@@ -628,8 +628,8 @@ where
 
     let Some(spec) = COMMANDS.iter().find(|spec| spec.name == name) else {
         return Err(UsageError::UnknownCommand {
-            name,
             suggestion: suggest(&name),
+            name,
             known: COMMANDS.iter().map(|spec| spec.name).collect(),
         });
     };

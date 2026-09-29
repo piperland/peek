@@ -282,7 +282,7 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
 /// `Store::indexed_paths` exists, and this is a thin translation of its error into the CLI's
 /// `Failure`. `conn` documents itself as "not general-purpose", and a caller that reaches past the
 /// query layer to *read* is a caller that will eventually reach past the write path to *write*.
-
+///
 /// No limit is requested, and that is deliberate: a limit here would mean a repository large
 /// enough to reach it silently keeps its deleted files, which is the exact failure this function
 /// exists to prevent. `Store::indexed_paths` takes a limit because a store does not know its
