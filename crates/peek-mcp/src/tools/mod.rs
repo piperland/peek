@@ -81,9 +81,11 @@ pub fn refusal(tool: &'static str, error: &ToolError) -> ToolAnswer {
     };
     let mut text = format!("{tool} did not answer.\n");
     text.push_str(&format!("outcome: {}\n", error.outcome.as_str()));
-    if let Some(reason) = &error.verdict_reason {
-        text.push_str(&format!("reason: {reason}\n"));
-    }
+    // Unconditional, unlike the two lines below it, because there is no state in which the reason
+    // exists in one and not the other: `ToolError::verdict` puts this same sentence into the
+    // structured body as `reason`. A reason that came and went with the outcome would be a field a
+    // reader had to interpret.
+    text.push_str(&format!("reason: {error.verdict_reason}\n"));
     if let Some(advice) = &error.advice {
         text.push_str(&format!("do this instead: {advice}\n"));
     }
