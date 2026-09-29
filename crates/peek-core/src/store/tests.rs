@@ -1358,7 +1358,7 @@ fn adjacency_filters_by_kind() {
 }
 
 #[test]
-fn wal_and_foreign_keys_are_actually_enabled_not_merely_requested() {
+fn wal_foreign_keys_and_durability_are_actually_enabled_not_merely_requested() {
     // A pragma that silently does not apply is the same defect as a statistic that is invented:
     // the code believes in a guarantee the database is not providing. `synchronous` and
     // `foreign_keys` are per-connection settings, so they are read back from this handle.
@@ -1382,8 +1382,10 @@ fn wal_and_foreign_keys_are_actually_enabled_not_merely_requested() {
         "the schema's foreign keys must be enforced"
     );
     assert_eq!(
-        synchronous, 1,
-        "NORMAL, which is what the design asks for under WAL"
+        synchronous, 2,
+        "FULL, so that a commit which returned success is on disk; NORMAL (1) can lose a \
+         committed transaction on power loss, which would make the statistics `apply_update` \
+         reports untrue for the generation they name"
     );
     store
         .verify()
