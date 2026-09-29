@@ -487,7 +487,7 @@ mod tests {
         let repo = parent.join("repo");
         let sibling = parent.join("repo-old");
         std::fs::create_dir_all(&repo).expect("create the repository");
-        std::fs::create_dir_all(sibling).expect("create the sibling");
+        std::fs::create_dir_all(&sibling).expect("create the sibling");
         let canonical_repo = repo.canonicalize().expect("canonicalise the repository");
         let file = sibling.join("a.rs");
         std::fs::write(&file, "fn a() {}\n").expect("write");
