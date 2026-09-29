@@ -1707,7 +1707,11 @@ fn a_store_opened_weaker_still_reads_and_writes_correctly() {
     let id = repo(&dir);
     let mut store = Store::open_with(&dir.database(), &id, Durability::Normal).expect("open");
     store
-        .apply_update(IndexUpdate::empty().with_entity(bare_entity("src/a.rs", "main")))
+        .apply_update(IndexUpdate::empty().with_entity(bare_entity(
+            "src/a.rs",
+            EntityKind::Function,
+            "main",
+        )))
         .expect("commit");
     assert!(store.generation() >= 1, "a weaker commit still counts");
     store.checkpoint().expect("checkpoint");

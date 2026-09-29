@@ -175,29 +175,47 @@ mod tests {
         }
     }
 
-    /// Run `body` with `PEEK_INDEX_DIR` set to `dir`, restoring the previous value afterwards.
+    /// Run `body` with `PEEK_INDEX_DIR` set to `value`, restoring the previous value afterwards.
     ///
-    /// Environment mutation is process-global and other tests run concurrently, so the guard is
-    /// held across the whole body and every such test takes the same lock. Without that, two
+    /// Environment mutation is process-global and the test binary runs tests concurrently, so
+    /// every mutation in this module goes through here and holds the same lock. Without that, two
     /// tests could disagree about the root and produce a failure that reproduces once in fifty
     /// runs — the worst kind to chase.
-    fn with_index_dir<T>(dir: &Path, body: impl FnOnce() -> T) -> T {
+    ///
+    /// `unsafe` because `set_var` is unsafe in edition 2024. The obligation is that no other
+    /// thread reads or writes the environment for the duration, and that is what the lock buys:
+    /// [`root`] is the only function in this module that reads the environment, and every test
+    /// that calls it goes through this guard.
+    fn with_index_dir_value<T>(value: Option<&std::ffi::OsStr>, body: impl FnOnce() -> T) -> T {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = LOCK.lock().unwrap_or_else(|poisoned| {
-            // A previous test panicked while holding the lock. The environment is restored by
-            // `Drop` on the way out either way, so the lock is safe to take.
+            // A previous test panicked while holding the lock. The environment is restored on the
+            // way out of that test either way, so the lock is safe to take.
             poisoned.into_inner()
         });
         let previous = std::env::var_os(ENV_INDEX_DIR);
-        // SAFETY-adjacent note: this is the only place in the test suite that mutates the
-        // environment, and every mutation is undone before the lock is released.
-        std::env::set_var(ENV_INDEX_DIR, dir);
+        // SAFETY: the lock above is held for the whole body, and `root` is the only reader of this
+        // variable in this module. No other thread can observe a partially-restored environment.
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(ENV_INDEX_DIR, value),
+                None => std::env::remove_var(ENV_INDEX_DIR),
+            }
+        }
         let outcome = body();
-        match previous {
-            Some(value) => std::env::set_var(ENV_INDEX_DIR, value),
-            None => std::env::remove_var(ENV_INDEX_DIR),
+        // SAFETY: as above — still holding the lock, still the only writer.
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var(ENV_INDEX_DIR, value),
+                None => std::env::remove_var(ENV_INDEX_DIR),
+            }
         }
         outcome
+    }
+
+    /// Run `body` with `PEEK_INDEX_DIR` pointing at `dir`.
+    fn with_index_dir<T>(dir: &Path, body: impl FnOnce() -> T) -> T {
+        with_index_dir_value(Some(dir.as_os_str()), body)
     }
 
     fn repo_id(label: &str) -> RepoId {
@@ -294,18 +312,13 @@ mod tests {
         // An empty string is what a shell produces from `--index-dir=` and what a misconfigured
         // service manager often passes. Treating it as a path would put the index in the process's
         // working directory, which is the bug this module exists to prevent.
-        let previous = std::env::var_os(ENV_INDEX_DIR);
-        std::env::set_var(ENV_INDEX_DIR, "");
-        let outcome = root();
-        match previous {
-            Some(value) => std::env::set_var(ENV_INDEX_DIR, value),
-            None => std::env::remove_var(ENV_INDEX_DIR),
-        }
-        let resolved = outcome.expect("an empty override must fall back to the platform default");
-        assert!(
-            !resolved.as_os_str().is_empty(),
-            "the index root must never be the empty path"
-        );
+        with_index_dir_value(Some(std::ffi::OsStr::new("")), || {
+            let resolved = root().expect("an empty override must fall back to the platform default");
+            assert!(
+                !resolved.as_os_str().is_empty(),
+                "the index root must never be the empty path"
+            );
+        });
     }
 
     #[test]
