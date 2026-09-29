@@ -411,7 +411,9 @@ pub mod native {
         /// A batch if the quiet period has elapsed, otherwise `None`.
         pub fn take_batch(&mut self, now: std::time::Instant) -> Option<Batch> {
             let events = self.debouncer.drain_if_quiet(now)?;
-            let plan = plan_batch(&self.root, &events, |path| (self.options.is_indexable)(path));
+            let plan = plan_batch(&self.root, &events, |path| {
+                (self.options.is_indexable)(path)
+            });
             Some(Batch {
                 plan,
                 events: events.len(),
@@ -422,7 +424,9 @@ pub mod native {
         /// process that exits mid-save does not leave those changes out of the index.
         pub fn flush(&mut self) -> Option<Batch> {
             let events = self.debouncer.flush()?;
-            let plan = plan_batch(&self.root, &events, |path| (self.options.is_indexable)(path));
+            let plan = plan_batch(&self.root, &events, |path| {
+                (self.options.is_indexable)(path)
+            });
             Some(Batch {
                 plan,
                 events: events.len(),
