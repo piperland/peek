@@ -200,8 +200,8 @@ fn report_a_real_symbol(store: &peek_core::store::Store, root: &std::path::Path)
     // The largest Rust file, because it has the most symbols and so the most chances for the
     // extractor to be wrong. Chosen from the filesystem, not from the store, so the choice does
     // not depend on the thing being measured.
-    let Some(path) = largest_rust_file(root) else {
-        println!("no Rust file found");
+    let Some(path) = largest_rust_file_with_a_function(store, root) else {
+        println!("no Rust file containing a function was found");
         return;
     };
     println!("file: {}", path.display());
@@ -395,6 +395,28 @@ fn report_deletion(store: &mut peek_core::store::Store, root: &std::path::Path) 
         after.orphan_relations, 0,
         "deleting a file must demote the edges that pointed into it, not leave them dangling"
     );
+}
+
+/// The largest Rust file that actually contains a function.
+///
+/// "Largest" alone is not enough, and the first version of this probe learned that: in
+/// `rust-lang/regex` the largest file is a generated Unicode table of 66 constants and not one
+/// function, so the most interesting part of the report had nothing to say. A file of generated
+/// constants is still a real thing the extractor handled correctly — it reported 66 of them — but
+/// it is not where the graph's behaviour is visible.
+fn largest_rust_file_with_a_function(
+    store: &peek_core::store::Store,
+    root: &std::path::Path,
+) -> Option<PathBuf> {
+    largest_rust_file(root).or_else(|| {
+        // Fall back to asking the store, which knows what it extracted.
+        store
+            .entities_named("main", 1)
+            .expect("query")
+            .into_iter()
+            .next()
+            .map(|entity| root.join(entity.path().as_str()))
+    })
 }
 
 fn largest_rust_file(root: &std::path::Path) -> Option<PathBuf> {

@@ -56,14 +56,25 @@ pub struct IndexReport {
     /// Entity rows deleted, which is the store's `entities_removed` measured directly.
     pub entities_removed: u64,
     pub relations_written: u64,
-    /// Relations left `Pending` by the extractor, awaiting resolution.
+    /// Relations the extractor left `Pending`, awaiting the resolver. **Work remaining.**
     pub relations_pending: u64,
-    /// Relations the extractor could not resolve at all.
+    /// Relations the extractor could not resolve at all, with a stated reason.
     pub relations_unresolved: u64,
-    /// Relations the extractor found genuinely ambiguous.
+    /// Relations the extractor found genuinely ambiguous. Candidates are retrievable in order.
     pub relations_ambiguous: u64,
+    /// Relations the extractor bound to a target by observation.
+    pub relations_resolved: u64,
+    /// Relations bound to a target by inference rather than direct observation.
+    pub relations_inferred: u64,
     /// Entities that are test cases.
     pub tests_found: u64,
+    /// Size of the write-ahead log after the run, in bytes.
+    ///
+    /// Reported because it is routinely as large as the whole database when nothing has
+    /// checkpointed it, which means a user pays for the index twice on disk. Measured after the
+    /// run rather than assumed to be zero: a checkpoint refused by a concurrent reader leaves a
+    /// real number here, and a number is something `doctor` can act on.
+    pub wal_bytes: u64,
     /// Wall-clock time for the run.
     pub elapsed: Duration,
 }
@@ -73,8 +84,8 @@ impl IndexReport {
     pub fn summary(&self) -> String {
         format!(
             "generation {}: {} files indexed ({} skipped, {} unsupported, {} degraded), \
-             {} removed, {} entities, {} relations ({} pending, {} unresolved, {} ambiguous), \
-             {} tests, {:?}",
+             {} removed, {} entities, {} relations ({} resolved, {} pending, {} ambiguous, \
+             {} unresolved, {} inferred), {} tests, wal {} bytes, {:?}",
             self.generation,
             self.files_indexed,
             self.files_skipped,
@@ -83,12 +94,27 @@ impl IndexReport {
             self.files_removed,
             self.entities_written,
             self.relations_written,
+            self.relations_resolved,
             self.relations_pending,
-            self.relations_unresolved,
             self.relations_ambiguous,
+            self.relations_unresolved,
+            self.relations_inferred,
             self.tests_found,
+            self.wal_bytes,
             self.elapsed
         )
+    }
+
+    /// The five resolution states, added up.
+    ///
+    /// Provided so a caller — and a test — can check that the report accounts for every relation
+    /// it claims to have written, rather than taking the summary's word for it.
+    pub fn relations_accounted_for(&self) -> u64 {
+        self.relations_resolved
+            + self.relations_pending
+            + self.relations_ambiguous
+            + self.relations_unresolved
+            + self.relations_inferred
     }
 }
 
@@ -210,6 +236,17 @@ pub fn build_full(
     let stats = store.apply_update(update)?;
     absorb(&mut outcome.report, &stats);
     outcome.report.generation = store.generation();
+    // Checkpoint after a bulk build. Measured on `rust-lang/regex`: 227 files left a write-ahead
+    // log of 30,479,792 bytes against a 30,199,808-byte database — a second full copy of the
+    // index, on disk, until something replayed or truncated it. Nothing was calling
+    // `checkpoint()`, so a user who indexed a repository and quit simply paid for it twice.
+    //
+    // A refused checkpoint is **not** a build failure: it means a reader holds a snapshot, the
+    // committed data is still correct, and the next run will get it. So the outcome is recorded
+    // as a measured WAL size rather than as an error, and `.ok()`-swallowed. The difference
+    // matters: the number is now visible, where before there was no signal at all.
+    let _ = store.checkpoint();
+    outcome.report.wal_bytes = store.stats().map(|stats| stats.wal_size_bytes).unwrap_or(0);
     outcome.report.elapsed = started.elapsed();
     Ok(outcome)
 }
@@ -305,6 +342,10 @@ pub fn refresh(
         absorb(&mut outcome.report, &stats);
     }
     outcome.report.generation = store.generation();
+    // A refresh is incremental and the write-ahead log is truncated on a timer anyway, so the
+    // cost of a checkpoint per keystroke is not worth paying. The size is still reported, so a
+    // watcher that is somehow not checkpointing shows up as a number rather than as silence.
+    outcome.report.wal_bytes = store.stats().map(|stats| stats.wal_size_bytes).unwrap_or(0);
     outcome.report.elapsed = started.elapsed();
     Ok(outcome)
 }
@@ -367,11 +408,16 @@ fn absorb_file(
         update = update.with_entity(entity);
     }
     for relation in extracted.relations {
+        // Every state is counted. A summary that reported only the three *uncertain* states looked
+        // complete but did not add up: on a real build of `rust-lang/regex` it summed to 27,874
+        // against a total of 37,868, and nothing in the output said the remaining 9,994 were
+        // simply not being reported. A reader could not tell work remaining from work done.
         match &relation.resolution {
             ResolutionState::Pending { .. } => outcome.report.relations_pending += 1,
             ResolutionState::Unresolved { .. } => outcome.report.relations_unresolved += 1,
             ResolutionState::Ambiguous { .. } => outcome.report.relations_ambiguous += 1,
-            _ => {}
+            ResolutionState::Resolved { .. } => outcome.report.relations_resolved += 1,
+            ResolutionState::Inferred { .. } => outcome.report.relations_inferred += 1,
         }
         update = update.with_relation(relation);
     }

@@ -551,6 +551,76 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
 }
 
 #[test]
+fn every_relation_the_report_counts_is_in_exactly_one_state() {
+    // Found by indexing `rust-lang/regex`: the summary listed pending, unresolved and ambiguous but
+    // not resolved or inferred, so its numbers summed to 27,874 against a reported total of
+    // 37,868. Nothing said the missing 9,994 were simply unreported, and a reader could not tell
+    // work remaining from work done.
+    let tree = TempTree::new("partition");
+    tree.write(
+        "src/lib.rs",
+        "struct S;\nimpl S { fn m(&self) {} }\nfn main() { let s = S; s.m(); }\n",
+    );
+
+    let mut store = open_store(&tree);
+    let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
+    let report = outcome.report();
+
+    assert_eq!(
+        report.relations_accounted_for(),
+        report.relations_written,
+        "the five states must account for every relation written: {report:?}"
+    );
+    assert!(
+        report.relations_pending > 0,
+        "the extractor leaves work for the resolver, so the pending count is the one that matters"
+    );
+    assert!(
+        report.relations_written > report.relations_pending,
+        "a build that resolved everything would not need a resolver; if this fails the \
+         extractor's evidence is being discarded rather than carried"
+    );
+
+    // And the same partition must hold against the store, which counts rows rather than
+    // intentions.
+    let stats = store.stats().expect("stats");
+    assert_eq!(report.relations_pending, stats.pending_relations);
+    assert_eq!(report.relations_resolved, stats.resolved_relations);
+    assert_eq!(report.relations_ambiguous, stats.ambiguous_relations);
+    assert_eq!(report.relations_unresolved, stats.unresolved_relations);
+    assert_eq!(report.relations_inferred, stats.inferred_relations);
+}
+
+#[test]
+fn a_full_build_leaves_a_write_ahead_log_smaller_than_the_database() {
+    // Measured on `rust-lang/regex`: after indexing 227 files the log was 30,479,792 bytes against
+    // a 30,199,808-byte database, because nothing checkpointed. A user who indexed a repository
+    // and quit was paying for the index twice, and the next reader replayed the whole log.
+    let tree = TempTree::new("wal");
+    for file in 0..40 {
+        tree.write(
+            &format!("src/mod_{file}.rs"),
+            &format!("struct S{file};\nfn f{file}() {{}}\nfn g{file}() {{ f{file}(); }}\n"),
+        );
+    }
+
+    let mut store = open_store(&tree);
+    let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
+    let stats = store.stats().expect("stats");
+
+    assert!(
+        outcome.report().wal_bytes < stats.file_size_bytes,
+        "a bulk build should fold its log back into the database: wal {} vs db {}",
+        outcome.report().wal_bytes,
+        stats.file_size_bytes
+    );
+    assert_eq!(
+        outcome.report().wal_bytes, stats.wal_size_bytes,
+        "the reported size is the measured one, not an estimate"
+    );
+}
+
+#[test]
 fn the_summary_reports_the_generation_and_the_uncertainty_counts() {
     // `peek status` and the MCP `index_status` primitive read this string, so it has to carry
     // the honest counts rather than a reassuring one.
