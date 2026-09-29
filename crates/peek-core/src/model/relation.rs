@@ -466,6 +466,51 @@ impl Relation {
     pub fn is_followable(&self) -> bool {
         self.resolution.is_resolved() && self.target.is_some()
     }
+
+    /// The twelve values that make two records the same relation.
+    ///
+    /// This is the same natural key the store's `UNIQUE` constraint uses, spelled once here so a
+    /// caller de-duplicating relations in memory cannot quietly disagree with the database about
+    /// what "the same relation" means. The disagreement is not hypothetical: the write path
+    /// already had one copy of this list, and a second copy that drifted would make a caller
+    /// believe it had found two relations where the store has one.
+    #[must_use]
+    pub fn natural_key(&self) -> RelationKey {
+        RelationKey {
+            source_path: self.source.path().as_str().to_owned(),
+            source_kind: self.source.kind().as_str().to_owned(),
+            source_qualified_name: self.source.qualified_name().to_owned(),
+            source_ordinal: self.source.ordinal(),
+            kind: self.kind.as_str().to_owned(),
+            target_name: self.target_name.clone(),
+            start_byte: self.span.start_byte,
+            end_byte: self.span.end_byte,
+            start_line: self.span.start_line,
+            start_column: self.span.start_column,
+            end_line: self.span.end_line,
+            end_column: self.span.end_column,
+        }
+    }
+}
+
+/// The identity of a relation: who said it, what they said, to what, and where.
+///
+/// Not `EntityId`, because a relation is not an entity and has no name of its own. Derived rather
+/// than stored, so it cannot disagree with the row it describes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RelationKey {
+    pub source_path: String,
+    pub source_kind: String,
+    pub source_qualified_name: String,
+    pub source_ordinal: u32,
+    pub kind: String,
+    pub target_name: String,
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub start_line: u32,
+    pub start_column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
 }
 
 #[cfg(test)]
@@ -727,6 +772,68 @@ mod tests {
             },
             other => panic!("expected pending, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_natural_key_ignores_the_target_and_the_resolution() {
+        // Two records that agree on the natural key are the same relation however differently
+        // they were resolved, because the store's `UNIQUE` constraint collapses them. A key that
+        // included the target would let a re-resolution insert a *second* row for one relation,
+        // and an index that doubles its edges on every resolve is not an index.
+        let source = id("main");
+        let target = id("helper");
+        let pending = Relation::pending(
+            RelationKind::Calls,
+            source.clone(),
+            "helper",
+            span(),
+            Evidence::NameOnly,
+            "call to `helper`",
+        );
+        let decided = Relation::inferred(
+            RelationKind::Calls,
+            source,
+            target,
+            "helper",
+            span(),
+            Evidence::UniqueName,
+            "the only `helper` indexed",
+        );
+
+        assert_eq!(
+            pending.natural_key(),
+            decided.natural_key(),
+            "a re-decided relation must keep the identity the store already gave it"
+        );
+    }
+
+    #[test]
+    fn the_natural_key_separates_two_relations_from_the_same_source() {
+        // The span is part of the key for a reason: a function that calls `helper` twice is two
+        // references, and collapsing them would halve the call count of every function in the
+        // repository that is called more than once.
+        let source = id("main");
+        let first = Relation::pending(
+            RelationKind::Calls,
+            source.clone(),
+            "helper",
+            Span::new(0, 10, 1, 1, 1, 11).expect("span"),
+            Evidence::NameOnly,
+            "call to `helper`",
+        );
+        let second = Relation::pending(
+            RelationKind::Calls,
+            source,
+            "helper",
+            Span::new(20, 30, 2, 5, 2, 15).expect("span"),
+            Evidence::NameOnly,
+            "call to `helper`",
+        );
+        assert_ne!(
+            first.natural_key(),
+            second.natural_key(),
+            "two calls at different places are two relations"
+        );
     }
 
     #[test]

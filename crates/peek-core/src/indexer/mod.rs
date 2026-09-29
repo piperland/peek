@@ -22,6 +22,7 @@
 //! Removals precede upserts inside one transaction, so a path that is removed and re-added in the
 //! same batch ends up present. That is what lets a refresh replace a whole directory in one commit.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -29,9 +30,17 @@ use crate::discover::{
     DiscoveredFile, DiscoveryOptions, DiscoveryStats, FileDiscovery, WalkIssue, WalkIssueReason,
 };
 use crate::extract::ExtractedFile;
-use crate::model::{Language, RepoPath, ResolutionState};
+use crate::model::{Language, Relation, RelationKey, RepoPath, ResolutionState};
 use crate::resolve::{self, ResolutionOptions, ResolutionReport};
 use crate::store::{IndexUpdate, RepoId, Store, StoreError, UpdateStats, paths};
+
+/// How many entities of one file are read when collecting the edges a refresh is about to
+/// displace, and how many edges each of them may contribute.
+///
+/// A bound, because a file with a thousand callers would otherwise make one refresh read a
+/// thousand rows without limit. It is generous enough that the cap is not reached by ordinary
+/// code, and it is a named constant rather than a literal so that raising it is a visible act.
+const DISPLACED_EDGE_SCAN_LIMIT: usize = 2048;
 
 /// Everything an indexing run produced, including what it could not do.
 ///
@@ -57,7 +66,11 @@ pub struct IndexReport {
     /// Entity rows deleted, which is the store's `entities_removed` measured directly.
     pub entities_removed: u64,
     pub relations_written: u64,
-    /// Relations the extractor left `Pending`, awaiting the resolver. **Work remaining.**
+    /// Relations the extractor left `Pending`, before the resolution pass ran.
+    ///
+    /// The extractor never decides anything, so this is the *input* to resolution rather than a
+    /// result, and the result is [`Self::resolution`]. Reporting the input without the result
+    /// would be a report that says only what work is outstanding.
     pub relations_pending: u64,
     /// Relations the extractor could not resolve at all, with a stated reason.
     pub relations_unresolved: u64,
@@ -91,10 +104,13 @@ pub struct IndexReport {
 impl IndexReport {
     /// A one-line summary for `peek status` and the MCP `index_status` primitive.
     pub fn summary(&self) -> String {
-        let base = format!(
+        // The two passes are separate commits with separate failures, so their results are
+        // reported as separate clauses rather than interleaved. A reader who sees them mixed
+        // cannot tell which stage made a decision.
+        format!(
             "generation {}: {} files indexed ({} skipped, {} unsupported, {} degraded), \
              {} removed, {} entities, {} relations ({} resolved, {} pending, {} ambiguous, \
-             {} unresolved, {} inferred), {} tests, wal {} bytes, {:?}",
+             {} unresolved, {} inferred), {} tests, wal {} bytes{}{}, {:?}",
             self.generation,
             self.files_indexed,
             self.files_skipped,
@@ -110,6 +126,7 @@ impl IndexReport {
             self.relations_inferred,
             self.tests_found,
             self.wal_bytes,
+            self.resolution.as_ref().map_or(String::new(), |r| format!("; {}", r.summary())),
             self.elapsed
         );
         match &self.resolution {
@@ -299,6 +316,9 @@ pub fn refresh(
     let mut outcome = IndexOutcome::default();
     let mut update = IndexUpdate::empty();
     let mut touched: Vec<RepoPath> = Vec::new();
+    // The edges that are about to point at nothing. Read *before* the write, because the write
+    // demotes them to a null target and they stop being findable by target afterwards.
+    let mut displaced: Vec<Relation> = Vec::new();
 
     for path in paths {
         let Some(relative) = RepoPath::from_path(path.strip_prefix(root).unwrap_or(path)) else {
@@ -309,6 +329,13 @@ pub fn refresh(
             });
             continue;
         };
+
+        // Every relation arriving at an entity of this file is about to have its target nulled:
+        // a refresh *always* removes a file's rows before re-inserting them, because an upsert
+        // alone would leave rows for symbols that no longer exist. Capturing those edges here is
+        // what lets the resolver decide them again afterwards, instead of every caller of a
+        // symbol in this file being left pointing at nothing the moment it is edited.
+        collect_incoming(store, &relative, &mut displaced)?;
 
         if !path.is_file() {
             update = update.removing_file(relative.clone());
@@ -377,10 +404,12 @@ pub fn refresh(
         absorb(&mut outcome.report, &stats);
     }
     outcome.report.generation = store.generation();
-    // Scoped to the files that were re-extracted. `resolve_paths` also re-reads the relations
-    // *pointing into* the entities those files declare, so a definition that moved is noticed
-    // even though none of its callers changed.
-    let resolution = resolve::resolve_paths(store, &touched, ResolutionOptions::default())?;
+    // Scoped to the files that were re-extracted, plus the edges the removal above displaced.
+    // Both halves are needed: the first decides the new edges, the second repairs the old ones
+    // whose targets no longer exist. Neither is a full re-resolve, so a refresh stays
+    // proportional to what changed.
+    let resolution =
+        resolve::resolve_paths(store, &touched, &displaced, ResolutionOptions::default())?;
     outcome.report.generation = store.generation();
     outcome.report.resolution = Some(resolution);
 
@@ -391,6 +420,28 @@ pub fn refresh(
     outcome.report.wal_bytes = store.stats().map(|stats| stats.wal_size_bytes).unwrap_or(0);
     outcome.report.elapsed = started.elapsed();
     Ok(outcome)
+}
+
+/// Read every relation that arrives at an entity declared in `path`.
+///
+/// Read before the removal that would null their targets. The store's demotion step is what
+/// makes the removal safe — a nulled target would otherwise leave a row claiming `resolved`
+/// with nothing behind it — and it is also what makes these edges unreachable afterwards:
+/// [`Store::incoming`] matches on `target_path`, and a demoted edge has none.
+fn collect_incoming(
+    store: &Store,
+    path: &RepoPath,
+    into: &mut Vec<Relation>,
+) -> Result<(), StoreError> {
+    let mut seen: BTreeSet<RelationKey> = BTreeSet::new();
+    for entity in store.entities_in_file(path, DISPLACED_EDGE_SCAN_LIMIT)? {
+        for relation in store.incoming(&entity.id, None, DISPLACED_EDGE_SCAN_LIMIT)? {
+            if seen.insert(relation.natural_key()) {
+                into.push(relation);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Read and extract one discovered file, folding it into `update`.

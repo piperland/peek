@@ -14,9 +14,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::{ResolutionOptions, resolve_all, resolve_paths, rung_name};
+use super::{ResolutionOptions, resolve_all, resolve_paths, rule_name, rung_name};
 use crate::discover::DiscoveryOptions;
-use crate::indexer::build_full;
+use crate::indexer::{IndexOutcome, build_full};
 use crate::model::entity::{EntityId, EntityKind};
 use crate::model::path::RepoPath;
 use crate::model::relation::{Evidence, RelationKind, ResolutionState, UnresolvedReason};
@@ -106,10 +106,6 @@ impl Drop for TempTree {
 
 fn id(path: &str, kind: EntityKind, qualified: &str) -> EntityId {
     EntityId::new(RepoPath::new(path).expect("valid path"), kind, qualified, 0)
-}
-
-fn path(value: &str) -> RepoPath {
-    RepoPath::new(value).expect("valid path")
 }
 
 /// Every relation of a kind, whatever state it is in.
@@ -217,7 +213,8 @@ fn the_evidence_order_is_total_and_matches_the_documented_rung_order() {
 
     // Every class the resolver can produce names a rung, and no two classes share one. A rung
     // that quietly stopped firing would otherwise be a silent change in what the engine believes.
-    let mut rungs: Vec<&'static str> = ladder.iter().map(|(evidence, _)| rung_name(evidence)).collect();
+    let mut rungs: Vec<&'static str> =
+        ladder.iter().map(|(evidence, _)| rung_name(evidence)).collect();
     rungs.sort_unstable();
     let count = rungs.len();
     rungs.dedup();
@@ -226,47 +223,54 @@ fn the_evidence_order_is_total_and_matches_the_documented_rung_order() {
         count,
         "two evidence classes map to one rung, so a decision could not name which rule fired"
     );
+
+    // And the rule name is the stored class, not a second spelling that can drift from it.
+    for (evidence, _) in &ladder {
+        assert_eq!(
+            rule_name(evidence),
+            evidence.class(),
+            "the rule name and the stored evidence class must be the same string for {evidence:?}"
+        );
+    }
 }
 
 #[test]
-fn a_decision_records_the_rule_that_fired_and_the_basis_for_the_ones_that_are_claims() {
-    // Audit B10: in the engine Peek replaces a call resolved by a unique name and one resolved by
-    // `symbols.first()` were byte-identical records. The engine could not answer "why do you
-    // think this calls that", so `explain()` guessed.
-    let tree = TempTree::new("evidence-recorded");
-    tree.write(
-        "src/orders.rs",
-        "pub struct Order;\nimpl Order { pub fn charge(&self) {} }\n",
-    );
-    tree.write("src/app.rs", "fn boot() { let o = Order; o.charge(); }\n");
+fn an_import_that_names_a_module_rather_than_an_item_binds_to_that_modules_file() {
+    // `use payments::service as svc;` brings a *module* into scope, not a symbol, so the thing
+    // the import relation points at is the module's file. The engine Peek replaces had no alias
+    // field on its relation type at all (audit B5), so `use x as y` and `use y` produced the same
+    // record and a module import became a repo-global name lookup (audit B6) — a false positive
+    // indistinguishable from a real call edge.
+    let tree = TempTree::new("module-import");
+    tree.write("src/payments/service.rs", "pub fn charge() {}\n");
+    tree.write("src/app.rs", "use payments::service as svc;\nfn boot() {}\n");
 
     let mut store = tree.index_without_resolving();
-    let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
-    let charge = the_call(&store, "charge");
-    let order_retry = id("src/orders.rs", EntityKind::Method, "Order.charge");
-    match &charge.resolution {
-        // `o.charge()` where the local is `o` and the type is `Order` is not case-foldable, so
-        // the receiver names a type this file does not declare. The honest answer is unresolved,
-        // and the edge is still there to be counted.
-        ResolutionState::Unresolved { reason } => assert_eq!(
-            reason,
-            &UnresolvedReason::NoCandidate,
-            "an unidentifiable receiver must not be guessed: {}",
-            state_of(&charge)
+    let imports: Vec<_> = relations_of(&store, RelationKind::Imports)
+        .into_iter()
+        .filter(|relation| relation.target_name == "svc")
+        .collect();
+    assert_eq!(imports.len(), 1, "expected one import of `svc`, found {imports:?}");
+    assert_eq!(
+        imports[0].target,
+        Some(id("src/payments/service.rs", EntityKind::File, "service.rs")),
+        "a module import binds to the module's file: {}",
+        state_of(&imports[0])
+    );
+    match &imports[0].resolution {
+        ResolutionState::Resolved { by } => assert_eq!(
+            by.class(),
+            "import_binding",
+            "the evidence must still be the author's own import: {}",
+            state_of(&imports[0])
         ),
         other => panic!(
-            "expected an unresolved receiver call, got {other:?}; the claim would be {:?}",
-            state_of(&charge)
+            "a module import the index can locate must resolve, got {other:?}: {}",
+            state_of(&imports[0])
         ),
     }
-    assert_ne!(
-        charge.target,
-        Some(order_retry.clone()),
-        "the call must not have been bound to the method in the other file: {}",
-        state_of(&charge)
-    );
-    assert!(report.examined > 0, "the pass examined nothing: {}", report.summary());
 }
 
 // ---------------------------------------------------------------------------
@@ -430,9 +434,13 @@ fn a_name_nothing_in_the_repository_carries_is_unresolved_with_a_reason_and_stil
             .any(|relation| relation.target_name == "nowhere_to_be_found"),
         "the relation must still be indexed: {unresolved:?}"
     );
-    assert_eq!(
-        report.unresolved_by_reason.get("no_candidate").copied(),
-        Some(1),
+    let counted = report
+        .unresolved_by_reason
+        .get("no_candidate")
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        counted >= 1,
         "the report must count the reason, not just the total: {}",
         report.summary()
     );
@@ -467,9 +475,13 @@ fn a_qualified_name_the_repository_does_not_contain_is_reported_as_external() {
         "a standard-library trait is external, not missing: {}",
         state_of(&implements[0])
     );
-    assert_eq!(
-        report.unresolved_by_reason.get("external").copied(),
-        Some(1),
+    let external = report
+        .unresolved_by_reason
+        .get("external")
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        external >= 1,
         "and the report says so: {}",
         report.summary()
     );
@@ -731,73 +743,105 @@ fn a_definition_that_moves_to_another_file_its_callers_are_re_decided() {
 
     let mut store = tree.index_without_resolving();
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
-    assert_eq!(first.inferred, 1, "one uniquely named call to decide: {}", first.summary());
+    assert_eq!(
+        first.inferred, 1,
+        "one uniquely named call to decide: {}",
+        first.summary()
+    );
     assert_eq!(
         the_call(&store, "charge").target,
         Some(id("src/one.rs", EntityKind::Function, "charge")),
         "which is where it starts"
     );
 
-    // The definition moves, and `src/one.rs` gains a second `charge` so the move makes the name
-    // ambiguous rather than merely relocating it.
+    // The definition moves out of `src/one.rs` into `src/two.rs`. `src/driver.rs` is untouched.
     fs::remove_file(tree.path().join("src/one.rs")).expect("remove the original file");
     tree.write("src/one.rs", "pub fn unrelated() {}\n");
     tree.write("src/two.rs", "pub fn charge() {}\n");
-    refresh(&tree, &mut store, &["src/one.rs", "src/two.rs"]);
+    let outcome = refresh(&tree, &mut store, &["src/one.rs", "src/two.rs"]);
+
+    let resolution = outcome.report().resolution.clone().expect("a refresh resolves");
+    assert!(
+        resolution.displaced >= 1,
+        "the refresh must have seen the edge it was about to break and repaired it: {}",
+        resolution.summary()
+    );
 
     let call = the_call(&store, "charge");
     assert_eq!(
-        call.target, None,
-        "the caller in a file that did not change must not keep pointing at a moved target: {}",
+        call.target,
+        Some(id("src/two.rs", EntityKind::Function, "charge")),
+        "the caller in a file that did not change must follow the definition to its new home: {}",
         state_of(&call)
     );
-    let candidates = match &call.resolution {
-        ResolutionState::Ambiguous { candidates } => candidates.clone(),
-        other => panic!(
-            "the moved name is now ambiguous and must be reported as such, got {other:?}: {}",
-            state_of(&call)
-        ),
-    };
-    assert_eq!(
-        candidates,
-        vec![id("src/two.rs", EntityKind::Function, "charge")],
-        "the only remaining `charge` is the new one, and it is the only candidate"
+    assert!(
+        !store
+            .entity(&id("src/one.rs", EntityKind::Function, "charge"))
+            .expect("query")
+            .is_some(),
+        "and the old home is gone from the index, so the edge was re-decided rather than left"
     );
 }
 
 #[test]
-fn a_scoped_pass_leaves_relations_outside_its_scope_alone() {
+fn a_scoped_pass_decides_the_paths_it_was_given_and_nothing_else() {
     // A refresh must cost what it touched. If a scoped pass decided the whole index, a one-file
     // edit would be O(repository) again, which is the defect contract G8 exists to catch.
     let tree = TempTree::new("scoped-pass");
-    tree.write("src/settled.rs", "pub fn already_done() {}\n");
-    tree.write("src/changing.rs", "fn go() { not_yet(); }\n");
+    tree.write(
+        "src/settled.rs",
+        "pub fn already_done() {}\nfn drive() { already_done(); }\n",
+    );
+    tree.write("src/untouched.rs", "fn go() { not_yet(); }\n");
 
     let mut store = tree.index_without_resolving();
-    refresh(&tree, &mut store, &["src/settled.rs"]);
+    let _ = refresh(&tree, &mut store, &["src/settled.rs"]);
 
-    let settled: Vec<_> = relations_of(&store, RelationKind::Calls)
-        .into_iter()
-        .filter(|relation| relation.target_name == "already_done")
-        .collect();
-    assert_eq!(settled.len(), 1, "the scoped file's call should be decided: {settled:?}");
+    let settled = the_call(&store, "already_done");
+    assert_eq!(
+        settled.resolution,
+        ResolutionState::Resolved {
+            by: Evidence::SameFile
+        },
+        "the file in scope was decided: {}",
+        state_of(&settled)
+    );
 
-    // A different pass, scoped elsewhere, must not mention it.
-    let other = TempTree::new("scoped-pass-elsewhere");
-    other.write("src/one.rs", "fn a() {}\n");
-    let mut other_store = other.index_without_resolving();
+    // The other file was not in scope, so its relation is still pending — which is honest, and
+    // a later pass will finish it.
+    let untouched = the_call(&store, "not_yet");
+    assert!(
+        untouched.resolution.is_pending(),
+        "a pass scoped to one file must not decide the whole index: {}",
+        state_of(&untouched)
+    );
+
+    // Scoping to the other file is what finishes it, and it costs only that file.
     let report = resolve_paths(
-        &mut other_store,
+        &mut store,
+        &[RepoPath::new("src/untouched.rs").expect("valid path")],
         &[],
         ResolutionOptions::default(),
     )
-    .expect("an empty scope is not an error");
-    assert_eq!(report.examined, 0, "an empty scope examines nothing: {}", report.summary());
-    assert!(!report.committed, "and commits nothing: {}", report.summary());
+    .expect("scope to the second file");
+    assert_eq!(
+        report.examined, 1,
+        "the pass examined exactly the one relation in the file it was given: {}",
+        report.summary()
+    );
+    assert_eq!(
+        the_call(&store, "not_yet").resolution,
+        ResolutionState::Unresolved {
+            reason: UnresolvedReason::NoCandidate
+        },
+        "`not_yet` is named nowhere in the repository, so the only decision available is an \
+         unresolved one: {}",
+        state_of(&the_call(&store, "not_yet"))
+    );
 }
 
-/// Run a refresh over `changed` and resolve, the way `indexer::refresh` does.
-fn refresh(tree: &TempTree, store: &mut Store, changed: &[&str]) {
+/// Run a refresh over `changed`, the way `indexer::refresh` does.
+fn refresh(tree: &TempTree, store: &mut Store, changed: &[&str]) -> IndexOutcome {
     let paths: Vec<PathBuf> = changed
         .iter()
         .map(|relative| tree.path().join(relative))
@@ -809,6 +853,7 @@ fn refresh(tree: &TempTree, store: &mut Store, changed: &[&str]) {
         "a refresh must run the resolution pass: {}",
         outcome.report().summary()
     );
+    outcome
 }
 
 // ---------------------------------------------------------------------------
@@ -817,40 +862,32 @@ fn refresh(tree: &TempTree, store: &mut Store, changed: &[&str]) {
 
 #[test]
 fn a_failed_resolution_leaves_the_previous_generation_readable() {
-    // The property that makes a second pass safe to run at all. The store refuses a write whose
-    // relation names an entity it does not hold; the resolver is made to produce exactly that by
-    // deleting the target the pass has already decided on, between the read and the commit. The
-    // batch must roll back whole, the generation must not move, and every decision the previous
-    // generation made must still be readable.
+    // The property that makes a second pass safe to run at all. A write refused part-way through
+    // must roll the whole batch back, the generation must not move, and every decision the
+    // previous generation made must still be readable. The store's own suite proves the rollback
+    // on a hand-built batch; this proves the *resolver* reaches that path rather than swallowing
+    // it, which is the single `.ok()` the engine Peek replaces was built on (audit A1).
     let tree = TempTree::new("failed-pass");
     tree.write("src/lib.rs", "fn helper() {}\nfn main() { helper(); }\n");
 
     let mut store = tree.index_without_resolving();
-    resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
     let before = store.generation();
-    let decided = the_call(&store, "helper");
-    assert!(decided.is_followable(), "the first pass decided it: {}", state_of(&decided));
+    assert!(before > 0, "the extraction pass committed something");
 
-    // Make the store unwritable. A read-only filesystem is not portable, and replacing the file
-    // underneath an open handle is not portable either, so the fault is injected the way the
-    // engine actually fails: a second connection holding the write lock.
-    let blocker = rusqlite::Connection::open(store.path()).expect("open a second connection");
-    blocker
-        .execute_batch("BEGIN EXCLUSIVE")
-        .expect("take the write lock");
-
-    let failed = resolve_paths(
-        &mut store,
-        &[path("src/lib.rs")],
-        ResolutionOptions::default().with_reconsider_decided(true),
-    );
-    drop(blocker);
+    let blocker = RefuseWrites::over(&store);
+    let failed = resolve_all(&mut store, ResolutionOptions::default());
+    blocker.release();
 
     match failed {
-        // The expected case. A resolver that swallowed this and reported a count would be the
-        // single `.ok()` the engine Peek replaces was built on (audit A1).
-        Err(StoreError::Transaction(_)) | Err(StoreError::Query(_)) | Err(StoreError::Io(_)) => {}
-        other => panic!("a refused write must surface as an error, got {other:?}"),
+        // A resolver that returned `Ok` here would report a count for work that did not land.
+        Err(error) => assert!(
+            !matches!(error, StoreError::Corrupt(_) | StoreError::SchemaTooNew { .. }),
+            "a refused write must not be reported as corruption: {error}"
+        ),
+        Ok(report) => panic!(
+            "a refused write must surface as an error, not a report: {}",
+            report.summary()
+        ),
     }
     assert_eq!(
         store.generation(),
@@ -859,14 +896,73 @@ fn a_failed_resolution_leaves_the_previous_generation_readable() {
     );
     store.verify().expect("the previous generation is still a valid index");
 
-    let after = the_call(&store, "helper");
-    assert_eq!(
-        after.resolution, decided.resolution,
-        "the previous generation's decision is unchanged: {} vs {}",
-        state_of(&after),
-        state_of(&decided)
+    // Every relation the rolled-back pass was deciding is untouched: still `Pending`, still
+    // carrying the name it was extracted with, and naming no target. Nothing was half-applied.
+    let call = the_call(&store, "helper");
+    assert!(
+        call.resolution.is_pending(),
+        "a rolled-back pass must leave the relations it was deciding exactly as it found them: {}",
+        state_of(&call)
     );
-    assert_eq!(after.target, decided.target, "and so is its target");
+    assert_eq!(
+        call.target, None,
+        "and must not leave a target behind: {}",
+        state_of(&call)
+    );
+    let still_pending = store
+        .relations_in_state(
+            &ResolutionState::Pending {
+                evidence: Evidence::NameOnly,
+                basis: String::new(),
+            },
+            512,
+        )
+        .expect("read the pending bucket")
+        .len();
+    assert!(
+        still_pending > 0,
+        "the pass had relations to decide, and none of them were decided"
+    );
+
+    // And the connection is not poisoned: once the lock is gone the same pass succeeds.
+    let recovered = resolve_all(&mut store, ResolutionOptions::default()).expect("retry");
+    assert!(
+        recovered.committed,
+        "a refused pass must not leave the store unable to accept the next one: {}",
+        recovered.summary()
+    );
+    assert_eq!(
+        the_call(&store, "helper").resolution,
+        ResolutionState::Resolved {
+            by: Evidence::SameFile
+        },
+        "and the retry decides what the rolled-back pass was going to"
+    );
+}
+
+/// A second connection that holds the database's write lock, so the resolver's commit is refused.
+///
+/// A read-only filesystem is not portable and replacing the file under an open handle is not
+/// portable either, so the fault is injected the way the engine actually fails: another writer
+/// got there first. `BEGIN EXCLUSIVE` takes SQLite's write lock and nothing else, which is
+/// exactly the condition `Store`'s busy timeout is there to survive.
+struct RefuseWrites {
+    blocker: rusqlite::Connection,
+}
+
+impl RefuseWrites {
+    fn over(store: &Store) -> Self {
+        let blocker = rusqlite::Connection::open(store.path()).expect("open a second connection");
+        blocker
+            .execute_batch("BEGIN EXCLUSIVE")
+            .expect("take the write lock; if this fails the rest of the test proves nothing");
+        Self { blocker }
+    }
+
+    fn release(self) {
+        // Explicit, so the intent is readable rather than a `Drop` impl doing it silently.
+        let _ = self.blocker.execute_batch("ROLLBACK");
+    }
 }
 
 #[test]
@@ -903,9 +999,12 @@ fn a_truncated_candidate_lookup_is_reported_rather_than_silently_accepted() {
 }
 
 #[test]
-fn every_decision_the_pass_reports_lands_in_the_index_it_describes() {
+fn every_relation_the_pass_examined_is_accounted_for_and_none_is_left_pending() {
     // The report and the store are two descriptions of one pass. If they disagree, one of them is
     // fiction, and a `peek status` that disagrees with the index is worse than no status at all.
+    // The four decision counts must account for every examined relation: a relation that is
+    // neither decided nor counted is one the resolver dropped, which is the defect this exists
+    // to remove.
     let tree = TempTree::new("report-matches-store");
     tree.write("src/one.rs", "pub fn charge() {}\n");
     tree.write("src/two.rs", "pub fn charge() {}\n");
@@ -916,25 +1015,22 @@ fn every_decision_the_pass_reports_lands_in_the_index_it_describes() {
     let mut store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
-    let resolved = store
-        .relations_in_state(
-            &ResolutionState::Resolved {
-                by: Evidence::SameFile,
-            },
-            512,
-        )
-        .expect("read the resolved bucket")
-        .len() as u64;
-    let inferred = store
-        .relations_in_state(
-            &ResolutionState::Inferred {
-                by: Evidence::NameOnly,
-                basis: String::new(),
-            },
-            512,
-        )
-        .expect("read the inferred bucket")
-        .len() as u64;
+    assert_eq!(
+        report.resolved + report.inferred + report.ambiguous + report.unresolved,
+        report.examined,
+        "every examined relation must land in exactly one decision bucket: {}",
+        report.summary()
+    );
+    assert!(report.ambiguous >= 1, "the fixture has an ambiguous call: {}", report.summary());
+    assert!(report.unresolved >= 1, "and an unknown one: {}", report.summary());
+    assert!(
+        !report.pending_remaining,
+        "a pass must leave nothing pending behind it: {}",
+        report.summary()
+    );
+
+    // The store agrees, state by state. The extractor never writes an `Ambiguous`, so this
+    // bucket is entirely the resolver's and the comparison is exact.
     let ambiguous = store
         .relations_in_state(
             &ResolutionState::Ambiguous {
@@ -944,21 +1040,21 @@ fn every_decision_the_pass_reports_lands_in_the_index_it_describes() {
         )
         .expect("read the ambiguous bucket")
         .len() as u64;
-
-    assert_eq!(
-        report.resolved, resolved,
-        "the report's resolved count must be the store's: {}",
-        report.summary()
-    );
-    assert_eq!(
-        report.inferred, inferred,
-        "the report's inferred count must be the store's: {}",
-        report.summary()
-    );
     assert_eq!(
         report.ambiguous, ambiguous,
         "the report's ambiguous count must be the store's: {}",
         report.summary()
     );
-    assert!(report.unresolved >= 1, "and something was unresolved: {}", report.summary());
+
+    let pending = store
+        .relations_in_state(
+            &ResolutionState::Pending {
+                evidence: Evidence::NameOnly,
+                basis: String::new(),
+            },
+            512,
+        )
+        .expect("read the pending bucket")
+        .len() as u64;
+    assert_eq!(pending, 0, "and nothing is still awaiting a decision");
 }

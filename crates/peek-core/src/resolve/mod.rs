@@ -163,7 +163,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::entity::{EntityId, EntityKind};
 use crate::model::path::RepoPath;
-use crate::model::relation::{Evidence, Relation, RelationKind, ResolutionState, UnresolvedReason};
+use crate::model::relation::{
+    Evidence, Relation, RelationKey, RelationKind, ResolutionState, UnresolvedReason,
+};
 use crate::store::{IndexUpdate, Store, StoreError};
 
 #[cfg(test)]
@@ -302,6 +304,13 @@ pub struct ResolutionReport {
     /// Relations that were already decided and were decided again, because the entity they
     /// pointed at is inside the pass's scope.
     pub reconsidered: u64,
+    /// Edges the caller read *before* its write, whose targets that write removed.
+    ///
+    /// Reported separately from `reconsidered` because they are a different population: these
+    /// arrived from outside the pass's paths and had already been demoted to a null target, so
+    /// nothing but the caller's own capture could have found them. A caller repairing a rename
+    /// needs this number without inferring it from `examined`.
+    pub displaced: u64,
     /// Relation rows the pass actually rewrote.
     pub relations_written: u64,
     /// Candidate lookups abandoned at a configured limit. Non-zero means an answer on this build
@@ -349,7 +358,7 @@ impl ResolutionReport {
         };
         format!(
             "{}: examined {}, resolved {}, inferred {}, ambiguous {}, unresolved {}{}, \
-             reconsidered {}, {} rows at generation {}{}{}",
+             reconsidered {}, displaced {}, {} rows at generation {}{}{}",
             Self::PASS,
             self.examined,
             self.resolved,
@@ -358,6 +367,7 @@ impl ResolutionReport {
             self.unresolved,
             reason_text,
             self.reconsidered,
+            self.displaced,
             self.relations_written,
             self.generation,
             match self.committed {
@@ -988,40 +998,15 @@ fn anchor_directories(importer: &RepoPath) -> Vec<String> {
     anchors
 }
 
-/// A relation's natural key, used to decide a relation once when a pass gathers it from several
-/// directions.
-///
-/// The same relation is reachable both as an outgoing edge of a changed file and as an incoming
-/// edge of a changed entity, so a pass over a scope collects the union and has to de-duplicate
-/// it. Deciding the same relation twice would write it twice and count it twice in the report.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct RelationKey {
-    source: RepoPath,
-    source_kind: EntityKind,
-    source_qualified_name: String,
-    source_ordinal: u32,
-    kind: RelationKind,
-    target_name: String,
-    start_byte: u32,
-    end_byte: u32,
-}
-
-impl RelationKey {
-    fn of(relation: &Relation) -> Self {
-        Self {
-            source: relation.source.path().clone(),
-            source_kind: relation.source.kind(),
-            source_qualified_name: relation.source.qualified_name().to_owned(),
-            source_ordinal: relation.source.ordinal(),
-            kind: relation.kind,
-            target_name: relation.target_name.clone(),
-            start_byte: relation.span.start_byte,
-            end_byte: relation.span.end_byte,
-        }
-    }
-}
-
 /// A de-duplicating set of relations, in the order the store returned them.
+///
+/// The same relation is reachable as an outgoing edge of a changed file, as an incoming edge of a
+/// changed entity, and as an edge a refresh displaced, so a pass over a scope collects the union
+/// and has to de-duplicate it. Deciding the same relation twice would write it twice and count it
+/// twice in the report.
+///
+/// De-duplication is by [`Relation::natural_key`], which is the store's own `UNIQUE` constraint
+/// rather than a second opinion about what identity means.
 #[derive(Debug, Default)]
 struct RelationSet {
     seen: BTreeSet<RelationKey>,
@@ -1035,7 +1020,7 @@ impl RelationSet {
 
     /// Add a relation unless this pass has already collected the same one.
     fn insert(&mut self, relation: Relation) {
-        if self.seen.insert(RelationKey::of(&relation)) {
+        if self.seen.insert(relation.natural_key()) {
             self.relations.push(relation);
         }
     }
@@ -1078,24 +1063,44 @@ fn apply_decision(relation: &Relation, decision: Decision) -> Option<Relation> {
 /// wrote into decisions. The whole pending set is read in one query because the store offers no
 /// cursor to page it — and because the indexer already materialises the entire relation set in
 /// memory in order to write it, so this is the same order of footprint rather than a new one.
-pub fn resolve_all(store: &mut Store, options: ResolutionOptions) -> Result<ResolutionReport, StoreError> {
+pub fn resolve_all(
+    store: &mut Store,
+    options: ResolutionOptions,
+) -> Result<ResolutionReport, StoreError> {
     let pending = store.relations_in_state(&pending_state(), usize::MAX)?;
     decide_and_commit(store, pending, options)
 }
 
-/// Decide the relations belonging to `paths`, and the relations that point into them.
+/// Decide the relations belonging to `paths`, the relations that point into them, and the
+/// relations the caller displaced.
 ///
-/// Scoped, not global, because a refresh knows which files changed and nothing else has. The
-/// *incoming* half is what contract G9 is about: a definition that moved changes edges whose
-/// sources did not, and only a pass that re-reads the edges pointing at the changed entities
-/// notices.
+/// Scoped, not global, because a refresh knows which files changed and nothing else has.
+///
+/// `displaced` is the awkward part and it is not optional. A refresh *removes* the changed
+/// files' rows before re-inserting them, and the store's demotion step turns every edge that
+/// pointed into a removed entity into an `Unresolved` with a null target. By the time the
+/// resolver runs, those edges are invisible to [`Store::incoming`], which matches on
+/// `target_path`. So the caller has to read them **before** the write and hand them over here,
+/// or a moved definition silently orphans every one of its callers.
+///
+/// The ordering — read the edges that are about to be broken, write, then re-decide — is the
+/// whole of contract G9, and it is why this function takes three arguments rather than one.
 pub fn resolve_paths(
     store: &mut Store,
     paths: &[RepoPath],
+    displaced: &[Relation],
     options: ResolutionOptions,
 ) -> Result<ResolutionReport, StoreError> {
     let mut in_scope = RelationSet::new();
+    let mut displaced_keys: BTreeSet<RelationKey> = BTreeSet::new();
+    for relation in displaced {
+        in_scope.insert(relation.clone());
+        displaced_keys.insert(relation.natural_key());
+    }
+
     for path in paths {
+        // A file is read through three doors, and the count of what it contributes is reported so
+        // a caller can tell a scoped pass from a whole-index one.
         let entities = store.entities_in_file(path, options.entities_per_file)?;
         for entity in &entities {
             let outgoing_limit = options.outgoing_per_source;
@@ -1112,7 +1117,13 @@ pub fn resolve_paths(
             }
         }
     }
-    decide_and_commit(store, in_scope.into_vec(), options)
+
+    let mut report = decide_and_commit(store, in_scope.into_vec(), options)?;
+    // The displaced edges are counted separately because they are a different population: they
+    // are the ones a refresh broke, and a caller repairing a rename needs to know how many it
+    // repaired without inferring it from `examined`.
+    report.displaced = u64::try_from(displaced_keys.len()).unwrap_or(u64::MAX);
+    Ok(report)
 }
 
 /// The state used to ask the store for everything still awaiting a decision.

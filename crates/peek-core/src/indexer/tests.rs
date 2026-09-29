@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{IndexError, SkipReason, build_full, refresh};
 use crate::discover::DiscoveryOptions;
-use crate::model::{EntityId, EntityKind, Evidence, RepoPath, ResolutionState};
+use crate::model::{EntityId, EntityKind, Evidence, RelationKind, RepoPath, ResolutionState};
 use crate::store::{RepoId, Store};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -109,12 +109,12 @@ fn a_full_build_indexes_the_repository_and_reports_what_it_did() {
     assert!(report.entities_written > 0);
     assert!(report.relations_written > 0);
     assert_eq!(
-        report.generation, 1,
-        "the first commit is generation 1, and the store agrees"
+        report.generation, 2,
+        "extraction commits generation 1 and the resolution pass commits generation 2"
     );
     assert_eq!(
         store.generation(),
-        1,
+        2,
         "the report must not invent a generation"
     );
 
@@ -492,6 +492,7 @@ fn a_rejected_write_surfaces_as_an_error_rather_than_a_successful_looking_report
 }
 
 #[test]
+<<<<<<< ours
 fn a_pending_relation_can_be_written_and_then_read_back() {
     // The extractor's normal output is `pending`, so this is the round trip that matters most.
     // It was broken: the schema accepted the row but the row decoder had no arm for the tag, so
@@ -547,6 +548,42 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
     assert!(
         edges.iter().any(|edge| edge.resolution.is_pending()),
         "the call edge survives a full write and read cycle as pending: {edges:?}"
+    );
+}
+
+#[test]
+fn a_full_build_commits_twice_so_the_resolution_pass_is_visible_as_a_generation() {
+    // Resolution is a second pass, not an inline step of extraction, and the difference is only
+    // real if a reader can see it. Two commits, two generations, and a report that says which.
+    let tree = TempTree::new("two-commits");
+    tree.write("src/lib.rs", "fn helper() {}\nfn main() { helper(); }\n");
+
+    let mut store = open_store(&tree);
+    let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
+
+    let resolution = outcome
+        .report()
+        .resolution
+        .clone()
+        .expect("a build runs the resolution pass");
+    assert_eq!(
+        outcome.report().generation, 2,
+        "extraction commits generation 1 and resolution commits generation 2"
+    );
+    assert_eq!(
+        resolution.generation, 2,
+        "the report must carry the store's own generation, not its own: {}",
+        resolution.summary()
+    );
+    assert_eq!(
+        store.generation(),
+        2,
+        "and the store must agree, or the report is describing an index that does not exist"
+    );
+    assert!(
+        !resolution.pending_remaining,
+        "a full build must leave no relation awaiting a decision: {}",
+        resolution.summary()
     );
 }
 
@@ -622,6 +659,65 @@ fn a_full_build_leaves_a_write_ahead_log_smaller_than_the_database() {
 }
 
 #[test]
+fn a_refresh_of_a_file_repairs_the_edges_that_pointed_into_it() {
+    // A refresh removes a file's rows before re-inserting them, and the store demotes every edge
+    // that pointed into the removed entities. If the refresh did not hand those edges to the
+    // resolver afterwards, then merely *editing* a file would orphan every caller of every
+    // symbol in it — a silent loss of the exact edges the index exists to provide.
+    let tree = TempTree::new("refresh-repairs-incoming");
+    tree.write("src/orders.rs", "pub fn charge() {}\n");
+    tree.write("src/app.rs", "fn go() { charge(); }\n");
+
+    let mut store = open_store(&tree);
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first build");
+    assert!(
+        store
+            .callees(
+                &id("src/app.rs", EntityKind::Function, "go"),
+                Some(RelationKind::Calls),
+                10
+            )
+            .expect("query")
+            .contains(&id("src/orders.rs", EntityKind::Function, "charge")),
+        "the first build resolved the call across files"
+    );
+
+    // Edit the *other* file. `src/app.rs` is not touched, so nothing about that edge changed —
+    // and nothing about it should have been lost either.
+    tree.write("src/orders.rs", "pub fn charge() {}\npub fn refund() {}\n");
+    let outcome = refresh(
+        &mut store,
+        tree.path(),
+        &[tree.path().join("src/orders.rs")],
+        &DiscoveryOptions::default(),
+    )
+    .expect("refresh");
+
+    let resolution = outcome
+        .report()
+        .resolution
+        .clone()
+        .expect("a refresh runs the resolution pass");
+    assert!(
+        resolution.displaced >= 1,
+        "the refresh must have seen the edge it was about to break: {}",
+        resolution.summary()
+    );
+    assert_eq!(
+        store
+            .callees(
+                &id("src/app.rs", EntityKind::Function, "go"),
+                Some(RelationKind::Calls),
+                10
+            )
+            .expect("query")
+            .len(),
+        1,
+        "editing a file must not orphan the calls that point into it"
+    );
+}
+
+#[test]
 fn the_summary_reports_the_generation_and_the_uncertainty_counts() {
     // `peek status` and the MCP `index_status` primitive read this string, so it has to carry
     // the honest counts rather than a reassuring one.
@@ -635,8 +731,12 @@ fn the_summary_reports_the_generation_and_the_uncertainty_counts() {
     let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
     let summary = outcome.report().summary();
 
-    assert!(summary.contains("generation 1"), "{summary}");
+    assert!(summary.contains("generation 2"), "{summary}");
     assert!(summary.contains("files indexed"), "{summary}");
-    assert!(summary.contains("pending"), "{summary}");
+    assert!(summary.contains("extracted pending"), "{summary}");
     assert!(summary.contains("ambiguous"), "{summary}");
+    // The resolution pass has to be visible in the same string, or `peek status` reports only the
+    // work that is outstanding and never what was decided.
+    assert!(summary.contains("resolution pass 2"), "{summary}");
+    assert!(summary.contains("resolved"), "{summary}");
 }
