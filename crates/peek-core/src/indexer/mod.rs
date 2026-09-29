@@ -30,6 +30,7 @@ use crate::discover::{
 };
 use crate::extract::ExtractedFile;
 use crate::model::{Language, RepoPath, ResolutionState};
+use crate::resolve::{self, ResolutionOptions, ResolutionReport};
 use crate::store::{IndexUpdate, RepoId, Store, StoreError, UpdateStats, paths};
 
 /// Everything an indexing run produced, including what it could not do.
@@ -75,6 +76,14 @@ pub struct IndexReport {
     /// run rather than assumed to be zero: a checkpoint refused by a concurrent reader leaves a
     /// real number here, and a number is something `doctor` can act on.
     pub wal_bytes: u64,
+    /// What the second pass did: the decisions taken on the relations this run wrote, plus the
+    /// ones that already existed and pointed into the files that changed.
+    ///
+    /// `None` only if the resolution pass was not run, which no current caller does. It is an
+    /// `Option` because "a report without a resolution pass" and "a report whose resolution pass
+    /// decided nothing" are different facts, and collapsing them would be the same conflation
+    /// that made fourteen languages report as supported while extracting nothing.
+    pub resolution: Option<ResolutionReport>,
     /// Wall-clock time for the run.
     pub elapsed: Duration,
 }
@@ -82,7 +91,7 @@ pub struct IndexReport {
 impl IndexReport {
     /// A one-line summary for `peek status` and the MCP `index_status` primitive.
     pub fn summary(&self) -> String {
-        format!(
+        let base = format!(
             "generation {}: {} files indexed ({} skipped, {} unsupported, {} degraded), \
              {} removed, {} entities, {} relations ({} resolved, {} pending, {} ambiguous, \
              {} unresolved, {} inferred), {} tests, wal {} bytes, {:?}",
@@ -102,7 +111,14 @@ impl IndexReport {
             self.tests_found,
             self.wal_bytes,
             self.elapsed
-        )
+        );
+        match &self.resolution {
+            // The resolution clause is appended rather than folded into the counts above, because
+            // the two passes are separate commits with separate failures. A reader who sees them
+            // interleaved cannot tell which stage made a decision.
+            Some(resolution) => format!("{base}; {}", resolution.summary()),
+            None => base,
+        }
     }
 
     /// The five resolution states, added up.
@@ -209,8 +225,14 @@ pub fn open_store(root: &Path) -> Result<Store, IndexError> {
 
 /// Build a complete index of `root`.
 ///
-/// One discovery walk, one transaction. A failure anywhere leaves the previous generation intact
-/// and readable, which is the crash-safety requirement.
+/// Two transactions and one discovery walk. The first commits the extractor's output, the second
+/// commits the resolver's decisions about it. A failure in either leaves the previous generation
+/// intact and readable, which is the crash-safety requirement; a crash *between* them leaves a
+/// complete index whose relations are honestly `Pending`, which a later pass can finish.
+///
+/// The split is the resolver's decision, argued in [`resolve`]. In short: resolution is a
+/// function of the whole committed index, and it must be able to run over edges whose source file
+/// did not change.
 pub fn build_full(
     store: &mut Store,
     root: &Path,
@@ -236,15 +258,22 @@ pub fn build_full(
     let stats = store.apply_update(update)?;
     absorb(&mut outcome.report, &stats);
     outcome.report.generation = store.generation();
-    // Checkpoint after a bulk build. Measured on `rust-lang/regex`: 227 files left a write-ahead
-    // log of 30,479,792 bytes against a 30,199,808-byte database — a second full copy of the
-    // index, on disk, until something replayed or truncated it. Nothing was calling
+    // A full build leaves every one of its own relations `Pending`, and the second pass decides
+    // all of them. `resolve_all` is used rather than a path-scoped pass because a full build has
+    // no "changed" subset: everything is new, so there is nothing to scope to.
+    let resolution = resolve::resolve_all(store, ResolutionOptions::default())?;
+    outcome.report.generation = store.generation();
+    outcome.report.resolution = Some(resolution);
+
+    // Checkpoint **after** resolution, not before. Measured on `rust-lang/regex`: 227 files left a
+    // write-ahead log of 30,479,792 bytes against a 30,199,808-byte database — a second full copy
+    // of the index, on disk, until something replayed or truncated it. Nothing was calling
     // `checkpoint()`, so a user who indexed a repository and quit simply paid for it twice.
     //
     // A refused checkpoint is **not** a build failure: it means a reader holds a snapshot, the
-    // committed data is still correct, and the next run will get it. So the outcome is recorded
-    // as a measured WAL size rather than as an error, and `.ok()`-swallowed. The difference
-    // matters: the number is now visible, where before there was no signal at all.
+    // committed data is still correct, and the next run will fold the log in. So the outcome is
+    // recorded as a measured WAL size rather than as an error, and `.ok()`-swallowed. The
+    // difference matters: the number is now visible, where before there was no signal at all.
     let _ = store.checkpoint();
     outcome.report.wal_bytes = store.stats().map(|stats| stats.wal_size_bytes).unwrap_or(0);
     outcome.report.elapsed = started.elapsed();
@@ -256,6 +285,10 @@ pub fn build_full(
 /// Cost is proportional to the number of changed files, not to the size of the repository. A
 /// path that no longer exists is removed; one that does is re-extracted. That is the entirety of
 /// incremental indexing, and the reason a branch switch no longer costs a full rebuild.
+/// The resolution pass afterwards is scoped to the same paths **and to the relations that point
+/// into them**, which is the only way a refresh stays correct when a definition moves: the callers
+/// of a function that changed file did not change, so re-extracting the changed files alone would
+/// leave every one of their edges pointing at a target that is no longer there.
 pub fn refresh(
     store: &mut Store,
     root: &Path,
@@ -265,6 +298,7 @@ pub fn refresh(
     let started = Instant::now();
     let mut outcome = IndexOutcome::default();
     let mut update = IndexUpdate::empty();
+    let mut touched: Vec<RepoPath> = Vec::new();
 
     for path in paths {
         let Some(relative) = RepoPath::from_path(path.strip_prefix(root).unwrap_or(path)) else {
@@ -334,6 +368,7 @@ pub fn refresh(
         };
 
         let extracted = crate::extract::extract_with(spec, relative.clone(), &text);
+        touched.push(relative);
         update = absorb_file(extracted, update, &mut outcome);
     }
 
@@ -342,9 +377,17 @@ pub fn refresh(
         absorb(&mut outcome.report, &stats);
     }
     outcome.report.generation = store.generation();
-    // A refresh is incremental and the write-ahead log is truncated on a timer anyway, so the
-    // cost of a checkpoint per keystroke is not worth paying. The size is still reported, so a
-    // watcher that is somehow not checkpointing shows up as a number rather than as silence.
+    // Scoped to the files that were re-extracted. `resolve_paths` also re-reads the relations
+    // *pointing into* the entities those files declare, so a definition that moved is noticed
+    // even though none of its callers changed.
+    let resolution = resolve::resolve_paths(store, &touched, ResolutionOptions::default())?;
+    outcome.report.generation = store.generation();
+    outcome.report.resolution = Some(resolution);
+
+    // No checkpoint here. A refresh runs per keystroke under `watch`, and the write-ahead log is
+    // truncated on a timer regardless; paying a full checkpoint for every save would be the
+    // dominant cost of watching. The size is still reported, so a watcher that is somehow not
+    // checkpointing shows up as a number rather than as silence.
     outcome.report.wal_bytes = store.stats().map(|stats| stats.wal_size_bytes).unwrap_or(0);
     outcome.report.elapsed = started.elapsed();
     Ok(outcome)
