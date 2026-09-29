@@ -143,21 +143,30 @@ pub fn resolve_root(given: &Path, command: &'static str) -> Result<PathBuf, Fail
     Ok(canonical)
 }
 
-/// Make a path absolute against the working directory, without requiring it to exist.
+/// Make a path absolute against the repository root, without requiring it to exist.
 ///
-/// `current_dir` rather than a `Path` parameter, because the process's working directory is the
-/// only thing a user can be *meaning* by a relative path. A caller that means something else passes
-/// an absolute path and this is a no-op for it.
-fn absolutise(given: &Path) -> Result<PathBuf, String> {
+/// **Against the root, not against the working directory.** That was the original rule and it was
+/// wrong, and wrong in the way this project cares about: `peek rm src/gone.rs --root /some/repo`
+/// run from anywhere else resolved `src/gone.rs` against the process's CWD. In the test suite that
+/// produced an `outside_repository` refusal, which is safe. Run the same command with the CWD
+/// *inside* the repository and the path lands on a different file, and `rm` deletes it — a
+/// containment check that passes because the wrong file happens to be inside the tree.
+///
+/// The reason it was wrong is that `--root` already answers "which tree". Once a command has named
+/// a root, a relative path in that command is relative to that root: any other reading makes the
+/// same command line mean different things depending on where the user happened to be standing,
+/// which is the property the containment test exists to guarantee and the one it cannot.
+///
+/// An absolute path is unaffected — it is already anchored — so this is a no-op for the case that
+/// needs no interpretation.
+fn absolutise(given: &Path, root: &Path) -> Result<PathBuf, String> {
     if given.as_os_str().is_empty() {
         return Err("the path is empty".to_owned());
     }
     if given.is_absolute() {
         return Ok(given.to_path_buf());
     }
-    let cwd = std::env::current_dir()
-        .map_err(|error| format!("the working directory cannot be read: {error}"))?;
-    Ok(cwd.join(given))
+    Ok(root.join(given))
 }
 
 /// A repository-relative path, and whether it names a directory on disk.
@@ -187,7 +196,7 @@ pub fn relative_to(root: &Path, given: &str, command: &'static str) -> Result<Re
         ));
     }
     let as_path = Path::new(given);
-    let absolutised = absolutise(as_path).map_err(|detail| {
+    let absolutised = absolutise(as_path, root).map_err(|detail| {
         Failure::usage(
             command,
             Refusal::new(
