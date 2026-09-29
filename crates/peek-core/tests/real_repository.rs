@@ -65,8 +65,11 @@ const PLANS: &[(&str, &str)] = &[
         "SELECT source_path FROM relation WHERE resolution_state = 'ambiguous' LIMIT 50",
     ),
     (
+        // The clause the removal path actually issues. A `LIKE` arm cannot be planned as a range
+        // against a `BINARY`-collated index, so this was `SCAN` until it became a range; the
+        // probe is what found that, and it should keep watching it.
         "subtree of a path",
-        "SELECT path FROM entity WHERE path = 'a.rs' OR path LIKE 'b/%' ESCAPE '\\' LIMIT 500",
+        "SELECT path FROM entity WHERE (path = 'b' OR (path >= 'b/' AND path < 'b0')) LIMIT 500",
     ),
 ];
 
