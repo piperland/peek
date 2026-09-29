@@ -69,7 +69,7 @@
 
 pub mod answer;
 pub mod args;
-pub pub mod commands;
+pub mod commands;
 pub mod exit;
 pub mod paths;
 pub mod progress;
