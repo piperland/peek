@@ -258,10 +258,7 @@ fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
     assert_eq!(output.status, Status::Refused);
     // Borrowed, not taken: `output` is rendered below, and moving the refusal out of it would
     // partially move the value the render borrows.
-    let refusal = output
-        .refusal
-        .as_ref()
-        .expect("a refusal must be carried");
+    let refusal = output.refusal.as_ref().expect("a refusal must be carried");
     assert_eq!(
         refusal.kind.as_str(),
         peek_cli::exit::kind::BUDGET_INSUFFICIENT

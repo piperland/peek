@@ -51,7 +51,7 @@ fn status_prints_the_counts_the_store_measured() {
     assert_eq!(built.output.exit_code, 0, "{:?}", built.output.refusal);
 
     let printed = run(&repository, &["status"]);
-    let store = open_store(&repository);
+    let store = open_store(repository);
     let measured = store.stats().expect("the store's own counts");
     drop(store);
 
@@ -115,7 +115,7 @@ fn status_json_carries_the_same_counts_it_prints() {
     // rather than by comparing strings. A JSON mode nobody parses is not tested.
     let repository = Repository::small("e2e-status-json");
     run(&repository, &["index", repository.root_str()]);
-    let store = open_store(&repository);
+    let store = open_store(repository);
     let measured = store.stats().expect("the store's own counts");
     drop(store);
 
@@ -154,7 +154,7 @@ fn the_index_report_adds_up_to_what_the_store_holds_afterwards() {
         Answer::Index(answer) => answer.clone(),
         other => panic!("expected an index answer, got {other:?}"),
     };
-    let store = open_store(&repository);
+    let store = open_store(repository);
     let measured = store.stats().expect("the store's own counts");
     drop(store);
 
@@ -190,7 +190,7 @@ fn a_refresh_of_one_changed_file_updates_that_file_and_nothing_else() {
     let repository = Repository::small("e2e-incremental");
     run(&repository, &["index", repository.root_str()]);
     let before = {
-        let store = open_store(&repository);
+        let store = open_store(repository);
         let stats = store.stats().expect("counts");
         drop(store);
         stats
@@ -206,7 +206,7 @@ fn a_refresh_of_one_changed_file_updates_that_file_and_nothing_else() {
     );
     let refreshed = run(&repository, &["index", repository.root_str()]);
     let after = {
-        let store = open_store(&repository);
+        let store = open_store(repository);
         let stats = store.stats().expect("counts");
         drop(store);
         stats
@@ -254,7 +254,7 @@ fn rm_removes_exactly_the_rows_of_the_path_it_names() {
     let repository = Repository::small("e2e-rm");
     run(&repository, &["index", repository.root_str()]);
     let before = {
-        let store = open_store(&repository);
+        let store = open_store(repository);
         let stats = store.stats().expect("counts");
         drop(store);
         stats
@@ -265,7 +265,7 @@ fn rm_removes_exactly_the_rows_of_the_path_it_names() {
         &["rm", "src/ui", "--root", repository.root_str()],
     );
     let after = {
-        let store = open_store(&repository);
+        let store = open_store(repository);
         let stats = store.stats().expect("counts");
         drop(store);
         stats
@@ -315,7 +315,7 @@ fn doctor_and_status_agree_about_every_count() {
     // number one of them invented.
     let repository = Repository::small("e2e-doctor-status");
     run(&repository, &["index", repository.root_str()]);
-    let store = open_store(&repository);
+    let store = open_store(repository);
     let measured = store.stats().expect("counts");
     drop(store);
 
@@ -596,7 +596,7 @@ fn a_symlinked_root_and_its_target_reach_the_same_index() {
     let repository = Repository::small("e2e-symlink");
     run(&repository, &["index", repository.root_str()]);
     let measured = {
-        let store = open_store(&repository);
+        let store = open_store(repository);
         let stats = store.stats().expect("counts");
         drop(store);
         stats
@@ -703,7 +703,7 @@ fn the_narration_a_run_produces_names_the_work_it_did() {
         "the narration must say whether this was a build or a refresh: {joined}"
     );
     assert!(
-        joined.contains(&repository.root_str()),
+        joined.contains(repository.root_str()),
         "the narration must name the tree it is working on: {joined}"
     );
     // And the recorded list is the same list, so a JSON consumer sees everything the sink saw.
@@ -759,7 +759,7 @@ fn a_corrupted_index_is_reported_by_every_command_that_opens_it_rather_than_read
 
 /// Assert the store still passes its own integrity check.
 fn store_verify(repository: &Repository) {
-    let store = open_store(&repository);
+    let store = open_store(repository);
     store
         .verify()
         .expect("the index must pass SQLite's integrity check");
@@ -772,7 +772,7 @@ fn store_verify(repository: &Repository) {
 
 /// Run a command against a repository with a sink the test owns, so a test can assert on what the
 /// sink received as well as on what the answer says.
-pub fn run_collecting(repository: &Repository, argv: &[&str]) -> (peek_cli::Output, Vec<String>) {
+pub fn run_collecting(_repository: &Repository, argv: &[&str]) -> (peek_cli::Output, Vec<String>) {
     let owned: Vec<std::ffi::OsString> = argv
         .iter()
         .map(|argument| std::ffi::OsString::from(*argument))
