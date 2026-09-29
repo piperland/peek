@@ -28,6 +28,15 @@
 //! prints every candidate. A skipped file is counted *and named*. A `context` pack that
 //! under-fills says the answer was complete.
 //!
+//! ## 2a. A command that did not answer carries the refusal as its answer
+//!
+//! A usage error, a refusal and an engine failure have no answer, and they used to be reported
+//! with the usage text in the `answer` field anyway. The status and the exit code were right and
+//! the refusal was on the envelope, so a person at a terminal saw the reason — while `--json`, a
+//! script and an agent, which read the *answer*, got the command list. [`Answer::Declined`] is the
+//! variant for all three, and [`declined`] is the one function that builds it. A refusal is
+//! information, and when there is no answer it is the answer.
+//!
 //! ## 3. One place turns arguments into a request
 //!
 //! [`args`] holds the flag table, the command table, and a single [`args::parse`]. An unknown flag
@@ -78,7 +87,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-pub use answer::Answer;
+pub use answer::{Answer, DeclinedAnswer};
 pub use args::{Command, Invocation};
 pub use exit::{Failure, Refusal, Status};
 pub use progress::{Collecting, Progress, Silent};
@@ -161,6 +170,11 @@ pub struct Output {
     /// caller needs and cannot otherwise infer.
     pub index_existed: bool,
     /// The answer, in full.
+    ///
+    /// **There is a variant for a command that did not answer.** [`Answer::Declined`] carries the
+    /// refusal, so a caller reading this field — `--json`, a script, an agent — reads the reason
+    /// rather than a help document standing in for one. The field is never optional and this
+    /// answer is never the usage text unless the caller asked for the usage text.
     pub answer: Answer,
     /// The refusal, when there is one. `None` on a clean success, and **not** an error: a `doctor`
     /// that found a failing check exits non-zero and still carries its whole diagnosis here.
@@ -173,15 +187,22 @@ pub struct Output {
 }
 
 impl Output {
-    /// The human rendering: the answer, then the refusal if there is one.
+    /// The human rendering: the answer, then the refusal if there is one and the answer has not
+    /// already said it.
     ///
     /// A refusal is printed **after** the answer rather than instead of it, because an agent that
     /// ran `peek doctor` needs the findings even when the command exits non-zero, and a caller that
-    /// ran `peek context` with too small a budget needs the pack that explains the refusal.
+    /// ran `peek context` with a budget too small for its target needs the pack that explains the
+    /// refusal. Both of those are answers *with* a note about their limits.
+    ///
+    /// A command that declined is the other case: [`Answer::Declined`] is the refusal, so its
+    /// rendering already states the reason and appending the envelope's copy would print the same
+    /// paragraph twice — leaving the reader to work out which of the two was the answer. See
+    /// [`Output::trailing_refusal`].
     #[must_use]
     pub fn render(&self) -> String {
         let mut text = self.answer.render();
-        if let Some(refusal) = &self.refusal {
+        if let Some(refusal) = self.trailing_refusal() {
             text.push_str(&format!(
                 "\n\npeek {}: {}\n{}",
                 self.command,
@@ -190,6 +211,17 @@ impl Output {
             ));
         }
         text
+    }
+
+    /// The refusal to print after the answer, or `None` when there is nothing to add.
+    ///
+    /// One rule, in one place, so the answer and the envelope cannot both claim to be the reason.
+    #[must_use]
+    fn trailing_refusal(&self) -> Option<&Refusal> {
+        if self.answer.states_its_refusal() {
+            return None;
+        }
+        self.refusal.as_ref()
     }
 
     /// The JSON rendering.
@@ -217,6 +249,11 @@ impl Output {
 /// The single entry point the binary and the tests both go through. `progress` receives narration;
 /// pass [`Silent`] to discard it, or [`Collecting`] to inspect it. The lines are recorded into
 /// [`Output::progress`] whatever the sink does with them.
+///
+/// A command that declined is an `Err(Failure)`, not an `Output` with a status: there is no answer
+/// to return, and a `Result` says that in its type rather than in a field a caller has to know to
+/// check. [`declined`] is how such an `Err` becomes the one value per command that the binary and
+/// the tests work with, and it is the only place that conversion exists.
 pub fn run(invocation: &Invocation, progress: &mut dyn Progress) -> Result<Output, Failure> {
     let command = invocation.command.clone();
     let mut recording = progress::Recording::new(progress);
@@ -252,6 +289,53 @@ pub fn run(invocation: &Invocation, progress: &mut dyn Progress) -> Result<Outpu
         refusal: outcome.refusal,
         progress: narration,
     })
+}
+
+/// The [`Output`] a caller receives for a command that did not produce one.
+///
+/// **The one place the two representations meet.** [`run`] answers `Err(Failure)` for a command
+/// that declined, because there is no answer to return and a `Result` says so. Everything that
+/// wants one value per command — the binary, the tests, and any adapter to come — turns it into
+/// an [`Output`] here, and the answer it carries is [`Answer::Declined`]: the refusal itself,
+/// named, with the status beside it and the same exit code the failure had.
+///
+/// The status, the code and the reason come from the one [`Failure`], so they cannot disagree with
+/// each other or with the answer. `root` and `index_path` are empty and `index_existed` is `false`:
+/// a command that declined did not read a tree, and naming the one it was pointed at would be the
+/// same defect as naming an answer it never produced — a field that looks like a measurement and
+/// is not one.
+#[must_use]
+pub fn declined(failure: &Failure) -> Output {
+    Output {
+        version: peek_core::VERSION.to_owned(),
+        command: failure.command.clone(),
+        status: failure.status,
+        exit_code: failure.exit_code(),
+        root: String::new(),
+        index_path: String::new(),
+        index_existed: false,
+        answer: Answer::Declined(DeclinedAnswer::from(failure)),
+        refusal: Some(failure.refusal.clone()),
+        progress: Vec::new(),
+    }
+}
+
+/// The [`Output`] for a command line that was not understood.
+///
+/// The parser is the only thing that raises an [`args::UsageError`], so this is where one becomes a
+/// [`Failure`] and then an [`Output`]. One construction, used by the binary and by the tests, so
+/// the two cannot report the same bad command line differently — which is the whole reason the
+/// refusal kind is derived from the error's variant rather than written down twice.
+///
+/// `command` is what the line named, and the caller supplies it because the error cannot always
+/// recover it: an unknown command knows its own name, and an unknown flag may precede any command
+/// at all. [`args::named_command`] is the one definition of that guess.
+#[must_use]
+pub fn usage_failed(command: &str, error: &args::UsageError) -> Output {
+    declined(&Failure::usage(
+        command,
+        Refusal::new(error.kind(), error.message()),
+    ))
 }
 
 /// Render a command's result, in whichever mode was asked for.

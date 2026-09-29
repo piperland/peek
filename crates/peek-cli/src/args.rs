@@ -36,6 +36,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use crate::exit::kind;
+
 /// One flag the command line accepts.
 ///
 /// `value` is `Some(placeholder)` for a flag that takes a value and `None` for one that does not,
@@ -508,6 +510,30 @@ impl UsageError {
         }
     }
 
+    /// The machine-readable name of what went wrong.
+    ///
+    /// **One definition, derived from the variant rather than written beside it.** The exit code
+    /// says "usage" for all of these, and a caller branching on the number cannot tell an unknown
+    /// flag from a missing value; the kind is what it branches on next. Deriving it here means the
+    /// JSON, the human text and the envelope cannot disagree about it, and a variant added to
+    /// [`UsageError`] without a kind is a compile error rather than a caller that gets `engine`.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            UsageError::UnknownFlag { .. } => kind::UNKNOWN_FLAG,
+            UsageError::UnknownCommand { .. } => kind::UNKNOWN_COMMAND,
+            UsageError::RepeatedFlag { .. }
+            | UsageError::UnexpectedValue { .. }
+            | UsageError::FlagNotValidHere { .. } => kind::BAD_FLAG_USE,
+            UsageError::MissingValue { .. } => kind::MISSING_VALUE,
+            UsageError::NotANumber { .. } => kind::NOT_A_NUMBER,
+            UsageError::MissingArgument { .. } | UsageError::TooManyArguments { .. } => {
+                kind::WRONG_ARITY
+            }
+            UsageError::NotUtf8 { .. } => kind::NOT_UTF8,
+        }
+    }
+
     /// The one-sentence message, with the closest thing to a fix.
     #[must_use]
     pub fn message(&self) -> String {
@@ -608,6 +634,29 @@ pub const DEFAULT_QUIET_FOR_MS: u64 = 200;
 /// cheap. Nothing here has been measured; the number is the smallest one that makes the failure
 /// mode bounded rather than absent.
 pub const MAX_BATCH_QUIET_PERIODS: u64 = 20;
+
+/// The command a command line named, for a line that did not parse.
+///
+/// **A guess, and only ever used for attribution.** A [`UsageError`] carries the command only for
+/// the cases that are about one — see [`UsageError::command`] — so `peek status --nonsense` has no
+/// command to report and the envelope would say `peek`. The first argument that is not a flag is
+/// the better answer: it is the command the caller was trying to run, which is what a reader of a
+/// refusal needs to know.
+///
+/// It is wrong for a line whose first positional is a flag's value, and it cannot be anything else:
+/// once the parser has identified a command the envelope has the real one, so this is only reached
+/// before that. The message beside the name is the authoritative statement, and this decides which
+/// command it is filed under.
+#[must_use]
+pub fn named_command(argv: &[OsString]) -> String {
+    for argument in argv {
+        let text = argument.to_string_lossy();
+        if !text.is_empty() && !text.starts_with('-') {
+            return text.into_owned();
+        }
+    }
+    "peek".to_owned()
+}
 
 /// Turn argv into an invocation.
 ///
