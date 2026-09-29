@@ -241,9 +241,11 @@ fn a_command_that_worked_never_carries_a_declined_answer() {
     let repository = Repository::small("failure-successful");
     run(&repository, &["index", repository.root_str()]);
     let root = repository.root_str();
-    // An absolute path, deliberately: a *relative* one is a separate open defect about which tree
-    // a path inside a `--root` command is resolved against, and mixing the two in here would make
-    // a failure of either impossible to read.
+    // An absolute path, deliberately, and no longer for the reason it was first written: a
+    // *relative* one was a separate open defect about which tree a path inside a `--root` command
+    // is resolved against, and mixing the two in here would have made a failure of either
+    // impossible to read. That defect is fixed and the path resolution has its own tests, so this
+    // stays absolute to keep the test about the answer type.
     let file = repository.root().join("src/ledger.rs");
     let file = file.to_str().expect("a temporary path is UTF-8");
 

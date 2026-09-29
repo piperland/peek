@@ -392,10 +392,12 @@ mod tests {
     }
 
     #[test]
-    fn a_relative_path_resolves_against_the_working_directory() {
-        // The rule the default of `.` depends on. Compared against the process's own working
-        // directory rather than a guess, so the assertion is about the resolution and not about a
-        // value the test invented.
+    fn the_root_itself_is_resolved_against_the_working_directory() {
+        // The rule the default of `.` depends on, and the counterpart to
+        // `a_relative_path_is_resolved_against_the_root_and_not_the_working_directory`: this is
+        // the one path with nothing else to be relative to. Compared against the process's own
+        // working directory rather than a guess, so the assertion is about the resolution and not
+        // about a value the test invented.
         //
         // The directory is **created here** rather than assumed. An earlier version of this test
         // resolved the relative path `crates`, which exists at the workspace root and not in the
@@ -415,7 +417,8 @@ mod tests {
         assert_eq!(
             root,
             created.canonicalize().expect("canonicalise"),
-            "a relative path is resolved against the working directory, not the repository"
+            "a relative root is resolved against the working directory, which is the only base it \
+             has; a path inside it is not"
         );
     }
 
