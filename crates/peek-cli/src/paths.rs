@@ -114,8 +114,15 @@ pub fn locate(given: &Path, command: &'static str) -> Result<Location, Failure> 
 /// nothing to be relative to except the CWD — whereas a path inside a root that has been named
 /// explicitly must not silently depend on where the user is standing.
 pub fn resolve_root(given: &Path, command: &'static str) -> Result<PathBuf, Failure> {
-    let working = std::env::current_dir()
-        .map_err(|error| format!("the working directory cannot be read: {error}"))?;
+    let working = std::env::current_dir().map_err(|error| {
+        Failure::usage(
+            command,
+            Refusal::new(
+                exit::kind::NOT_A_REPOSITORY,
+                format!("the working directory cannot be read: {error}"),
+            ),
+        )
+    })?;
     let absolutised = absolutise(given, &working).map_err(|detail| {
         Failure::usage(
             command,
