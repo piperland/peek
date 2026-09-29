@@ -94,28 +94,34 @@ fn assert_golden(name: &str, expected: &str, actual: &str) {
 }
 
 /// Run a command line and render it, which is what the binary does.
-fn render(_repository: &Repository, argv: &[&str]) -> String {
+///
+/// The index root is scoped by the fixture rather than left to the developer's cache: this helper
+/// bypasses `fixture::run`, so without it the command would resolve its index wherever the
+/// process is configured to keep one, and a golden would be generated against a different tree.
+fn render(repository: &Repository, argv: &[&str]) -> String {
     let owned: Vec<std::ffi::OsString> = argv
         .iter()
         .map(|argument| std::ffi::OsString::from(*argument))
         .collect();
     let invocation = args::parse(owned).expect("the command line must parse");
-    let mut silent = Silent;
-    match run_invocation(&invocation, &mut silent) {
-        Ok(output) => {
-            assert_eq!(
-                output.exit_code, 0,
-                "{argv:?} exited {}: {:?}",
-                output.exit_code, output.refusal
-            );
-            output.render()
+    fixture::with_index_root(repository, || {
+        let mut silent = Silent;
+        match run_invocation(&invocation, &mut silent) {
+            Ok(output) => {
+                assert_eq!(
+                    output.exit_code, 0,
+                    "{argv:?} exited {}: {:?}",
+                    output.exit_code, output.refusal
+                );
+                output.render()
+            }
+            Err(failure) => panic!("{argv:?} failed: {}", failure.render()),
         }
-        Err(failure) => panic!("{argv:?} failed: {}", failure.render()),
-    }
+    })
 }
 
 /// Run a command line and return the output whatever its status.
-fn run_any(_repository: &Repository, argv: &[&str]) -> peek_cli::Output {
+fn run_any(repository: &Repository, argv: &[&str]) -> peek_cli::Output {
     // A refusal comes back as `Err(Failure)`, not as an `Output` with a status — the two are
     // unified in the binary's `main`, and this helper is not `main`. So a test that wants to
     // inspect a *refused* answer uses `fixture::run`, which is the one place the two
@@ -126,8 +132,10 @@ fn run_any(_repository: &Repository, argv: &[&str]) -> peek_cli::Output {
         .map(|argument| std::ffi::OsString::from(*argument))
         .collect();
     let invocation = args::parse(owned).expect("the command line must parse");
-    let mut silent = Silent;
-    run_invocation(&invocation, &mut silent).expect("the command must produce an output")
+    fixture::with_index_root(repository, || {
+        let mut silent = Silent;
+        run_invocation(&invocation, &mut silent).expect("the command must produce an output")
+    })
 }
 
 /// Replace the two machine-dependent substrings with fixed placeholders.
@@ -175,17 +183,19 @@ fn a_complete_context_pack_renders_exactly_as_committed() {
 /// Separate from [`render`] because a golden for a refusal or a failed diagnosis has to pin the
 /// output of a non-zero exit, and a helper that panics on any non-zero exit cannot record it. The
 /// exit code is still checked by the caller; this only stops the helper from pre-empting it.
-fn render_any(_repository: &Repository, argv: &[&str]) -> String {
+fn render_any(repository: &Repository, argv: &[&str]) -> String {
     let owned: Vec<std::ffi::OsString> = argv
         .iter()
         .map(|argument| std::ffi::OsString::from(*argument))
         .collect();
     let invocation = args::parse(owned).expect("the command line must parse");
-    let mut silent = Silent;
-    match run_invocation(&invocation, &mut silent) {
-        Ok(output) => output.render(),
-        Err(failure) => failure.render(),
-    }
+    fixture::with_index_root(repository, || {
+        let mut silent = Silent;
+        match run_invocation(&invocation, &mut silent) {
+            Ok(output) => output.render(),
+            Err(failure) => failure.render(),
+        }
+    })
 }
 
 #[test]
@@ -566,17 +576,26 @@ fn a_context_with_no_budget_is_refused_rather_than_given_an_invented_one() {
 #[test]
 fn the_golden_files_are_present_and_non_trivial() {
     // A golden that was accidentally committed empty would make every comparison above pass
-    // vacuously, so its substance is asserted directly. The ungenerated marker is the one
-    // exception, and `assert_golden` turns it into a failure rather than letting it through.
+    // vacuously, so its substance is asserted directly. **An ungenerated golden fails here**, and
+    // that is the point of the test rather than an exception to it: this loop used to `continue`
+    // past the marker, which meant a repository where no golden had ever been produced reported
+    // every golden as present and non-trivial. The three comparisons above were already failing
+    // for the same reason — but they failed on a *missing file*, one test at a time, and the test
+    // whose entire job was to notice had skipped them. Regenerate with
+    // `PEEK_UPDATE_GOLDENS=1 cargo test --test golden` and commit the result; there is no mode in
+    // which a placeholder is the right content to commit.
     for (name, text) in [
         ("context-complete", CONTEXT_COMPLETE),
         ("context-reduced", CONTEXT_REDUCED),
         ("doctor-healthy", DOCTOR_HEALTHY),
         ("doctor-broken", DOCTOR_BROKEN),
     ] {
-        if text.contains(UNGENERATED) {
-            continue;
-        }
+        assert!(
+            !text.contains(UNGENERATED),
+            "the golden for {name} has never been generated; run \
+             `PEEK_UPDATE_GOLDENS=1 cargo test --test golden` and commit the result. A golden that \
+             is missing must fail, not pass"
+        );
         assert!(
             text.lines().count() > 3,
             "the golden for {name} is too short to be a real rendering: {text:?}"

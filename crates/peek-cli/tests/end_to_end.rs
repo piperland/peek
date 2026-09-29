@@ -448,12 +448,10 @@ fn the_whole_command_surface_answers_against_a_real_index() {
     // never runs is caught.
     let repository = Repository::small("e2e-surface");
     assert_eq!(
-        run(&repository, &["index", repository.root_str()])
-            .output
-            .exit_code,
-        0
+        run(&repository, &["index"]).output.exit_code,
+        0,
+        "the repository must have an index before the rest of the surface can answer"
     );
-    let root = repository.root_str().to_owned();
     for (argv, expected) in [
         (vec!["status"], 0),
         (vec!["doctor"], 0),
@@ -466,12 +464,10 @@ fn the_whole_command_surface_answers_against_a_real_index() {
         (vec!["context", "wallet_charge", "--budget", "1"], 3),
         (vec!["status", "--nonsense"], 2),
     ] {
-        let mut full = argv.clone();
-        if !argv.first().is_some_and(|first| *first == "index") {
-            full.push("--root");
-            full.push(&root);
-        }
-        let outcome = run(&repository, &full);
+        // No `--root`: the fixture names the repository, in whichever shape this command takes
+        // it. This loop used to append the flag itself, and the condition it used to decide
+        // whether to — "is the first argument `index`" — was a second copy of the command table.
+        let outcome = run(&repository, &argv);
         assert_eq!(
             outcome.output.exit_code, expected,
             "{argv:?} exited {} with {:?}",
@@ -487,7 +483,6 @@ fn two_runs_of_the_same_query_over_an_unchanged_index_produce_identical_output()
     // timestamp would break it.
     let repository = Repository::small("e2e-determinism");
     run(&repository, &["index", repository.root_str()]);
-    let root = repository.root_str().to_owned();
     for argv in [
         vec!["status".to_owned()],
         vec![
@@ -499,10 +494,8 @@ fn two_runs_of_the_same_query_over_an_unchanged_index_produce_identical_output()
         vec!["explain".to_owned(), "wallet_charge".to_owned()],
         vec!["dependents".to_owned(), "wallet_charge".to_owned()],
     ] {
-        let mut full = argv.clone();
-        full.push("--root".to_owned());
-        full.push(root.clone());
-        let borrowed: Vec<&str> = full.iter().map(String::as_str).collect();
+        // The fixture appends the root, so the same line is compared against itself twice.
+        let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
         let first = run(&repository, &borrowed);
         let second = run(&repository, &borrowed);
         assert_eq!(
@@ -636,7 +629,6 @@ fn every_command_states_what_it_could_not_do() {
     // between an answer that is complete and one that is quietly partial.
     let repository = Repository::small("e2e-did-not");
     run(&repository, &["index", repository.root_str()]);
-    let root = repository.root_str().to_owned();
     let cases: Vec<(Vec<&str>, &str)> = vec![
         (vec!["status"], "did not walk the repository"),
         (vec!["doctor"], "did not run the resolver"),
@@ -664,12 +656,11 @@ fn every_command_states_what_it_could_not_do() {
         (vec!["index"], "did not compare file contents"),
     ];
     for (argv, expected) in cases {
-        let mut full = argv.clone();
-        if !argv.contains(&"--root") {
-            full.push("--root");
-            full.push(&root);
-        }
-        let answer = run(&repository, &full).output.answer;
+        // No `--root` here: the fixture names the repository, in the shape the command takes it.
+        // Appending it in this file meant appending the *flag* to `index` as well, which `index`
+        // accepts and ignores — so the one case below that builds an index was walking the
+        // package directory and the test could not tell.
+        let answer = run(&repository, &argv).output.answer;
         let did_not = answer.did_not();
         assert!(
             !did_not.is_empty(),
@@ -681,7 +672,7 @@ fn every_command_states_what_it_could_not_do() {
             "{argv:?} does not say: {expected}\nit says:\n{joined}"
         );
         // And the human rendering prints the whole list, not a summary of it.
-        let text = run(&repository, &full).output.render();
+        let text = run(&repository, &argv).output.render();
         assert!(
             text.contains("could not:"),
             "{argv:?} does not print its `did_not` list:\n{text}"
@@ -772,15 +763,21 @@ fn store_verify(repository: &Repository) {
 
 /// Run a command against a repository with a sink the test owns, so a test can assert on what the
 /// sink received as well as on what the answer says.
-pub fn run_collecting(_repository: &Repository, argv: &[&str]) -> (peek_cli::Output, Vec<String>) {
+///
+/// The index root is scoped by the fixture rather than left to the developer's cache: this helper
+/// bypasses `fixture::run`, so without it the command would resolve its index wherever the
+/// process is configured to keep one.
+pub fn run_collecting(repository: &Repository, argv: &[&str]) -> (peek_cli::Output, Vec<String>) {
     let owned: Vec<std::ffi::OsString> = argv
         .iter()
         .map(|argument| std::ffi::OsString::from(*argument))
         .collect();
     let parsed: Invocation = args::parse(owned).expect("the command line must parse");
-    let mut collecting = peek_cli::progress::Collecting::new();
-    match run_invocation(&parsed, &mut collecting) {
-        Ok(output) => (output, collecting.lines),
-        Err(failure) => panic!("{argv:?} failed: {}", failure.render()),
-    }
+    fixture::with_index_root(repository, || {
+        let mut collecting = peek_cli::progress::Collecting::new();
+        match run_invocation(&parsed, &mut collecting) {
+            Ok(output) => (output, collecting.lines),
+            Err(failure) => panic!("{argv:?} failed: {}", failure.render()),
+        }
+    })
 }

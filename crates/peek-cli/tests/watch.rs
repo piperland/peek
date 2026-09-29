@@ -302,8 +302,12 @@ fn the_watch_command_refuses_a_repository_with_no_index() {
         .map(|argument| std::ffi::OsString::from(*argument))
         .collect();
     let invocation = args::parse(owned).expect("parse");
-    let mut silent = Silent;
-    let failure = run_invocation(&invocation, &mut silent).expect_err("must be refused");
+    // Scoped by the fixture, so the refusal below is about *this* repository and not about
+    // whatever the process would otherwise have found cached.
+    let failure = fixture::with_index_root(repository, || {
+        let mut silent = Silent;
+        run_invocation(&invocation, &mut silent).expect_err("must be refused")
+    });
     assert_eq!(failure.exit_code(), 3);
     assert_eq!(
         failure.refusal.kind.as_str(),
@@ -399,14 +403,20 @@ fn a_watcher_over_a_healthy_index_leaves_no_failure_behind() {
 }
 
 /// Index the fixture, which every test here needs before a session can apply anything.
+///
+/// The index root is scoped by the fixture rather than left to the developer's cache: this helper
+/// bypasses `fixture::run`, so without it the build would write wherever the process is configured
+/// to keep indexes.
 fn run_watch_setup(repository: &Repository) {
     let owned: Vec<std::ffi::OsString> = ["index", repository.root_str()]
         .iter()
         .map(|argument| std::ffi::OsString::from(*argument))
         .collect();
     let invocation = args::parse(owned).expect("parse");
-    let mut silent = Silent;
-    let output = run_invocation(&invocation, &mut silent).expect("the build must succeed");
+    let output = fixture::with_index_root(repository, || {
+        let mut silent = Silent;
+        run_invocation(&invocation, &mut silent).expect("the build must succeed")
+    });
     assert_eq!(output.exit_code, 0, "{:?}", output.refusal);
     assert!(matches!(output.answer, Answer::Index(_)));
 }

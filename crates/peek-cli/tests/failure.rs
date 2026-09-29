@@ -287,13 +287,15 @@ fn a_command_that_worked_never_carries_a_declined_answer() {
 
     // The two commands that read nothing, so they have no repository to name and cannot be held to
     // the same shape — but which must not be a declined answer either, or `peek --help` would be a
-    // failure wearing a success code.
+    // failure wearing a success code. Spelled as the flags this time, in both forms, because the
+    // flag table lists them and the parser now reads them; `peek --version` used to print the
+    // help, and a test that spelled the word instead of the flag is a test that cannot catch it
+    // coming back.
     for (argv, answer_kind) in [
         (vec!["--help"], "help"),
-        // Spelled as the word, not the flag: the flag table lists `--version` and the parser never
-        // reads it, so `peek --version` answers with the help. That is a separate defect and this
-        // test is not the place to change it — but it is why the word is used here.
-        (vec!["version"], "version"),
+        (vec!["-h"], "help"),
+        (vec!["--version"], "version"),
+        (vec!["-V"], "version"),
     ] {
         let output = run(&repository, &argv).output;
         assert_eq!(output.exit_code, 0, "{argv:?} must succeed");
@@ -303,6 +305,23 @@ fn a_command_that_worked_never_carries_a_declined_answer() {
             "{argv:?}: the answer kind"
         );
     }
+    // And the flag is not the word with a different label on it. The version answer names the
+    // schema it read; the help answer does not and must not, because a `--version` that printed the
+    // help would otherwise satisfy every assertion above while answering a different question.
+    let version = run(&repository, &["--version"]).output.answer.render();
+    let help = run(&repository, &["--help"]).output.answer.render();
+    assert!(
+        version.contains("schema v"),
+        "--version must name the schema it read: {version}"
+    );
+    assert!(
+        help.contains("usage:"),
+        "the help must be the help, not the version: {help}"
+    );
+    assert!(
+        !help.contains("schema v"),
+        "the help must not be a version answer wearing the help's label: {help}"
+    );
 }
 
 #[test]

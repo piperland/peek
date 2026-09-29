@@ -32,6 +32,15 @@
 //! The defaults are the *same* `.`, so `peek status` in a checkout and `peek index` in the same
 //! checkout agree about which tree is meant — and both are canonicalised before anything reads
 //! them, so `.`, `./` and an absolute path to the same directory are one repository and one index.
+//!
+//! **One consequence of "two sources, no precedence" that a caller has to know: `--root` is a
+//! global flag, so `peek index --root /some/repo` is accepted and `/some/repo` is ignored** —
+//! `index` reads the positional and there is none, so it walks the working directory. Nothing is
+//! printed about it. It is stated here rather than fixed, because making `--root` a per-command
+//! flag rather than a global one is a change to the table's contract and not a bug fix; a caller
+//! that has to remember which two commands it applies to is a real cost, and the honest
+//! alternatives (refuse `--root` on `index` and `watch`, or let the two sources meet and say
+//! which one won) are both product decisions.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -676,6 +685,23 @@ where
         quiet: has_flag(&flags, "quiet"),
         command,
     };
+
+    // `--help` and `--version` are answers rather than commands, so they are honoured wherever
+    // they appear, before a command has been identified and whatever else is on the line.
+    //
+    // **The flag was in the table and nothing read it.** `FLAGS` has listed `-V, --version` with
+    // the help text `print the version and exit`, and the only way to reach `Command::Version`
+    // was to type the word `version`, so `peek --version` fell through to "no positionals, so
+    // help" and printed the help. The help text therefore described a flag that did nothing,
+    // which is the one thing the generated help is supposed to make impossible. Reading the flag
+    // here is the fix; the alternative was to delete the row, which would have thrown away a
+    // conventional spelling to hide a missing `if`.
+    if has_flag(&flags, "help") {
+        return Ok(shell(Command::Help));
+    }
+    if has_flag(&flags, "version") {
+        return Ok(shell(Command::Version));
+    }
 
     // A command line with no command at all prints the help. Chosen over a usage error because
     // `peek` with no arguments is a request for orientation, and refusing to answer it would be

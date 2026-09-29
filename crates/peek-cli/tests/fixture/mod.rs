@@ -12,9 +12,29 @@
 //!
 //! `peek_core::store::paths` resolves the index from a **process-global** root, and
 //! `set_root_override` is the documented way to point it somewhere a test can delete. The
-//! consequence is that the tests in this binary cannot run concurrently against different roots, so
+//! consequence is that two tests cannot be reading two different index roots at the same time, so
 //! the lock below serialises them. That is a real cost and it is paid on purpose: the alternative
 //! is a test that reaches the developer's own index, which is a far worse surprise.
+//!
+//! **The override is installed for the length of one run, not the life of a repository.** Holding
+//! it for the repository's lifetime looked like the stronger guarantee and was the wrong shape
+//! twice over. It made two `Repository` values in one test a deadlock, because `std::sync::Mutex`
+//! is not reentrant and the second constructor waited on a guard the first one still held. And a
+//! repository that installs the override *also* silently reassigns it: with two alive, the
+//! second one's cache became the process-wide root and the first one's commands wrote into it,
+//! so a test asserting that two repositories have separate indexes was one `set_root_override`
+//! away from asserting nothing. Scoping the override to the run removes both, and the ordering it
+//! used to have to get right — restore the default before the directory is removed — is gone with
+//! it, because the directory is only reachable while a guard is held.
+//!
+//! # Why the repository is injected into every command line
+//!
+//! `--root` defaults to `.` and cargo runs an integration test binary with its working directory
+//! at the package directory, so `run(&repository, &["status"])` answered about `crates/peek-cli`.
+//! There was an index there to be found, or rather none, so the command refused with `no_index`
+//! and the test read as a wrong answer type rather than a missing flag. Fourteen tests were
+//! checking a real behaviour against a directory that is not a fixture. [`run`] therefore names
+//! the repository on every command line, and checks afterwards that it did.
 //!
 //! # The fixture's own surface
 //!
@@ -33,7 +53,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::thread::ThreadId;
 
 use peek_cli::args;
 use peek_cli::progress::Silent;
@@ -101,27 +122,114 @@ pub fn render(value: u64) -> u64 {
 }
 "#;
 
-/// One test's repository, its index directory, and the lock that serialises the override.
+/// One test's repository and the index directory it is allowed to use.
 pub struct Repository {
     root: PathBuf,
-    /// Held for the repository's lifetime. Dropping it releases the override lock, so the
-    /// repository's index directory stops being the process-wide root before the next test sets
-    /// its own.
-    _guard: MutexGuard<'static, ()>,
     index_root: PathBuf,
 }
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
-/// The process-wide lock guarding [`peek_core::store::paths::set_root_override`].
-fn override_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let mutex = LOCK.get_or_init(|| Mutex::new(()));
-    // A poisoned lock is safe to take: the guard is dropped on every path out of `run_with`, so
-    // the override is always restored even when a test panics.
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+/// Who is holding the process-global index root, and how deep they are.
+struct Held {
+    /// The thread that installed it. The override is process-wide, so one thread at a time.
+    owner: ThreadId,
+    /// How many guards that thread holds.
+    depth: usize,
+    /// The override each level found, outermost first, so a nested run puts back the one it
+    /// found rather than clearing the override the run that called it is relying on.
+    stack: Vec<PathBuf>,
+}
+
+/// The process-wide lock around [`peek_core::store::paths::set_root_override`].
+///
+/// **Reentrant, and that is the whole point of it being here rather than a `std::sync::Mutex`.**
+/// The lock guards a *process-global*, so a second thread has to wait; but the thread that
+/// already holds it must be able to take it again, because a test that holds a `Repository` and
+/// then asks the harness to run a command against it is an ordinary thing to write and a
+/// non-reentrant mutex turns it into a hang with no output at all — the failure mode that reads
+/// as "the run produced no results" rather than as a defect. Depth is counted and the lock is
+/// released at the outermost drop.
+#[derive(Default)]
+struct Reentrant {
+    held: Mutex<Option<Held>>,
+    released: Condvar,
+}
+
+impl Reentrant {
+    /// Take the lock and point the engine at `root` until the returned guard is dropped.
+    fn override_root(&'static self, root: &Path) -> Guard {
+        let owner = std::thread::current().id();
+        let mut slot = self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            let mine = matches!(slot.as_ref(), Some(held) if held.owner == owner);
+            if slot.is_none() || mine {
+                if slot.is_some() {
+                    let held = slot.as_mut().expect("the slot is occupied");
+                    held.depth += 1;
+                    held.stack.push(root.to_path_buf());
+                } else {
+                    *slot = Some(Held {
+                        owner,
+                        depth: 1,
+                        stack: vec![root.to_path_buf()],
+                    });
+                }
+                peek_core::store::paths::set_root_override(Some(root.to_path_buf()));
+                return Guard { lock: self };
+            }
+            slot = self
+                .released
+                .wait(slot)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+
+    /// Hand the override back one level, and release the lock at the outermost one.
+    fn release(&self) {
+        let mut slot = self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(held) = slot.as_mut() else {
+            return;
+        };
+        held.depth = held.depth.saturating_sub(1);
+        let _ = held.stack.pop();
+        let inner = held.stack.last().cloned();
+        if held.depth == 0 {
+            *slot = None;
+            peek_core::store::paths::set_root_override(None);
+            self.released.notify_all();
+        } else {
+            peek_core::store::paths::set_root_override(inner);
+        }
+    }
+}
+
+/// The process-wide lock over the index root override.
+fn override_lock() -> &'static Reentrant {
+    static LOCK: OnceLock<Reentrant> = OnceLock::new();
+    LOCK.get_or_init(Reentrant::default)
+}
+
+/// Keeps one repository's index root installed for as long as it is held.
+pub struct Guard {
+    lock: &'static Reentrant,
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.lock.release();
+    }
+}
+
+/// Run `body` with the engine resolving indexes under `repository`'s own index directory.
+///
+/// The only place a test needs this if it is not using [`run`]: several tests drive
+/// `peek_cli::run` directly, to supply their own progress sink or to render a golden, and without
+/// this they would resolve their index in whatever the developer has cached — the exact surprise
+/// the override exists to prevent.
+pub fn with_index_root<T>(repository: &Repository, body: impl FnOnce() -> T) -> T {
+    let _guard = override_lock().override_root(&repository.index_root);
+    body()
 }
 
 impl Repository {
@@ -136,7 +244,13 @@ impl Repository {
         repository
     }
 
-    /// A fixture with no source files at all, for the cold and empty cases.
+    /// A fixture with no source files at all.
+    ///
+    /// **Not a cold build.** "Cold" is about the index — no generation has been committed — and a
+    /// repository with files in it is cold on its first run too. The two are separate facts and
+    /// conflating them is how a test ends up asserting that files were indexed in a directory with
+    /// no files in it. See `a_cold_build_reports_the_mode_and_the_files_it_indexed` for the
+    /// assertion that was impossible and why the fixture changed rather than the assertion.
     #[must_use]
     pub fn empty(label: &str) -> Self {
         Self::bare(label)
@@ -158,14 +272,7 @@ impl Repository {
             .join("cache")
             .canonicalize()
             .expect("canonicalise the index root");
-
-        let guard = override_lock();
-        peek_core::store::paths::set_root_override(Some(index_root.clone()));
-        Self {
-            root,
-            _guard: guard,
-            index_root,
-        }
+        Self { root, index_root }
     }
 
     /// The repository root.
@@ -229,10 +336,9 @@ impl Repository {
 
 impl Drop for Repository {
     fn drop(&mut self) {
-        // Restore the platform default *before* the directory is removed, so a later test cannot
-        // resolve a path under a directory that no longer exists. The lock guard drops after this
-        // body, so the ordering is: restore, then release.
-        peek_core::store::paths::set_root_override(None);
+        // No override to restore: one is installed only while a `Guard` is held, and a guard is
+        // held only for the length of a run. That is why dropping a repository cannot clear a
+        // *different* repository's index root, which it used to be able to do.
         let base = self
             .root
             .parent()
@@ -250,7 +356,131 @@ pub struct Ran {
     pub narration: Vec<String>,
 }
 
-/// Run a command line against `repository`.
+/// How a command line has to be told which repository it is about.
+///
+/// Read out of [`args::COMMANDS`] rather than written here, because the table is the authority
+/// and a second list of which command takes what is a list that can disagree with the parser.
+/// Getting this wrong is worse than the defect it fixes: a `--root` handed to `index` is accepted
+/// by the parser and **ignored**, so a fixture that used the flag for every command would index
+/// the package directory and report a confident count for the wrong tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Naming {
+    /// The command's own `[PATH]` positional, which only `index` and `watch` have.
+    Positional,
+    /// The global `--root` flag, which is every other command that reads a repository.
+    Flag,
+    /// The command reads no repository: `help` and `version`. Naming one would be a lie about
+    /// what the command read, and the parser ignores it, so it would also be a dead flag.
+    Neither,
+}
+
+/// The shape the command in `argv` takes its repository in.
+fn naming_for(command: &args::Command) -> Naming {
+    if matches!(command, args::Command::Help | args::Command::Version) {
+        return Naming::Neither;
+    }
+    let spec = args::COMMANDS
+        .iter()
+        .find(|spec| spec.name == command.name())
+        .expect("every command `parse` produces is in the table that produced it");
+    match spec.root {
+        args::RootSource::Positional => Naming::Positional,
+        args::RootSource::Flag => Naming::Flag,
+    }
+}
+
+/// Whether `--root` appears as a flag, rather than as a value after a `--` terminator.
+///
+/// The terminator is honoured because `peek explain -- --root` asks about something *named*
+/// `--root`, and counting that as the flag would leave the real command unpointed.
+fn names_a_root_flag(argv: &[std::ffi::OsString]) -> bool {
+    let mut after_terminator = false;
+    for token in argv {
+        let text = token.to_string_lossy();
+        if after_terminator {
+            continue;
+        }
+        if text == "--" {
+            after_terminator = true;
+        } else if text == "--root" || text.starts_with("--root=") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the line already names a repository, so that nothing is added to it.
+///
+/// **Already-named is left alone in every shape, not only where injection would collide.** A test
+/// that spells `--root <root>/src/..` on purpose is exercising path canonicalisation, and adding a
+/// second `--root` would be a `RepeatedFlag` usage error rather than the answer it is testing for.
+fn names_a_root(argv: &[std::ffi::OsString], command: &args::Command) -> bool {
+    match naming_for(command) {
+        Naming::Neither => true,
+        Naming::Flag => names_a_root_flag(argv),
+        // The parser has already decided which token was the path, so it is asked rather than
+        // counted here. `.` is the default, and a line that left it alone named nothing.
+        Naming::Positional => command.root().is_some_and(|root| root != &PathBuf::from(".")),
+    }
+}
+
+/// The command line a run will actually use, with the repository named if the test did not.
+///
+/// A line the parser refuses is returned untouched. That is not a special case for its own sake:
+/// those tests exist to assert on the refusal, and a `--root` appended to `--nonsense` could turn
+/// an `unknown_flag` into a `wrong_arity` and the test would still pass while checking nothing.
+fn command_line(argv: &[&str], root: &Path) -> Vec<std::ffi::OsString> {
+    let mut tokens: Vec<std::ffi::OsString> =
+        argv.iter().copied().map(std::ffi::OsString::from).collect();
+    let Ok(parsed) = args::parse(tokens.clone()) else {
+        return tokens;
+    };
+    if names_a_root(&tokens, &parsed.command) {
+        return tokens;
+    }
+    match naming_for(&parsed.command) {
+        // Appended rather than inserted after the command name. The parser splits flags from
+        // positionals in one pass over the whole line, so the position is free, and appending
+        // cannot land in the middle of a flag's value.
+        Naming::Positional => tokens.push(std::ffi::OsString::from(root)),
+        Naming::Flag => {
+            tokens.push(std::ffi::OsString::from("--root"));
+            tokens.push(std::ffi::OsString::from(root));
+        }
+        Naming::Neither => {}
+    }
+    tokens
+}
+
+/// Fail a run that is not pointed at `repository`.
+///
+/// **The assertion the whole injection exists to make possible.** `--root` defaults to `.`, the
+/// working directory of a test binary is the package directory, and a command pointed at
+/// `crates/peek-cli` answers `no_index` — which reads as a wrong answer type rather than as the
+/// missing flag it is. Checking it here means the next command shape, or the next test, cannot
+/// reintroduce that quietly: it would fail in the harness with the line that caused it.
+///
+/// Canonicalised on both sides, because a test may legitimately name the same directory as
+/// `<root>/src/..` and the parser hands paths through verbatim by design.
+fn assert_named_root(named: Option<&PathBuf>, repository: &Repository, argv: &[&str]) {
+    let Some(named) = named else {
+        return;
+    };
+    let expected = repository.root().canonicalize().expect("the fixture exists");
+    let actual = named.canonicalize().unwrap_or_else(|_| named.clone());
+    assert_eq!(
+        actual,
+        expected,
+        "the fixture did not point this command at its own repository, so it answered about \
+         {named:?} — which is not a fixture. A new command shape, or a command line that names \
+         a root the harness did not recognise, is the likely cause. {argv:?}"
+    );
+}
+
+/// Run a command line against `repository`, naming the repository if the line does not.
+///
+/// See [`command_line`] for how the shape is chosen, and [`assert_named_root`] for the check that
+/// makes the choice load-bearing rather than hopeful.
 ///
 /// A usage error becomes an [`Output`] with `Status::Usage` rather than a panic, so a test can
 /// assert on the exit code of a bad command line without a separate code path. A refusal comes back
@@ -262,33 +492,61 @@ pub struct Ran {
 /// not answer — so the meeting happens in one place in the library. A fixture that assembled its
 /// own `Output` is a second answer to that question, and it is where a failure used to come back
 /// carrying the usage text.
-pub fn run(_repository: &Repository, argv: &[&str]) -> Ran {
-    let owned: Vec<std::ffi::OsString> = argv
-        .iter()
-        .map(|argument| std::ffi::OsString::from(*argument))
-        .collect();
-    let invocation: Invocation = match args::parse(owned.clone()) {
+pub fn run(repository: &Repository, argv: &[&str]) -> Ran {
+    let tokens = command_line(argv, repository.root());
+    execute(repository, tokens, Some(argv))
+}
+
+/// Run a command line **exactly as written**, naming no repository at all.
+///
+/// For the tests whose claim is about the path or the root rather than about a command's answer.
+/// **The exemption is a separate function on purpose.** Listing the exempt tests inside [`run`] and
+/// matching on their names would keep the code in one place, but a test whose meaning changed
+/// would then be invisible at the call site, and an invisible change of meaning is the one failure
+/// mode this whole change is about. Written this way, the test that opts out says so, and the
+/// reader can see which tests are about the argument and which are about the command.
+///
+/// The index root is still the repository's own, so the command cannot reach a developer's cache.
+pub fn run_verbatim(repository: &Repository, argv: &[&str]) -> Ran {
+    let tokens: Vec<std::ffi::OsString> =
+        argv.iter().copied().map(std::ffi::OsString::from).collect();
+    execute(repository, tokens, None)
+}
+
+/// Parse, check and run one command line. `written` is the command line as the test typed it, and
+/// is `Some` only when the caller asked for the repository to be named and checked.
+fn execute(
+    repository: &Repository,
+    tokens: Vec<std::ffi::OsString>,
+    written: Option<&[&str]>,
+) -> Ran {
+    let invocation: Invocation = match args::parse(tokens.clone()) {
         Ok(invocation) => invocation,
         Err(error) => {
             return Ran {
-                output: peek_cli::usage_failed(&args::named_command(&owned), &error),
+                output: peek_cli::usage_failed(&args::named_command(&tokens), &error),
                 narration: Vec::new(),
             };
         }
     };
-    // The library resolves the index root from the process-global override this repository set, so
-    // the sink is all a test needs to supply.
-    let mut silent = Silent;
-    match run_invocation(&invocation, &mut silent) {
-        Ok(output) => {
-            let narration = output.progress.clone();
-            Ran { output, narration }
-        }
-        Err(failure) => Ran {
-            output: peek_cli::declined(&failure),
-            narration: Vec::new(),
-        },
+    if let Some(argv) = written {
+        assert_named_root(invocation.command.root(), repository, argv);
     }
+    // The library resolves the index root from the process-global override, which is installed
+    // here for the length of the run and nowhere else. The sink is all a test needs to supply.
+    with_index_root(repository, || {
+        let mut silent = Silent;
+        match run_invocation(&invocation, &mut silent) {
+            Ok(output) => {
+                let narration = output.progress.clone();
+                Ran { output, narration }
+            }
+            Err(failure) => Ran {
+                output: peek_cli::declined(&failure),
+                narration: Vec::new(),
+            },
+        }
+    })
 }
 
 /// Removes a path when dropped, so a failing test does not leave state behind.
