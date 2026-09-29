@@ -64,6 +64,21 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// The word the text rendering prints, and the word a reader greps for.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Outcome::Ok => "ok",
+            Outcome::Reduced => "reduced",
+            Outcome::Insufficient => "insufficient",
+            Outcome::Refused => "refused",
+            Outcome::AmbiguousTarget => "ambiguous_target",
+            Outcome::UnknownTarget => "unknown_target",
+            Outcome::NotIndexed => "not_indexed",
+            Outcome::Failed => "failed",
+        }
+    }
+
     /// Whether the MCP result should carry `isError: true`.
     ///
     /// See the module documentation: only [`Outcome::Failed`], because every other state is
@@ -71,6 +86,12 @@ impl Outcome {
     #[must_use]
     pub const fn is_error(self) -> bool {
         matches!(self, Outcome::Failed)
+    }
+}
+
+impl std::fmt::Display for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -259,6 +280,12 @@ pub struct ToolError {
     pub advice: Option<String>,
     /// The entities a name could have meant.
     pub candidates: Vec<Candidate>,
+    /// The smallest budget that would have been accepted, when the refusal was about a budget.
+    ///
+    /// Carried on the error rather than formatted into the advice sentence so it survives into
+    /// `structuredContent` as a number a program can branch on. A refusal that says "raise the
+    /// budget" without saying to what is a refusal the caller has to guess the rest of.
+    pub minimum_tokens: Option<u64>,
 }
 
 impl ToolError {
@@ -270,6 +297,7 @@ impl ToolError {
             verdict_reason: reason.into(),
             advice: Some(advice.into()),
             candidates: Vec::new(),
+            minimum_tokens: None,
         }
     }
 
@@ -281,6 +309,19 @@ impl ToolError {
             verdict_reason: reason.into(),
             advice: None,
             candidates: Vec::new(),
+            minimum_tokens: None,
+        }
+    }
+
+    /// A refusal that names the smallest budget that would have worked.
+    #[must_use]
+    pub fn budget(reason: impl Into<String>, advice: impl Into<String>, minimum: u64) -> Self {
+        Self {
+            outcome: Outcome::Refused,
+            verdict_reason: reason.into(),
+            advice: Some(advice.into()),
+            candidates: Vec::new(),
+            minimum_tokens: Some(minimum),
         }
     }
 
@@ -295,6 +336,7 @@ impl ToolError {
             ),
             advice: Some("run the `index` tool first".to_owned()),
             candidates: Vec::new(),
+            minimum_tokens: None,
         }
     }
 
@@ -302,6 +344,25 @@ impl ToolError {
     #[must_use]
     pub fn argument(reason: impl Into<String>, advice: impl Into<String>) -> Self {
         Self::refused(reason, advice)
+    }
+
+    /// The same error as a [`Verdict`], for a caller that reached the verdict first.
+    ///
+    /// One translation from an engine error to caller-facing words, held in
+    /// [`Verdict::from_query_error`]; this is the other direction, so a tool that builds a verdict
+    /// by hand and then wants to return it as an error does not write a second sentence.
+    #[must_use]
+    pub fn from_verdict(verdict: &Verdict) -> Self {
+        Self {
+            outcome: verdict.outcome,
+            verdict_reason: verdict
+                .reason
+                .clone()
+                .unwrap_or_else(|| format!("the request was refused ({})", verdict.outcome)),
+            advice: verdict.advice.clone(),
+            candidates: verdict.candidates.clone(),
+            minimum_tokens: None,
+        }
     }
 
     /// The verdict to put in the response.
