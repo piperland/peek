@@ -1341,7 +1341,9 @@ fn a_reduced_pack_names_what_it_dropped_and_what_it_would_have_cost() {
         if pack["outcome"] != json!("reduced") {
             continue;
         }
-        reduced_anything.get_or_insert_with(|| pack.clone());
+        if reduced_anything.is_none() {
+            reduced_anything = Some(pack.clone());
+        }
         let dropped_a_unit = pack["pack"]["omitted"]
             .as_array()
             .expect("an array")

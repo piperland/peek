@@ -66,6 +66,9 @@ struct Server {
     input: std::process::ChildStdin,
     stdout: BufReader<std::process::ChildStdout>,
     stderr: Arc<Mutex<String>>,
+    /// The thread draining the child's stderr. Joined before the transcript is read, so the
+    /// transcript is complete rather than merely written so far.
+    stderr_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Server {
@@ -89,7 +92,7 @@ impl Server {
         // protocol failure rather than a test artefact.
         let transcript = Arc::new(Mutex::new(String::new()));
         let sink = Arc::clone(&transcript);
-        std::thread::spawn(move || {
+        let stderr_thread = std::thread::spawn(move || {
             let mut pipe: ChildStderr = stderr;
             let mut buffer = Vec::new();
             if pipe.read_to_end(&mut buffer).is_ok() {
@@ -105,6 +108,7 @@ impl Server {
             input,
             stdout,
             stderr: transcript,
+            stderr_thread: Some(stderr_thread),
         }
     }
 
@@ -163,10 +167,10 @@ impl Server {
         drop(self.input);
         let status = self.child.wait().expect("wait for the server to exit");
         assert!(status.success(), "the server exited with {status}");
-        // The reader thread ends when the process does; joining it is what guarantees the
-        // transcript is complete rather than merely written so far.
-        let transcript = self.transcript();
-        transcript
+        if let Some(handle) = self.stderr_thread.take() {
+            handle.join().expect("the stderr reader thread finished");
+        }
+        self.transcript()
     }
 }
 

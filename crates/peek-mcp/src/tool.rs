@@ -608,9 +608,9 @@ After this returns, `index_status` and `context` read the index as it stands.",
 
 /// The shared shape of a walk tool: `target` plus the two optional filters.
 ///
-/// Built from a per-tool list so the three walk tools cannot drift apart on how they spell
-/// `kind` or `follow_inferred`. `with_depth` is the only difference between them that is not the
-/// target's own description.
+/// Built from a per-tool list so the three walk tools cannot drift apart on how they spell `kind`
+/// or `follow_inferred`. `with_kind` is false for `dependents`, which already declares its own
+/// arguments, and true for the two that share this shape.
 fn walk_schema(mut properties: Vec<(&'static str, Value)>, with_kind: bool) -> Value {
     if with_kind {
         properties.push((
@@ -655,8 +655,9 @@ fn object(properties: Vec<(&'static str, Value)>, required: &[&'static str]) -> 
 
 /// One property, with whatever constraints it has.
 ///
-/// `extra` is a list rather than a `Value` so a caller writes `"calls"` instead of `json!(["calls"])`
-/// at every call site, and so a property with no constraints passes `&[]` rather than `None`.
+/// `extra` is a list of key/value pairs rather than a pre-built object, so a caller writes a plain
+/// name and a plain value at each call site instead of nesting `json!` inside `json!`. A property
+/// with no constraints passes an empty slice.
 fn property(kind: &str, description: &str, extra: &[(&str, Value)]) -> Value {
     let mut schema = serde_json::Map::new();
     schema.insert("type".to_owned(), json!(kind));

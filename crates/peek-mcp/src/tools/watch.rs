@@ -46,6 +46,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
@@ -53,7 +54,7 @@ use std::time::Duration;
 use peek_core::discover::DiscoveryOptions;
 use peek_core::indexer;
 use peek_core::model::Language;
-use peek_core::store::{RepoId, Store};
+use peek_core::store::Store;
 use peek_core::watch::native::{Watch, WatchOptions};
 
 use serde::Serialize;
@@ -373,7 +374,6 @@ impl Counters {
 pub(crate) fn spawn(
     id: u64,
     root: PathBuf,
-    repo: RepoId,
     quiet_for: Duration,
     ready_timeout: Duration,
 ) -> Result<RunningWatch, ToolError> {
@@ -383,7 +383,7 @@ pub(crate) fn spawn(
         root.clone(),
         u64::try_from(quiet_for.as_millis()).unwrap_or(u64::MAX),
     ));
-    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
+    let (ready_tx, ready_rx) = sync_channel::<Result<(), String>>(1);
 
     // Named `handles` rather than `thread` so it does not sit next to the `std::thread` module it
     // borrows names from. The two would resolve correctly today, and the next reader would have to
@@ -395,11 +395,10 @@ pub(crate) fn spawn(
     };
     let join = thread::Builder::new()
         .name(format!("peek-watch-{id}"))
-        .spawn(move || handles.run(root, repo, quiet_for, &ready_tx))
+        .spawn(move || handles.run(root, quiet_for, &ready_tx))
         .map_err(|error| {
             ToolError::failed(format!(
-                "the operating system would not start a thread to watch {}: {error}",
-                repo.as_str()
+                "the operating system would not start a thread to watch this repository: {error}"
             ))
         })?;
 
@@ -443,13 +442,7 @@ struct ThreadHandles {
 
 impl ThreadHandles {
     /// The thread body: open the writer, register the watch, then loop until asked to stop.
-    fn run(
-        self,
-        root: PathBuf,
-        repo: RepoId,
-        quiet_for: Duration,
-        ready: &std::sync::mpsc::SyncSender<Result<(), String>>,
-    ) {
+    fn run(self, root: PathBuf, quiet_for: Duration, ready: &SyncSender<Result<(), String>>) {
         let mut store = match indexer::open_store(&root) {
             Ok(store) => store,
             Err(error) => {
@@ -493,9 +486,6 @@ impl ThreadHandles {
             self.state
                 .record_error(format!("the watcher reported a failure: {reason}"));
         }
-        // The repository identity is read here so a thread that somehow outlives its session still
-        // says which repository it was watching, in the only place that has a store open.
-        debug_assert!(repo.as_str().len() > 0, "a repository identity is never empty");
     }
 
     /// Apply one batch, and record what happened.

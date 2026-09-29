@@ -302,7 +302,10 @@ impl Session {
         }
         // Everything the session's own identity has to say is read into owned values *before* any
         // of it is mutated below, because `identity` borrows `self` and these lines write to it.
-        let (repo, index_path) = self.identity()?;
+        // The repository identity itself is not needed here: the watcher thread resolves its own
+        // store from the root, and a second identity in two places is a second thing to keep in
+        // step.
+        let (_repo, index_path) = self.identity()?;
         if !index_path.exists() {
             return Err(ToolError::not_indexed(&self.root));
         }
@@ -311,7 +314,7 @@ impl Session {
 
         let id = self.next_watch_id;
         self.next_watch_id += 1;
-        let running = watch::spawn(id, root.clone(), repo, quiet_for, ready_timeout)?;
+        let running = watch::spawn(id, root.clone(), quiet_for, ready_timeout)?;
         self.log(&format!(
             "watch {id} watching {} (quiet for {} ms)",
             root.display(),
