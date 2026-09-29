@@ -515,11 +515,8 @@ fn a_tool_result_names_every_member_the_specification_names() {
     // Three members of this payload are camel-cased on the wire and snake-cased in the struct. They
     // were not all renamed together, which is why the assertion lists all three rather than the one
     // that happened to be caught.
-    let result = peek_mcp::protocol::CallToolResult::answered(
-        "an answer",
-        json!({ "outcome": "ok" }),
-        true,
-    );
+    let result =
+        peek_mcp::protocol::CallToolResult::answered("an answer", json!({ "outcome": "ok" }), true);
     let wire = serde_json::to_value(&result).expect("a result is serialisable");
 
     assert_eq!(
