@@ -25,6 +25,16 @@ The main fixture. Exercises, in one tree:
 it does. The worktree-identity test builds a real repository at runtime instead, because that one
 genuinely needs `git`.
 
+## `modules/`
+
+Module and package trees for `peek_core::extract`. `nested/` for `mod.rs` at every level,
+`several/` for one crate with several modules and an inline one, `cross/` for a `use` that leaves
+one package for another, and `reexport/` for a renamed re-export and a glob. See
+`modules/README.md` for the table.
+
+`modules/` has no `.gitignore`, so every file in it is a file a test actually reads and
+`git clean -fdx` in the verification sandbox is safe for it by construction.
+
 ## Runtime trees
 
 Some things cannot be committed:

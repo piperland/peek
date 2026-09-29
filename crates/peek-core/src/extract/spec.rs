@@ -102,6 +102,17 @@ pub struct ImportRule {
     pub path_field: Option<&'static str>,
     /// Node type used to read the path when `path_field` is absent.
     pub path_node_type: Option<&'static str>,
+    /// Node types that, appearing among the import's children, make it a **re-export** rather
+    /// than a private import — Rust's `visibility_modifier` on `pub use`.
+    ///
+    /// A re-export is still a binding in the referring module, so it is still an `Imports`
+    /// relation: the resolver's R1 rung reads *only* `Imports`, and a re-export replaced by a
+    /// differently-typed edge would stop being a name that anything in the file can be resolved
+    /// against. What the marker buys is the distinction in the relation's basis, so `peek
+    /// explain` can say "this name is part of the module's public surface" without re-parsing
+    /// the file. It is a marker list rather than a boolean because "how does a language say an
+    /// import is public" is a question with a different answer in every grammar.
+    pub reexport_markers: &'static [&'static str],
 }
 
 impl ImportRule {
@@ -109,13 +120,61 @@ impl ImportRule {
         node_type: &'static str,
         path_field: Option<&'static str>,
         path_node_type: Option<&'static str>,
+        reexport_markers: &'static [&'static str],
     ) -> Self {
         Self {
             node_type,
             path_field,
             path_node_type,
+            reexport_markers,
         }
     }
+}
+
+/// How a language turns a file's path into the module path that file has inside its package.
+///
+/// This is **data, and it is absent for a language whose module convention is not yet known**.
+/// `Option::None` means "Peek cannot place this language's files in a namespace", and the
+/// extractor then emits no module entities at all. That is the honest answer, and it is the
+/// direct opposite of what the engine Peek replaces did: it manufactured a module from any
+/// string containing a dot, a slash or a hyphen, so `java.util.List` became a real symbol and
+/// any kebab-cased JavaScript identifier matched (audit B7).
+///
+/// # The rule it encodes
+///
+/// A file's module is named by its path **relative to its package's source root**, prefixed by
+/// the package. The source root is the first path component named in [`Self::source_roots`]
+/// (`src` for Cargo), or the file's own directory when there is none. The prefix is the name of
+/// the directory above the source root, because that is the directory Cargo names the package
+/// after.
+///
+/// Both halves are approximations and both are stated rather than hidden. See
+/// [`crate::extract::modules`] for what each one gets wrong and why it is still better than no
+/// module table at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModuleLayout {
+    /// Directory names that begin a package's own source tree, e.g. `src`.
+    ///
+    /// The **first** such component in a path wins. A nested `src` further down is a directory
+    /// that happens to be called `src`, not a second package root, and treating it as one would
+    /// give every file under it a qualified name that no `use` statement can ever spell.
+    pub source_roots: &'static [&'static str],
+    /// File stems that *are* the package's root module, e.g. `lib` and `main`.
+    ///
+    /// Only meaningful for a file sitting directly in the source root: `src/a/main.rs` is the
+    /// module `pkg::a::main`, not a second package.
+    pub package_roots: &'static [&'static str],
+    /// File stems that mean "this file is the module its **directory** is named after", e.g. `mod`.
+    ///
+    /// Rust has no separate directory entity: `src/a/mod.rs` *is* the module `a`, and a
+    /// directory with no `mod.rs` is not a module at all. A language where a directory and the
+    /// file inside it are different namespaces needs a different table entry.
+    pub directory_modules: &'static [&'static str],
+    /// The separator used to join a module's segments, e.g. `::`.
+    ///
+    /// Spelled the way the *source* spells it, so a qualified name can be compared with a `use`
+    /// path without rewriting one into the other.
+    pub segment_separator: &'static str,
 }
 
 /// How a language expresses "this type extends or implements that one".
@@ -194,6 +253,18 @@ pub struct LanguageSpec {
     /// implementation of* one. Without this, every method in a Rust codebase was extracted as
     /// a bare `Function` and no method/type distinction existed in the graph at all.
     pub type_scope_nodes: &'static [&'static str],
+    /// Node types that declare a **module**, as distinct from a symbol that merely has
+    /// `EntityKind::Module`.
+    ///
+    /// The distinction has to be in the spec because the entity kind cannot carry it: the Rust
+    /// table maps both `impl_item` and `mod_item` to `EntityKind::Module`, since an `impl` block
+    /// is the nearest thing Rust has to a namespace. Keying the walker off the kind would
+    /// therefore treat every `impl` block in a codebase as a module declaration, and a `mod`
+    /// keyword appearing in the shared walker is exactly the thing this table exists to prevent.
+    pub module_nodes: &'static [&'static str],
+    /// How this language's files map onto modules and packages, or `None` when that is not yet
+    /// known.
+    pub modules: Option<ModuleLayout>,
     /// The Tree-sitter grammar for this language.
     pub grammar: fn() -> tree_sitter::Language,
 }
@@ -238,6 +309,22 @@ impl LanguageSpec {
     pub fn is_type_scope_node(&self, node_type: &str) -> bool {
         self.type_scope_nodes.contains(&node_type)
     }
+
+    /// Whether this node type declares a module.
+    pub fn is_module_node(&self, node_type: &str) -> bool {
+        self.module_nodes.contains(&node_type)
+    }
+
+    /// The module layout for this language, or `None` when its file-to-module convention is
+    /// not known. Callers must treat that as "no module structure for this language", never as
+    /// "this file has no modules".
+    ///
+    /// By value rather than by reference: `ModuleLayout` is a `Copy` table of `&'static` slices,
+    /// and handing out a `&'static` to a field of a `&self` would borrow a local for the whole
+    /// of the caller's program.
+    pub fn module_layout(&self) -> Option<ModuleLayout> {
+        self.modules
+    }
 }
 
 impl fmt::Display for LanguageSpec {
@@ -255,7 +342,7 @@ impl fmt::Display for LanguageSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::{CallRule, ImportRule, LanguageSpec, NameStrategy, SymbolRule};
+    use super::{CallRule, ImportRule, LanguageSpec, ModuleLayout, NameStrategy, SymbolRule};
     use crate::model::EntityKind;
 
     const RULES: &[SymbolRule] = &[SymbolRule::new(
@@ -265,7 +352,12 @@ mod tests {
         NameStrategy::Field,
     )];
     const CALLS: &[CallRule] = &[CallRule::new("call_expression", "function")];
-    const IMPORTS: &[ImportRule] = &[ImportRule::new("use_declaration", Some("argument"), None)];
+    const IMPORTS: &[ImportRule] = &[ImportRule::new(
+        "use_declaration",
+        Some("argument"),
+        None,
+        &["visibility_modifier"],
+    )];
 
     fn spec() -> LanguageSpec {
         LanguageSpec {
@@ -277,6 +369,13 @@ mod tests {
             references: None,
             scope_nodes: &["function_item"],
             type_scope_nodes: &["function_item"],
+            module_nodes: &["mod_item"],
+            modules: Some(ModuleLayout {
+                source_roots: &["src"],
+                package_roots: &["lib", "main"],
+                directory_modules: &["mod"],
+                segment_separator: "::",
+            }),
             grammar: || tree_sitter_rust::LANGUAGE.into(),
         }
     }
@@ -306,6 +405,42 @@ mod tests {
             Some("argument")
         );
         assert!(spec.import_rule("no_such_node").is_none());
+    }
+
+    #[test]
+    fn an_import_rule_carries_the_markers_that_make_it_a_re_export() {
+        // A language that says "this import is public" in its grammar declares the node type
+        // here. Nothing in the walker knows what `pub` is.
+        let spec = spec();
+        assert_eq!(
+            spec.import_rule("use_declaration")
+                .map(|rule| rule.reexport_markers),
+            Some(["visibility_modifier"].as_slice())
+        );
+    }
+
+    #[test]
+    fn a_module_declaration_is_told_apart_from_something_that_is_merely_kinded_module() {
+        // Both are `EntityKind::Module` in the Rust table, because an `impl` block is the
+        // nearest thing Rust has to a namespace. Only the table can say which one is a module.
+        let spec = spec();
+        assert!(spec.is_module_node("mod_item"));
+        assert!(
+            !spec.is_module_node("impl_item"),
+            "an impl block is a scope, not a module declaration"
+        );
+        assert!(!spec.is_module_node("struct_item"));
+    }
+
+    #[test]
+    fn a_language_without_a_module_convention_says_so() {
+        // `None` is the answer for every language whose file-to-module layout is not yet
+        // known, and the extractor then emits no module entities. A language must not inherit
+        // another language's convention, which is the same mistake as a shared fallback match
+        // arm.
+        let mut without = spec();
+        without.modules = None;
+        assert!(without.module_layout().is_none());
     }
 
     #[test]

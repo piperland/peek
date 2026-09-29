@@ -199,6 +199,18 @@ impl GrammarFacts {
             }
         }
 
+        for node_type in spec.module_nodes {
+            if !self.has_node_type(node_type) {
+                problems.push(self.missing_node(language, node_type, "module declaration"));
+            }
+        }
+
+        // `spec.modules` is deliberately not validated here. A `ModuleLayout` holds directory
+        // names and a path separator, not grammar node types, and there is no grammar to check
+        // them against — it is checked by the module tests, which assert the *resulting* names
+        // against real file paths. Validating the absence of nothing would only look like the
+        // same enforcement the rest of this file provides.
+
         if let Some(references) = spec.references {
             for node_type in references.node_types {
                 if !self.has_node_type(node_type) {
