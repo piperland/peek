@@ -110,7 +110,7 @@ impl IndexReport {
         format!(
             "generation {}: {} files indexed ({} skipped, {} unsupported, {} degraded), \
              {} removed, {} entities, {} relations ({} resolved, {} pending, {} ambiguous, \
-             {} unresolved, {} inferred), {} tests, wal {} bytes{}{}, {:?}",
+             {} unresolved, {} inferred), {} tests, wal {} bytes{}, {:?}",
             self.generation,
             self.files_indexed,
             self.files_skipped,
