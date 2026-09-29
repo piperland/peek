@@ -330,6 +330,17 @@ fn resolution_from_sql(
             by: by.clone(),
             basis: basis.clone(),
         },
+        // `pending` is the state the extractor writes, and it is the state a reader is most likely
+        // to encounter first. Without this arm the row could be *written* but not *read*, so
+        // every query touching a freshly-extracted relation failed with `Corrupt` — including
+        // `relations_in_state`, which is the resolver's entire input. A state the database can
+        // store but not return is a state the system cannot use.
+        ("pending", ResolutionState::Pending { evidence, basis }) => {
+            ResolutionState::Pending {
+                evidence: evidence.clone(),
+                basis: basis.clone(),
+            }
+        }
         (
             "ambiguous",
             ResolutionState::Unresolved {

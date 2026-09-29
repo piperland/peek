@@ -1443,6 +1443,24 @@ fn stats_report_real_counts_and_real_sizes() {
     assert_eq!(stats.ambiguous_relations, 1);
     assert_eq!(stats.unresolved_relations, 1);
     assert_eq!(stats.inferred_relations, 1);
+    // The fixture's four relations account for the whole table. `pending` must be zero here
+    // because the fixture is written through the store's public constructors, which cannot
+    // produce a pending relation without also producing one that the resolver owes an answer on —
+    // and a counter that quietly omitted a state would still add up.
+    assert_eq!(
+        stats.pending_relations, 0,
+        "the fixture writes no pending relations"
+    );
+    assert_eq!(
+        stats.pending_relations
+            + stats.resolved_relations
+            + stats.ambiguous_relations
+            + stats.unresolved_relations
+            + stats.inferred_relations,
+        stats.relation_count,
+        "every state is counted, so the uncertainty totals add up to the whole table rather \
+         than to a subset that happens to look complete"
+    );
     assert_eq!(stats.orphan_relations, 0);
     assert_eq!(stats.generation, 1);
     assert_eq!(stats.schema_version, SCHEMA_VERSION);

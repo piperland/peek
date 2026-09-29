@@ -51,6 +51,14 @@ pub struct StoreStats {
     pub unresolved_relations: u64,
     /// Relations derived from another fact rather than observed.
     pub inferred_relations: u64,
+    /// Relations the extractor has written but the resolver has not yet decided.
+    ///
+    /// Counted because it is the **work remaining**, not a defect. A build that reports zero here
+    /// has either resolved everything or extracted nothing, and those are very different
+    /// situations that would otherwise look identical. Audit B11: state that exists only inside a
+    /// payload blob cannot be counted, so it cannot be reported honestly — hence a
+    /// `resolution_state` column with an index, and a counter over it.
+    pub pending_relations: u64,
     /// Relations naming a target entity that is not in the index.
     ///
     /// Structurally zero while foreign keys are enforced, and that is the point: it is the check
@@ -85,6 +93,7 @@ impl Store {
             ambiguous_relations: state_count(&by_state, "ambiguous"),
             unresolved_relations: state_count(&by_state, "unresolved"),
             inferred_relations: state_count(&by_state, "inferred"),
+            pending_relations: state_count(&by_state, "pending"),
             orphan_relations: count(
                 conn,
                 "SELECT COUNT(*) FROM relation r \

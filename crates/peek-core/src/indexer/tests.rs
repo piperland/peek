@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{IndexError, SkipReason, build_full, refresh};
 use crate::discover::DiscoveryOptions;
-use crate::model::{EntityId, EntityKind, RepoPath};
+use crate::model::{EntityId, EntityKind, Evidence, RepoPath, ResolutionState};
 use crate::store::{RepoId, Store};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -489,6 +489,62 @@ fn a_rejected_write_surfaces_as_an_error_rather_than_a_successful_looking_report
             outcome.report().summary()
         );
     }
+}
+
+#[test]
+fn a_pending_relation_can_be_written_and_then_read_back() {
+    // The extractor's normal output is `pending`, so this is the round trip that matters most.
+    // It was broken: the schema accepted the row but the row decoder had no arm for the tag, so
+    // *writing* a pending relation succeeded and *reading* it failed with `Corrupt`. Every query
+    // that touched a freshly-extracted relation broke, including the one the resolver needs as
+    // its input. No earlier test caught it because none of them read a relation back out of a
+    // store the indexer had just written.
+    let tree = TempTree::new("pending-round-trip");
+    tree.write(
+        "src/caller.rs",
+        "fn target() {}\nfn main() { target(); }\n",
+    );
+
+    let mut store = open_store(&tree);
+    let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
+    assert!(
+        outcome.report().relations_pending > 0,
+        "the extractor should have left work for the resolver: {}",
+        outcome.report().summary()
+    );
+    assert_eq!(
+        store.stats().expect("stats").pending_relations,
+        outcome.report().relations_pending,
+        "the store counts the same pending edges the report claims to have written"
+    );
+
+    // Now read them back. This is the step that used to fail.
+    let pending = store
+        .relations_in_state(&ResolutionState::Pending { evidence: Evidence::NameOnly, basis: String::new() }, 64)
+        .expect("pending relations must be readable");
+    assert_eq!(
+        pending.len() as u64,
+        outcome.report().relations_pending,
+        "every pending edge the report counted is retrievable by state"
+    );
+    for relation in &pending {
+        assert!(
+            !relation.resolution.describe().is_empty(),
+            "a pending relation must still say why it is pending"
+        );
+        assert!(
+            relation.target.is_none(),
+            "a pending relation has no target yet, and must not be given one"
+        );
+    }
+
+    // And through the adjacency path, which is the one a consumer actually uses.
+    let source = id("src/caller.rs", EntityKind::Function, "main", 0);
+    let edges = store.outgoing(&source, None, 32).expect("outgoing");
+    assert!(
+        edges.iter().any(|edge| edge.resolution.is_pending()),
+        "the call edge survives a full write and read cycle as pending: {edges:?}"
+    );
 }
 
 #[test]
