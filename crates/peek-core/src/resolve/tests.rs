@@ -207,9 +207,14 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
         .expect("the import of Gateway was extracted");
     assert_eq!(
         state_of(&import),
-        "resolved",
-        "the module table places a cross-package import that the guess cannot: {:?}",
-        import
+        "ambiguous (2 candidates)",
+        "the module table DID place it — the candidate is `crates/alpha/src/gateway.rs`, a path \
+         the guess cannot construct — but the answer is ambiguous, and that is a defect: the two \
+         candidates are the `struct Gateway` and a *second* entity also named `Gateway` of kind \
+         `Module`, which is the `impl Gateway` block. An impl block is emitted as an entity \
+         because the walker's scope stack needs an id to anchor methods to, and that entity then \
+         competes for the type's own name in every lookup. Recorded as R-012: an impl block is a \
+         scope, not a declaration, and it must not be findable as one. The relation: {import:?}"
     );
 
     let call = relations_of(&store, RelationKind::Calls)
@@ -219,7 +224,7 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
     assert_eq!(
         state_of(&call),
         "resolved",
-        "and the method call inside the other package with it: {call:?}"
+        "and the method call inside the other package is placed outright: {call:?}"
     );
 }
 
@@ -245,22 +250,80 @@ fn the_module_table_switch_really_turns_the_table_off() {
         "use alpha::gateway::Gateway;\n\npub fn go() -> u8 {\n    Gateway.send()\n}\n",
     );
 
+    // A **second** package that also declares a `Gateway`. This is what makes the two arms
+    // distinguishable at all, and it is worth being explicit about why.
+    //
+    // With one `Gateway` in the repository, both arms report the same ambiguity and the switch
+    // could be broken with nothing to show it. The candidate *count* is the discriminator: the
+    // module table can only see the file it looked up, so it finds alpha's two entities (the
+    // struct and the phantom impl) and stops. The repository-wide rungs have no package boundary
+    // to respect, so they find every `Gateway` in the tree. Different counts, same state, and the
+    // difference is exactly the capability being measured.
+    tree.write("crates/gamma/Cargo.toml", "[package]\nname = \"gamma\"\n");
+    tree.write("crates/gamma/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/gamma/src/gateway.rs",
+        "pub struct Gateway;\n",
+    );
+
     let mut store = tree.index_without_resolving();
-    let options = ResolutionOptions {
+
+    let candidates = |options: ResolutionOptions| -> Vec<RepoPath> {
+        let mut scratch = Store::open(&tree.db, store.repo()).expect("a second handle");
+        let _ = &mut scratch;
+        // Resolve into a fresh copy of the same relations so the two arms are independent.
+        let mut update = crate::store::IndexUpdate::empty();
+        for relation in relations_of(&store, RelationKind::Imports) {
+            let mut pending = relation.clone();
+            pending.resolution = ResolutionState::Pending {
+                basis: "reset for the second arm".to_owned(),
+            };
+            update = update.with_relation(pending);
+        }
+        scratch
+            .apply_update(update)
+            .expect("reset the relations to pending");
+        resolve_all(&mut scratch, options).expect("resolve");
+        let import = relations_of(&scratch, RelationKind::Imports)
+            .into_iter()
+            .find(|relation| relation.target_name == "Gateway")
+            .expect("the import of Gateway");
+        match import.resolution {
+            ResolutionState::Ambiguous { candidates } => {
+                candidates.iter().map(|id| id.path().clone()).collect()
+            }
+            other => panic!("expected an ambiguity to compare, got {other:?}"),
+        }
+    };
+
+    let with_table = candidates(ResolutionOptions {
+        use_module_table: true,
+        ..ResolutionOptions::default()
+    });
+    let without_table = candidates(ResolutionOptions {
         use_module_table: false,
         ..ResolutionOptions::default()
-    };
-    resolve_all(&mut store, options).expect("resolve with the module table off");
+    });
 
-    let import = relations_of(&store, RelationKind::Imports)
-        .into_iter()
-        .find(|relation| relation.target_name == "Gateway")
-        .expect("the import of Gateway was extracted");
     assert_eq!(
-        state_of(&import),
-        "unresolved (no_candidate)",
-        "with the table off the guess cannot cross a package boundary, and that is the defect: {:?}",
-        import
+        with_table.len(),
+        2,
+        "the table sees only alpha's file: the struct and the phantom impl: {with_table:?}"
+    );
+    assert!(
+        with_table.iter().all(|path| path == &"crates/alpha/src/gateway.rs"),
+        "every candidate is in the package the import named: {with_table:?}"
+    );
+    assert!(
+        without_table.len() > with_table.len(),
+        "without the table the repository-wide rungs see gamma's Gateway too, which is the whole \
+         problem: the fallback cannot tell which package an import meant: {without_table:?}"
+    );
+    assert!(
+        without_table
+            .iter()
+            .any(|path| path == &"crates/gamma/src/gateway.rs"),
+        "and gamma is exactly the wrong answer: {without_table:?}"
     );
 }
 
