@@ -126,7 +126,9 @@ impl IndexReport {
             self.relations_inferred,
             self.tests_found,
             self.wal_bytes,
-            self.resolution.as_ref().map_or(String::new(), |r| format!("; {}", r.summary())),
+            self.resolution
+                .as_ref()
+                .map_or(String::new(), |r| format!("; {}", r.summary())),
             self.elapsed
         )
     }

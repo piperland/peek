@@ -147,8 +147,7 @@ fn the_call(store: &Store, target_name: &str) -> crate::model::Relation {
         1 => calls.remove(0),
         other => panic!(
             "expected exactly one call to `{target_name}`, found {other}; the index holds {}",
-            relations_of(store, RelationKind::Calls)
-                .len()
+            relations_of(store, RelationKind::Calls).len()
         ),
     }
 }
@@ -213,8 +212,10 @@ fn the_evidence_order_is_total_and_matches_the_documented_rung_order() {
 
     // Every class the resolver can produce names a rung, and no two classes share one. A rung
     // that quietly stopped firing would otherwise be a silent change in what the engine believes.
-    let mut rungs: Vec<&'static str> =
-        ladder.iter().map(|(evidence, _)| rung_name(evidence)).collect();
+    let mut rungs: Vec<&'static str> = ladder
+        .iter()
+        .map(|(evidence, _)| rung_name(evidence))
+        .collect();
     rungs.sort_unstable();
     let count = rungs.len();
     rungs.dedup();
@@ -243,7 +244,10 @@ fn an_import_that_names_a_module_rather_than_an_item_binds_to_that_modules_file(
     // indistinguishable from a real call edge.
     let tree = TempTree::new("module-import");
     tree.write("src/payments/service.rs", "pub fn charge() {}\n");
-    tree.write("src/app.rs", "use payments::service as svc;\nfn boot() {}\n");
+    tree.write(
+        "src/app.rs",
+        "use payments::service as svc;\nfn boot() {}\n",
+    );
 
     let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
@@ -252,10 +256,18 @@ fn an_import_that_names_a_module_rather_than_an_item_binds_to_that_modules_file(
         .into_iter()
         .filter(|relation| relation.target_name == "svc")
         .collect();
-    assert_eq!(imports.len(), 1, "expected one import of `svc`, found {imports:?}");
+    assert_eq!(
+        imports.len(),
+        1,
+        "expected one import of `svc`, found {imports:?}"
+    );
     assert_eq!(
         imports[0].target,
-        Some(id("src/payments/service.rs", EntityKind::File, "service.rs")),
+        Some(id(
+            "src/payments/service.rs",
+            EntityKind::File,
+            "service.rs"
+        )),
         "a module import binds to the module's file: {}",
         state_of(&imports[0])
     );
@@ -312,7 +324,10 @@ fn a_call_bound_by_an_import_in_another_file_resolves_across_files() {
     // extraction time.
     let tree = TempTree::new("import-bound");
     tree.write("src/payments.rs", "pub fn charge(amount: u32) {}\n");
-    tree.write("src/app.rs", "use payments::charge;\nfn boot() { charge(1); }\n");
+    tree.write(
+        "src/app.rs",
+        "use payments::charge;\nfn boot() { charge(1); }\n",
+    );
 
     let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
@@ -333,7 +348,10 @@ fn a_call_bound_by_an_import_in_another_file_resolves_across_files() {
                 state_of(&call)
             );
         }
-        other => panic!("expected a resolved call, got {other:?}: {}", state_of(&call)),
+        other => panic!(
+            "expected a resolved call, got {other:?}: {}",
+            state_of(&call)
+        ),
     }
 
     // And the import relation itself is decided, not left pending.
@@ -370,13 +388,17 @@ fn two_symbols_with_the_same_name_in_different_files_are_ambiguous_and_neither_i
 
     let call = the_call(&store, "charge");
     assert_eq!(
-        call.target, None,
+        call.target,
+        None,
         "an ambiguous relation must name no target at all: {}",
         state_of(&call)
     );
     let candidates = match &call.resolution {
         ResolutionState::Ambiguous { candidates } => candidates.clone(),
-        other => panic!("expected an ambiguous call, got {other:?}: {}", state_of(&call)),
+        other => panic!(
+            "expected an ambiguous call, got {other:?}: {}",
+            state_of(&call)
+        ),
     };
     assert_eq!(
         candidates.len(),
@@ -417,7 +439,12 @@ fn a_name_nothing_in_the_repository_carries_is_unresolved_with_a_reason_and_stil
         "an unknown bare name has no candidate: {}",
         state_of(&call)
     );
-    assert_eq!(call.target, None, "and names no target: {}", state_of(&call));
+    assert_eq!(
+        call.target,
+        None,
+        "and names no target: {}",
+        state_of(&call)
+    );
 
     // Still in the index, and countable by state.
     let unresolved = store
@@ -457,7 +484,10 @@ fn a_qualified_name_the_repository_does_not_contain_is_reported_as_external() {
     // candidate found" would make the unresolved bucket a number nobody can act on; the thing
     // exists, it is simply outside the indexed tree, which is what `External` is for.
     let tree = TempTree::new("external");
-    tree.write("src/lib.rs", "struct MyType;\nimpl std::fmt::Debug for MyType {}\n");
+    tree.write(
+        "src/lib.rs",
+        "struct MyType;\nimpl std::fmt::Debug for MyType {}\n",
+    );
 
     let mut store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
@@ -466,7 +496,11 @@ fn a_qualified_name_the_repository_does_not_contain_is_reported_as_external() {
         .into_iter()
         .filter(|relation| relation.target_name == "std::fmt::Debug")
         .collect();
-    assert_eq!(implements.len(), 1, "expected one impl edge: {implements:?}");
+    assert_eq!(
+        implements.len(),
+        1,
+        "expected one impl edge: {implements:?}"
+    );
     assert_eq!(
         implements[0].resolution,
         ResolutionState::Unresolved {
@@ -507,7 +541,8 @@ fn a_receiver_never_binds_to_an_unrelated_function_with_the_same_name() {
 
     let call = the_call(&store, "charge");
     assert_eq!(
-        call.target, None,
+        call.target,
+        None,
         "an unidentifiable receiver must bind to nothing: {}",
         state_of(&call)
     );
@@ -598,9 +633,9 @@ fn a_receiver_matched_while_ignoring_letter_case_is_a_claim_and_is_labelled_as_o
                  the claim; got {basis:?}"
             );
         }
-        other => panic!(
-            "expected an inferred call, got {other:?}: a case-folded match is not a proof",
-        ),
+        other => {
+            panic!("expected an inferred call, got {other:?}: a case-folded match is not a proof",)
+        }
     }
     assert_eq!(
         call.target,
@@ -678,10 +713,19 @@ fn a_full_build_resolves_its_own_relations_in_a_second_reportable_pass() {
         .resolution
         .clone()
         .expect("a full build must run the resolution pass");
-    assert!(resolution.committed, "the pass decided something: {}", resolution.summary());
-    assert!(resolution.examined > 0, "and it examined something: {}", resolution.summary());
+    assert!(
+        resolution.committed,
+        "the pass decided something: {}",
+        resolution.summary()
+    );
+    assert!(
+        resolution.examined > 0,
+        "and it examined something: {}",
+        resolution.summary()
+    );
     assert_eq!(
-        resolution.pending_remaining, false,
+        resolution.pending_remaining,
+        false,
         "a full build must leave nothing pending: {}",
         resolution.summary()
     );
@@ -708,10 +752,15 @@ fn resolving_an_unchanged_index_again_is_a_no_op_that_moves_no_generation() {
 
     let mut store = tree.index_without_resolving();
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
-    assert!(first.committed, "the first pass has work to do: {}", first.summary());
+    assert!(
+        first.committed,
+        "the first pass has work to do: {}",
+        first.summary()
+    );
     let after_first = store.generation();
     assert_eq!(
-        first.generation, after_first,
+        first.generation,
+        after_first,
         "the report must not invent a generation: {} vs {after_first}",
         first.summary()
     );
@@ -727,7 +776,11 @@ fn resolving_an_unchanged_index_again_is_a_no_op_that_moves_no_generation() {
         second.summary()
     );
     assert_eq!(second.relations_written, 0, "and must write no rows");
-    assert_eq!(store.generation(), after_first, "the store's own counter agrees");
+    assert_eq!(
+        store.generation(),
+        after_first,
+        "the store's own counter agrees"
+    );
 }
 
 #[test]
@@ -744,7 +797,8 @@ fn a_definition_that_moves_to_another_file_its_callers_are_re_decided() {
     let mut store = tree.index_without_resolving();
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
     assert_eq!(
-        first.inferred, 1,
+        first.inferred,
+        1,
         "one uniquely named call to decide: {}",
         first.summary()
     );
@@ -760,7 +814,11 @@ fn a_definition_that_moves_to_another_file_its_callers_are_re_decided() {
     tree.write("src/two.rs", "pub fn charge() {}\n");
     let outcome = refresh(&tree, &mut store, &["src/one.rs", "src/two.rs"]);
 
-    let resolution = outcome.report().resolution.clone().expect("a refresh resolves");
+    let resolution = outcome
+        .report()
+        .resolution
+        .clone()
+        .expect("a refresh resolves");
     assert!(
         resolution.displaced >= 1,
         "the refresh must have seen the edge it was about to break and repaired it: {}",
@@ -825,7 +883,8 @@ fn a_scoped_pass_decides_the_paths_it_was_given_and_nothing_else() {
     )
     .expect("scope to the second file");
     assert_eq!(
-        report.examined, 1,
+        report.examined,
+        1,
         "the pass examined exactly the one relation in the file it was given: {}",
         report.summary()
     );
@@ -881,7 +940,10 @@ fn a_failed_resolution_leaves_the_previous_generation_readable() {
     match failed {
         // A resolver that returned `Ok` here would report a count for work that did not land.
         Err(error) => assert!(
-            !matches!(error, StoreError::Corrupt(_) | StoreError::SchemaTooNew { .. }),
+            !matches!(
+                error,
+                StoreError::Corrupt(_) | StoreError::SchemaTooNew { .. }
+            ),
             "a refused write must not be reported as corruption: {error}"
         ),
         Ok(report) => panic!(
@@ -894,7 +956,9 @@ fn a_failed_resolution_leaves_the_previous_generation_readable() {
         before,
         "a rolled-back pass is not a commit, or a reader would believe the index is newer"
     );
-    store.verify().expect("the previous generation is still a valid index");
+    store
+        .verify()
+        .expect("the previous generation is still a valid index");
 
     // Every relation the rolled-back pass was deciding is untouched: still `Pending`, still
     // carrying the name it was extracted with, and naming no target. Nothing was half-applied.
@@ -905,7 +969,8 @@ fn a_failed_resolution_leaves_the_previous_generation_readable() {
         state_of(&call)
     );
     assert_eq!(
-        call.target, None,
+        call.target,
+        None,
         "and must not leave a target behind: {}",
         state_of(&call)
     );
@@ -976,7 +1041,10 @@ fn a_multi_segment_path_resolves_through_the_module_it_names() {
         "src/payments.rs",
         "pub struct Service;\nimpl Service { pub fn charge(&self) {} }\n",
     );
-    tree.write("src/app.rs", "fn go() { crate::payments::Service::charge(); }\n");
+    tree.write(
+        "src/app.rs",
+        "fn go() { crate::payments::Service::charge(); }\n",
+    );
 
     let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
@@ -984,11 +1052,7 @@ fn a_multi_segment_path_resolves_through_the_module_it_names() {
     let call = the_call(&store, "charge");
     assert_eq!(
         call.target,
-        Some(id(
-            "src/payments.rs",
-            EntityKind::Method,
-            "Service.charge"
-        )),
+        Some(id("src/payments.rs", EntityKind::Method, "Service.charge")),
         "the call must land in the module its path named: {}",
         state_of(&call)
     );
@@ -999,7 +1063,10 @@ fn a_multi_segment_path_resolves_through_the_module_it_names() {
             "the evidence must name the scope that located it, or explain cannot say why: {}",
             state_of(&call)
         ),
-        other => panic!("expected a resolved call, got {other:?}: {}", state_of(&call)),
+        other => panic!(
+            "expected a resolved call, got {other:?}: {}",
+            state_of(&call)
+        ),
     }
 }
 
@@ -1072,15 +1139,33 @@ fn a_pass_with_nothing_in_scope_examines_nothing_and_commits_nothing() {
     )
     .expect("an empty scope is not an error");
 
-    assert_eq!(report.examined, 0, "nothing was in scope: {}", report.summary());
-    assert_eq!(report.relations_written, 0, "so nothing was written: {}", report.summary());
-    assert!(!report.committed, "and nothing was committed: {}", report.summary());
+    assert_eq!(
+        report.examined,
+        0,
+        "nothing was in scope: {}",
+        report.summary()
+    );
+    assert_eq!(
+        report.relations_written,
+        0,
+        "so nothing was written: {}",
+        report.summary()
+    );
+    assert!(
+        !report.committed,
+        "and nothing was committed: {}",
+        report.summary()
+    );
     assert_eq!(
         store.generation(),
         before,
         "an empty pass must not churn the store or move the generation"
     );
-    assert!(report.summary().contains("no commit"), "{}", report.summary());
+    assert!(
+        report.summary().contains("no commit"),
+        "{}",
+        report.summary()
+    );
 }
 
 #[test]
@@ -1123,8 +1208,7 @@ fn an_ambiguity_widened_by_a_new_file_is_not_re_decided_until_a_full_pass_runs()
         other => panic!("still ambiguous, got {other:?}: {}", state_of(&after)),
     };
     assert_eq!(
-        stale,
-        before,
+        stale, before,
         "a scoped pass cannot widen an ambiguity it cannot locate, and must not pretend to"
     );
 
@@ -1196,7 +1280,10 @@ fn every_relation_the_pass_examined_is_accounted_for_and_none_is_left_pending() 
     tree.write("src/two.rs", "pub fn charge() {}\n");
     tree.write("src/three.rs", "pub fn charge() {}\n");
     tree.write("src/driver.rs", "fn go() { charge(); missing_one(); }\n");
-    tree.write("src/inherits.rs", "trait Base {}\ntrait Extended: Base {}\n");
+    tree.write(
+        "src/inherits.rs",
+        "trait Base {}\ntrait Extended: Base {}\n",
+    );
 
     let mut store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
@@ -1207,8 +1294,16 @@ fn every_relation_the_pass_examined_is_accounted_for_and_none_is_left_pending() 
         "every examined relation must land in exactly one decision bucket: {}",
         report.summary()
     );
-    assert!(report.ambiguous >= 1, "the fixture has an ambiguous call: {}", report.summary());
-    assert!(report.unresolved >= 1, "and an unknown one: {}", report.summary());
+    assert!(
+        report.ambiguous >= 1,
+        "the fixture has an ambiguous call: {}",
+        report.summary()
+    );
+    assert!(
+        report.unresolved >= 1,
+        "and an unknown one: {}",
+        report.summary()
+    );
     assert!(
         !report.pending_remaining,
         "a pass must leave nothing pending behind it: {}",
@@ -1227,7 +1322,8 @@ fn every_relation_the_pass_examined_is_accounted_for_and_none_is_left_pending() 
         .expect("read the ambiguous bucket")
         .len() as u64;
     assert_eq!(
-        report.ambiguous, ambiguous,
+        report.ambiguous,
+        ambiguous,
         "the report's ambiguous count must be the store's: {}",
         report.summary()
     );

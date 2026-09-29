@@ -590,9 +590,9 @@ impl<'s> Resolver<'s> {
         }
         Ok(match found.is_empty() {
             true => None,
-            false => Some(
-                self.from_candidates(found, "resolved through an import binding in this file"),
-            ),
+            false => {
+                Some(self.from_candidates(found, "resolved through an import binding in this file"))
+            }
         })
     }
 
@@ -611,7 +611,9 @@ impl<'s> Resolver<'s> {
             let mut bindings = Vec::new();
             let entities = self.entities_in_file(path)?;
             for entity in &entities {
-                let relations = self.store.outgoing(&entity.id, Some(RelationKind::Imports), limit)?;
+                let relations =
+                    self.store
+                        .outgoing(&entity.id, Some(RelationKind::Imports), limit)?;
                 if relations.len() >= limit {
                     self.truncated += 1;
                 }
@@ -627,7 +629,11 @@ impl<'s> Resolver<'s> {
             }
             self.imports.insert(path.clone(), bindings);
         }
-        let all = self.imports.get(path).map(Vec::as_slice).unwrap_or_default();
+        let all = self
+            .imports
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         Ok(all
             .iter()
             .filter(|binding| binding.local == name)
@@ -787,10 +793,7 @@ impl<'s> Resolver<'s> {
         }
         Ok(match found.is_empty() {
             true => None,
-            false => Some(self.from_candidates(
-                found,
-                "resolved to a definition in this file",
-            )),
+            false => Some(self.from_candidates(found, "resolved to a definition in this file")),
         })
     }
 
@@ -856,8 +859,7 @@ impl<'s> Resolver<'s> {
         // `Reverse` and a `String`-bearing identity, and the point of the comparison is to be
         // readable: strongest evidence first, then a stable identity order.
         found.sort_by(|a, b| {
-            b.by
-                .strength()
+            b.by.strength()
                 .cmp(&a.by.strength())
                 .then_with(|| a.id.cmp(&b.id))
         });
@@ -881,7 +883,7 @@ impl<'s> Resolver<'s> {
     }
 
     /// Apply the candidate cap, recording that it was applied.
-    fn cap(&mut self, candidates: Vec<EntityId>) -> Vec<EntityId> {
+    fn cap(&mut self, mut candidates: Vec<EntityId>) -> Vec<EntityId> {
         if candidates.len() > self.options.max_candidates {
             self.truncated += 1;
             candidates.truncate(self.options.max_candidates);
@@ -1206,7 +1208,6 @@ fn decide_and_commit(
         ..ResolutionReport::default()
     };
     let mut update = IndexUpdate::empty();
-    let mut truncated = 0u64;
 
     {
         let mut resolver = Resolver::new(store, options);
@@ -1220,9 +1221,10 @@ fn decide_and_commit(
                 update = update.with_relation(decided);
             }
         }
-        truncated = resolver.truncated;
+        // Read out of the scope that owns the resolver, so the counter cannot be forgotten at
+        // the point of construction and silently report zero.
+        report.truncated = resolver.truncated;
     }
-    report.truncated = truncated;
 
     if !update.is_empty() {
         let stats = store.apply_update(update)?;

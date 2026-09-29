@@ -566,11 +566,13 @@ fn a_full_build_commits_twice_so_the_resolution_pass_is_visible_as_a_generation(
         .clone()
         .expect("a build runs the resolution pass");
     assert_eq!(
-        outcome.report().generation, 2,
+        outcome.report().generation,
+        2,
         "extraction commits generation 1 and resolution commits generation 2"
     );
     assert_eq!(
-        resolution.generation, 2,
+        resolution.generation,
+        2,
         "the report must carry the store's own generation, not its own: {}",
         resolution.summary()
     );
