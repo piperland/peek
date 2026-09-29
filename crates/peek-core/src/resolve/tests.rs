@@ -19,7 +19,7 @@ use crate::discover::DiscoveryOptions;
 use crate::indexer::{IndexOutcome, build_full};
 use crate::model::entity::{EntityId, EntityKind};
 use crate::model::path::RepoPath;
-use crate::model::relation::{Evidence, RelationKind, ResolutionState, UnresolvedReason};
+use crate::model::relation::{Evidence, Relation, RelationKind, ResolutionState, UnresolvedReason};
 use crate::store::{RepoId, Store, StoreError};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -161,6 +161,71 @@ fn state_of(relation: &crate::model::Relation) -> String {
         relation.resolution.describe(),
         relation.target.as_ref().map(ToString::to_string),
     )
+}
+
+/// Reset one kind of relation to `Pending`, resolve the index again with the module table on or
+/// off, and hand back the relations of that kind.
+///
+/// Both arms come out of **one** extraction, which is the only kind of comparison worth making:
+/// two builds is what produced R-010's convincing false trend, and an arm that reads the other
+/// arm's rows is not a comparison at all. So the relations are rebuilt from the rows already in
+/// the index and the pass runs again over them. The evidence is carried forward so both arms
+/// choose a rung the same way, and the target is dropped rather than carried, because a pending
+/// row that still names a target is a decided edge wearing a pending hat. The second handle is
+/// closed before this returns, so the next arm opens the index on its own.
+fn decide_under(
+    tree: &TempTree,
+    store: &Store,
+    kind: RelationKind,
+    table: bool,
+) -> Vec<Relation> {
+    let mut scratch = Store::open(&tree.db, store.repo()).expect("a second handle");
+    let mut update = crate::store::IndexUpdate::empty();
+    for relation in relations_of(store, kind) {
+        let evidence = match &relation.resolution {
+            ResolutionState::Pending { evidence, .. } => evidence.clone(),
+            ResolutionState::Resolved { by } => by.clone(),
+            ResolutionState::Inferred { by, .. } => by.clone(),
+            // Neither of these carries evidence, and `NameOnly` is where the extractor itself
+            // starts, so a re-decision begins where a first one would.
+            ResolutionState::Ambiguous { .. } | ResolutionState::Unresolved { .. } => {
+                Evidence::NameOnly
+            }
+        };
+        let pending = Relation::pending(
+            kind,
+            relation.source.clone(),
+            relation.target_name.clone(),
+            relation.span,
+            evidence,
+            "reset so both arms decide the same relations",
+        );
+        update = update.with_relation(pending);
+    }
+    scratch
+        .apply_update(update)
+        .expect("reset the relations to pending");
+    let options = ResolutionOptions {
+        use_module_table: table,
+        ..ResolutionOptions::default()
+    };
+    resolve_all(&mut scratch, options).expect("resolve");
+    relations_of(&scratch, kind)
+}
+
+/// The one relation in a list naming `target_name`, or a message saying what was there.
+fn the_one<'a>(relations: &'a [Relation], target_name: &str) -> &'a Relation {
+    let mut named: Vec<&Relation> = relations
+        .iter()
+        .filter(|relation| relation.target_name == target_name)
+        .collect();
+    match named.len() {
+        1 => named.remove(0),
+        other => panic!(
+            "expected exactly one relation naming `{target_name}`, found {other} in {}",
+            relations.len()
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1493,6 +1558,166 @@ fn a_multi_segment_path_resolves_through_the_module_it_names() {
             state_of(&call)
         ),
     }
+}
+
+#[test]
+fn a_fully_qualified_call_into_another_package_is_placed_by_the_module_table() {
+    // The rung that resolves `other::module::f()` used to call the path guess directly, so the
+    // module table was never asked about the one kind of path it exists to place. The table was
+    // reachable from `use` statements and from nowhere else.
+    //
+    // A workspace is what makes the gap visible, and the reason is structural rather than a
+    // matter of anchors tried. The guess joins a module path's segments onto the importer's own
+    // directory and each of its ancestors, so from `crates/beta/src/` it builds
+    // `crates/beta/src/alpha/gateway.rs`, `crates/beta/alpha/gateway.rs`,
+    // `crates/alpha/gateway.rs` and `alpha/gateway.rs` — and never
+    // `crates/alpha/src/gateway.rs`, because `src` is not a segment of any module path and
+    // nothing in the name mentions it. No anchor list fixes that; the segment is simply absent.
+    //
+    // The second package is what makes the two arms distinguishable at all. With one `f` in the
+    // repository the arm without the table could still reach the right target through the
+    // repository-wide rung and the arms would look identical with the table doing nothing. With
+    // two, the arm that cannot place the path has to report both and choose neither, which is
+    // not a smaller answer but a different one.
+    let tree = TempTree::new("qualified-cross-package");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write("crates/alpha/src/gateway.rs", "pub fn f() {}\n");
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    tree.write(
+        "crates/beta/src/lib.rs",
+        "pub fn go() {\n    alpha::gateway::f();\n}\n",
+    );
+    tree.write("crates/gamma/Cargo.toml", "[package]\nname = \"gamma\"\n");
+    tree.write("crates/gamma/src/lib.rs", "pub mod gateway;\n");
+    tree.write("crates/gamma/src/gateway.rs", "pub fn f() {}\n");
+
+    let store = tree.index_without_resolving();
+    let placed = decide_under(&tree, &store, RelationKind::Calls, true);
+    let call = the_one(&placed, "f");
+
+    assert_eq!(
+        call.target,
+        Some(id("crates/alpha/src/gateway.rs", EntityKind::Function, "f")),
+        "the path says `alpha::gateway`, so the call belongs in alpha: {}",
+        state_of(call)
+    );
+    // The rung is asserted as well as the target, because the target alone does not say who
+    // produced it. The guess and the table both yield a file, and only the evidence records
+    // which one did — so an assertion on the target is an assertion that something placed the
+    // call, and this is the assertion that it was this.
+    let by = match &call.resolution {
+        ResolutionState::Resolved { by } => by,
+        other => panic!(
+            "expected the call to be resolved by a rung, got {other:?}: {}",
+            state_of(call)
+        ),
+    };
+    assert_eq!(
+        rung_name(by),
+        "scope_qualified_name",
+        "the scope rung placed it, and nothing else may: {}",
+        state_of(call)
+    );
+
+    // The same extraction, decided again with the table off. The guess finds no file, so the
+    // rung returns nothing and the call falls through to the rung that searches the whole
+    // repository — which cannot tell two packages apart and says so instead of picking.
+    let unplaced = decide_under(&tree, &store, RelationKind::Calls, false);
+    let call = the_one(&unplaced, "f");
+    let candidates = match &call.resolution {
+        ResolutionState::Ambiguous { candidates } => candidates.clone(),
+        other => panic!(
+            "without the table the path cannot be placed at all, and the answer must say so: \
+             {other:?}: {}",
+            state_of(call)
+        ),
+    };
+    let paths: Vec<&str> = candidates
+        .iter()
+        .map(|candidate| candidate.path().as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["crates/alpha/src/gateway.rs", "crates/gamma/src/gateway.rs"],
+        "and the two candidates are the two packages the rung cannot tell apart, which is the \
+         defect the table exists to remove: {}",
+        state_of(call)
+    );
+}
+
+#[test]
+fn a_qualified_call_through_a_type_is_placed_only_by_dropping_the_type_from_the_path() {
+    // Pins the `strip_last` argument R3 passes to the module table, from the outside, where a
+    // change to it is visible.
+    //
+    // `alpha::gateway::Service::charge()` puts a **type** in the last position of the scope,
+    // because the extractor's `Callee::path` is everything before the final name and a path like
+    // this one is a type's associated function, not a module's item. The table has no row for
+    // `alpha::gateway::Service` and never will: a type is not a namespace, and no file is named
+    // after it. The only reading that hits is the one with that segment dropped, which is the
+    // module `alpha::gateway` — the file that declares the type and its `impl` together.
+    //
+    // So `false` would make this call unplaceable by the table *and* by the guess, and the
+    // observable consequence is a state change rather than a wrong target: the call would fall
+    // through to the repository-wide rung, land on the same method, and be reported as a claim
+    // instead of a proof. A rate over `(resolved + inferred)` cannot see that at all, which is
+    // why the measurement counts `Resolved` on its own.
+    let tree = TempTree::new("qualified-through-a-type");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/alpha/src/gateway.rs",
+        "pub struct Service;\nimpl Service {\n    pub fn charge(&self) {}\n}\n",
+    );
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    tree.write(
+        "crates/beta/src/lib.rs",
+        "pub fn go() {\n    alpha::gateway::Service::charge();\n}\n",
+    );
+
+    let store = tree.index_without_resolving();
+    let placed = decide_under(&tree, &store, RelationKind::Calls, true);
+    let call = the_one(&placed, "charge");
+
+    assert_eq!(
+        call.target,
+        Some(id("crates/alpha/src/gateway.rs", EntityKind::Method, "Service.charge")),
+        "the path reaches the module that declares the type: {}",
+        state_of(call)
+    );
+    let by = match &call.resolution {
+        ResolutionState::Resolved { by } => by,
+        other => panic!(
+            "expected the call to be resolved by a rung, got {other:?}: {}",
+            state_of(call)
+        ),
+    };
+    assert_eq!(
+        rung_name(by),
+        "scope_qualified_name",
+        "and it is a proof, not a claim: the scope rung located the file the type lives in: {}",
+        state_of(call)
+    );
+
+    // The other arm, on the same extraction. `charge` is unique in the repository, so the rung
+    // that follows reaches the same method and reports a *claim* about it. Same target, weaker
+    // state, and the rung is what says so.
+    let claimed = decide_under(&tree, &store, RelationKind::Calls, false);
+    let call = the_one(&claimed, "charge");
+    let by = match &call.resolution {
+        ResolutionState::Inferred { by, .. } => by,
+        other => panic!(
+            "without the table this is a claim about a unique name, not a proof: {other:?}: {}",
+            state_of(call)
+        ),
+    };
+    assert_eq!(
+        rung_name(by),
+        "unique_name",
+        "the scope rung could not place the path, so the repository-wide one answered: {}",
+        state_of(call)
+    );
 }
 
 #[test]

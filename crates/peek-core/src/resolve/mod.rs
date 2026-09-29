@@ -85,8 +85,9 @@
 //! an import of the same name are two claims about one symbol; when they disagree the receiver is
 //! the more specific one, and letting the import win would re-create audit B3 under a new name.
 //!
-//! Turning a module path into a file is [`files_for_module`], and its limits are documented
-//! there because they are real.
+//! Turning a module path into a file is [`Resolver::module_files`] — the module table first, the
+//! path guess as its fallback — and the guess's limits are documented at [`files_for_module`]
+//! because they are real.
 //!
 //! ## R2 — receiver
 //!
@@ -937,6 +938,33 @@ impl<'s> Resolver<'s> {
     }
 
     /// R3: a multi-segment path naming a module this file can locate.
+    ///
+    /// Asks the module table, through [`Resolver::module_files`], the same way R1 does and for
+    /// the same reason: a fully-qualified path is the one shape the path guess cannot reach
+    /// across a package boundary, because `src` is not a segment of a module path and nothing
+    /// in the name mentions it. This rung used to call [`files_for_module`] itself, so the table
+    /// was never asked about the paths the extractor had already written down — the table was
+    /// reachable only from `use` statements, and a `other_crate::a::b::f()` call fell through
+    /// to the repository-wide rungs with the answer sitting in the index.
+    ///
+    /// **`strip_last` is `true`, and `true` is the reason this rung fires at all.** The
+    /// extractor's `Callee::path` is everything *before* the final name, so the last segment of
+    /// a scope is not always a module: in `crate::payments::Service::charge()` — the worked
+    /// example this file's own documentation opens the rung with — that segment is a type, the
+    /// table holds no row for `payments::Service` and never will, and the reading that hits is
+    /// the one with the segment dropped, which is the module `payments`: the file that declares
+    /// the type and its `impl` together. `false` would confine the file set to paths every
+    /// segment of which is a module, turning that whole class into `no_candidate` rather than
+    /// into a wrong answer — and because [`Resolver::module_files`] hands the same flag to the
+    /// fallback, it would be a regression in the behaviour that predates the table, not merely a
+    /// different way of asking it.
+    ///
+    /// The flag governs how far along the path the search for a **file** goes. It says nothing
+    /// about the name being looked up, which is `relation.target_name` and never a path
+    /// segment: that name is matched with [`is_declaration`] and ranked by [`prefer_symbols`],
+    /// so a submodule sharing a callee's name cannot outrank a function of that name declared
+    /// in the same file. Reading it the other way round is what would resolve a call to a
+    /// namespace, and `strip_last` is not where that is decided.
     fn via_scope(
         &mut self,
         relation: &Relation,
@@ -947,7 +975,7 @@ impl<'s> Resolver<'s> {
             scope: scope.to_owned(),
         };
         let mut found: Vec<Found> = Vec::new();
-        for file in files_for_module(scope, relation.source.path(), true) {
+        for file in self.module_files(scope, relation.source.path(), true)? {
             for entity in self.entities_in_file(&file)? {
                 if entity.name == name && is_declaration(entity.kind()) {
                     found.push(Found {
