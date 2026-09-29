@@ -357,11 +357,18 @@ fn a_relative_path_is_resolved_against_the_root_and_not_the_working_directory() 
     // the file that actually left the index. The count cannot: one path is removed either way,
     // and both candidates are inside the repository, which is exactly where the containment
     // check has nothing to say.
-    assert_eq!(removed.path, "src/ui/b.rs", "asked for it from {}", inside.display());
+    assert_eq!(
+        removed.path,
+        "src/ui/b.rs",
+        "asked for it from {}",
+        inside.display()
+    );
     assert_eq!(removed.indexed_paths_removed, 1, "{removed:?}");
 
     let store = open_store(&repository);
-    let paths = store.indexed_paths(1 << 24).expect("the paths the index holds");
+    let paths = store
+        .indexed_paths(1 << 24)
+        .expect("the paths the index holds");
     let held: Vec<&str> = paths.iter().map(|path| path.as_str()).collect();
     drop(store);
     assert!(
