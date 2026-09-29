@@ -440,7 +440,7 @@ fn an_index_inside_the_repository_is_a_warning_with_a_way_out() {
     // A deliberately in-repository index: the thing D-0006 forbids.
     let inside = install.path().join(".peek");
     fs::create_dir_all(&inside).expect("create the in-repository index directory");
-    let store = Store::open(&inside.join("index.db"), &repo).expect("open the in-repo store");
+    let mut store = Store::open(&inside.join("index.db"), &repo).expect("open the in-repo store");
     indexer::build_full(
         &mut store,
         install.path(),
