@@ -48,6 +48,13 @@ mkdir -p "$REPOS_DIR" "$INDEX_DIR" "$OUT"
 echo "workspace: $WORK"
 echo
 
+# Pull one labelled number out of a probe log. A top-level function rather than a nested one,
+# because `local` cannot be applied to a function definition.
+field() {
+  grep -m1 -E "^$2" "$1" 2>/dev/null | tr -s ' ' | cut -d: -f2- | xargs || true
+  echo
+}
+
 # One repository: clone if needed, then probe it. Never lets a failure abort the run — a
 # repository that cannot be cloned is a fact about the run and is recorded as one.
 probe_one() {
@@ -82,16 +89,15 @@ probe_one() {
 
   # Pull the numbers out into one line so the summary can be a table rather than prose. Every
   # field is a number the probe actually printed; nothing here is derived by this script.
-  local field() { grep -m1 -E "^$1" "$log" | tr -s ' ' | cut -d: -f2- | xargs || echo "?"; }
   printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "$slug" \
-    "$(field '^entities:')" \
-    "$(field '^relations:')" \
-    "$(field '^resolved:')" \
-    "$(field '^ambiguous:')" \
-    "$(field '^unresolved:')" \
-    "$(field '^orphans:')" \
-    "$(field '^wal bytes:')" \
+    "$(field "$log" '^entities:')" \
+    "$(field "$log" '^relations:')" \
+    "$(field "$log" '^resolved:')" \
+    "$(field "$log" '^ambiguous:')" \
+    "$(field "$log" '^unresolved:')" \
+    "$(field "$log" '^orphans:')" \
+    "$(field "$log" '^wal bytes:')" \
     >"$OUT/$slug.row"
 }
 
