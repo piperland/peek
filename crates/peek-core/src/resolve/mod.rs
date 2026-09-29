@@ -704,7 +704,10 @@ impl<'s> Resolver<'s> {
     ) -> Result<Vec<RepoPath>, StoreError> {
         let mut via_table = Vec::new();
         for qualified in self.module_qualified_names(module, importer, strip_last) {
-            for entity in self.store.entities_with_qualified_name(&qualified, self.options.modules_per_lookup)? {
+            for entity in self
+                .store
+                .entities_with_qualified_name(&qualified, self.options.modules_per_lookup)?
+            {
                 if entity.kind() == EntityKind::Module {
                     let path = entity.path().clone();
                     if !via_table.contains(&path) {

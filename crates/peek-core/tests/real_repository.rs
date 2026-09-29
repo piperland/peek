@@ -390,6 +390,14 @@ fn report_deletion(store: &mut peek_core::store::Store, root: &std::path::Path) 
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
+
+    // The bytes are read first and written back at the end, because this section **mutates the
+    // repository it is measuring**. An earlier version deleted the file and left it deleted, so
+    // every later run indexed a slightly smaller tree: entity counts fell by hundreds and
+    // relations by thousands on each pass, and a whole cycle was spent reading a trend into what
+    // was a tool eating its own input. A measurement that changes its subject is not a
+    // measurement.
+    let original = std::fs::read(&path).expect("read the file before deleting it");
     std::fs::remove_file(&path).expect("delete the file");
 
     let outcome = indexer::refresh(
@@ -401,12 +409,29 @@ fn report_deletion(store: &mut peek_core::store::Store, root: &std::path::Path) 
     .expect("refresh after a deletion");
     let after = store.stats().expect("stats");
 
-    println!("deleted:    {name}");
+    println!("deleted:    {name}, and put back afterwards");
     println!("report:     {}", outcome.report().summary());
     println!("orphans:    {}", after.orphan_relations);
     assert_eq!(
         after.orphan_relations, 0,
         "deleting a file must demote the edges that pointed into it, not leave them dangling"
+    );
+
+    // Restore, and re-index, so both the repository and the index are as they were found. A probe
+    // that leaves its subject smaller than it found it will be blamed for the difference next
+    // time, which is worse than not running it.
+    std::fs::write(&path, &original).expect("put the file back");
+    indexer::refresh(
+        store,
+        root,
+        std::slice::from_ref(&path),
+        &DiscoveryOptions::default(),
+    )
+    .expect("re-index the restored file");
+    let restored = store.stats().expect("stats");
+    assert_eq!(
+        restored.entity_count, after.entity_count,
+        "restoring the file must restore the rows its deletion removed"
     );
 }
 
