@@ -16,6 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
+use serde::Serialize;
 
 use super::Store;
 use super::error::StoreError;
@@ -25,7 +26,14 @@ use super::schema;
 ///
 /// Every field is counted at the moment [`Store::stats`] was called. Nothing is cached across
 /// calls and nothing is estimated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Serialize` so a status surface sends the store's own numbers rather than a re-typed copy. The
+/// one thing a consumer must remember is [`Self::generation`]: it is the generation **this handle
+/// was opened at**, not the generation on disk right now, so a process holding a long-lived reader
+/// alongside a writer sees a number that goes stale. The field is named honestly rather than being
+/// read from the database on the way out, because the other numbers are per-call measurements and
+/// mixing the two would be worse than saying which is which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct StoreStats {
     /// The schema these rows were written with.
     pub schema_version: u32,

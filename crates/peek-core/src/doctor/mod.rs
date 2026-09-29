@@ -37,12 +37,20 @@
 
 use std::path::Path;
 
+use serde::Serialize;
+
 use crate::discover::{DiscoveryOptions, FileDiscovery, WalkIssueReason};
 use crate::store::paths;
 use crate::store::{Durability, SCHEMA_VERSION, Store, StoreError, StoreStats};
 
 /// How much a finding should worry the user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// `Serialize` so the JSON an MCP client receives is this type rather than a hand-written mirror of
+/// it. A mirror is a second definition of the same shape, and two definitions of a shape drift;
+/// the two spellings here are the enum's own variant names, which a test in the MCP crate pins
+/// against [`Severity::as_str`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Severity {
     /// The check ran and the thing it checks is right.
     ///
@@ -74,7 +82,11 @@ impl Severity {
 ///
 /// A named check rather than a free string, so `doctor --only` can select one and a test can
 /// assert on a specific finding without matching prose that is free to be reworded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serialised as the name [`Check::as_str`] prints, so the JSON a client parses and the word a
+/// terminal shows are the same word. See the note on [`Severity`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Check {
     /// The index could not be opened, or is not a Peek index.
@@ -124,7 +136,12 @@ impl Check {
 }
 
 /// One thing `doctor` found.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Every field is present on a `Pass` as well as a `Fail`, including the measurement `detail` and
+/// the `action` that is `None` when there is nothing to do. The JSON form keeps that shape — no
+/// field is ever omitted — so a consumer can rely on `action` existing rather than inferring
+/// "nothing to suggest" from its absence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Finding {
     pub check: Check,
     pub severity: Severity,
@@ -168,10 +185,14 @@ impl Finding {
 }
 
 /// The whole diagnosis.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Diagnosis {
+    /// Every check that ran, in the order the checks are defined. A formatter that wants the
+    /// worst one first sorts; the order here is the order the work was done in, which is what a
+    /// reader comparing two runs wants to diff.
     pub findings: Vec<Finding>,
-    /// The store's own measurements, so a formatter need not re-query.
+    /// The store's own measurements, so a formatter need not re-query. `None` when the index could
+    /// not be opened, because there was then no store to measure.
     pub stats: Option<StoreStats>,
 }
 
