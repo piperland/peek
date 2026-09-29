@@ -61,12 +61,23 @@ fn updating() -> bool {
     std::env::var_os("PEEK_UPDATE_GOLDENS").is_some_and(|value| !value.is_empty())
 }
 
-/// Where a golden lives, so it can be written.
+/// Where a golden lives, both to be read and to be written.
+///
+/// **One function, because the two were two.** The write path originally joined the bare name while
+/// the read went through `include_str!` on `"golden/<name>.txt"`, so
+/// `PEEK_UPDATE_GOLDENS=1 cargo test --test golden` wrote `golden/context-complete` and every
+/// subsequent run still read the 42-byte placeholder at `golden/context-complete.txt`. The
+/// generation appeared to succeed, the test still failed, and the directory filled with a second
+/// file nobody had committed. A write path and a read path that disagree are worse than neither:
+/// the first run looks like progress and every run after it looks like the same failure.
+///
+/// The extension is derived rather than repeated, so a call site that names `context-complete`
+/// cannot read one file and write another.
 fn golden_path(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("golden")
-        .join(name)
+        .join(format!("{name}.txt"))
 }
 
 /// Compare a rendering against a golden, or write it when asked to.
@@ -617,12 +628,7 @@ fn a_context_with_no_budget_is_refused_rather_than_given_an_invented_one() {
     let mut silent = Silent;
     let failure = fixture::run_direct(
         &repository,
-        &[
-            "context",
-            "wallet_charge",
-            "--root",
-            repository.root_str(),
-        ],
+        &["context", "wallet_charge", "--root", repository.root_str()],
         &mut silent,
     )
     .expect_err("must be refused");
