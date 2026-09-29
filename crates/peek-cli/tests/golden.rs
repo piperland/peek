@@ -130,19 +130,6 @@ fn run_any(_repository: &Repository, argv: &[&str]) -> peek_cli::Output {
     run_invocation(&invocation, &mut silent).expect("the command must produce an output")
 }
 
-/// A rendered answer from either representation, so a refusal can be rendered too.
-fn render_either(_repository: &Repository, argv: &[&str]) -> String {
-    let owned: Vec<std::ffi::OsString> = argv
-        .iter()
-        .map(|argument| std::ffi::OsString::from(*argument))
-        .collect();
-    let invocation = args::parse(owned).expect("the command line must parse");
-    let mut silent = Silent;
-    match run_invocation(&invocation, &mut silent) {
-        Ok(output) => output.render(),
-        Err(failure) => failure.render(),
-    }
-}
 
 /// Replace the two machine-dependent substrings with fixed placeholders.
 ///
@@ -238,7 +225,7 @@ fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped
             reduced_at = Some(budget);
             break;
         }
-        budget = budget / 2;
+        budget /= 2;
     }
     let Some(reduced_at) = reduced_at else {
         panic!("no budget in the sweep produced a reduced pack; the fixture is too small to omit");
@@ -335,7 +322,7 @@ fn a_reduced_pack_renders_its_units_and_edges() {
             reduced_at = Some(budget);
             break;
         }
-        budget = budget / 2;
+        budget /= 2;
     }
     let Some(reduced_at) = reduced_at else {
         panic!("no budget produced a reduced pack");
