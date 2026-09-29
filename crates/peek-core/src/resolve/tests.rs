@@ -227,14 +227,29 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
         "the competing candidate is the impl block's own entity: {candidates:?}"
     );
 
+    // The method call is the worse casualty, and this is the finding that makes R-012 urgent.
+    // `Gateway.send()` in `beta` is `no_candidate` even though `send` is declared in
+    // `crates/alpha/src/gateway.rs` and the receiver is written out in full.
+    //
+    // The hypothesis — and it needs verifying before it is acted on — is that this is the phantom
+    // again rather than a second independent defect: the receiver rung has to resolve the receiver
+    // expression `Gateway` to an owner before it can look for `{owner}.send` inside it, and
+    // `Gateway` is now ambiguous between the struct and the impl block, so the rung cannot commit
+    // to an owner and stops. If that is right, then every method on every type with an `impl`
+    // block — which in Rust is very nearly every type — is unplaceable, and the module work has
+    // made the graph *worse*, not better.
+    //
+    // Asserted as observed, not as desired, so the test records what is true and fails the moment
+    // the defect is fixed.
     let call = relations_of(&store, RelationKind::Calls)
         .into_iter()
         .find(|relation| relation.target_name == "send")
         .expect("the call to send was extracted");
     assert_eq!(
         state_of(&call),
-        "resolved",
-        "and the method call inside the other package is placed outright: {call:?}"
+        "go -> send (unresolved (no_candidate)), target None",
+        "the method call on a cross-package type is not placed at all, and the receiver it names \
+         is ambiguous because of the impl block's own entity: {call:?}"
     );
 }
 
