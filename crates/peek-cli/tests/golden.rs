@@ -116,6 +116,11 @@ fn render(_repository: &Repository, argv: &[&str]) -> String {
 
 /// Run a command line and return the output whatever its status.
 fn run_any(_repository: &Repository, argv: &[&str]) -> peek_cli::Output {
+    // A refusal comes back as `Err(Failure)`, not as an `Output` with a status — the two are
+    // unified in the binary's `main`, and this helper is not `main`. So a test that wants to
+    // inspect a *refused* answer uses `fixture::run`, which is the one place the two
+    // representations meet. Reaching for it here and being surprised by an `Err` is the mistake
+    // this comment exists to prevent.
     let owned: Vec<std::ffi::OsString> = argv
         .iter()
         .map(|argument| std::ffi::OsString::from(*argument))
@@ -123,6 +128,20 @@ fn run_any(_repository: &Repository, argv: &[&str]) -> peek_cli::Output {
     let invocation = args::parse(owned).expect("the command line must parse");
     let mut silent = Silent;
     run_invocation(&invocation, &mut silent).expect("the command must produce an output")
+}
+
+/// A rendered answer from either representation, so a refusal can be rendered too.
+fn render_either(_repository: &Repository, argv: &[&str]) -> String {
+    let owned: Vec<std::ffi::OsString> = argv
+        .iter()
+        .map(|argument| std::ffi::OsString::from(*argument))
+        .collect();
+    let invocation = args::parse(owned).expect("the command line must parse");
+    let mut silent = Silent;
+    match run_invocation(&invocation, &mut silent) {
+        Ok(output) => output.render(),
+        Err(failure) => failure.render(),
+    }
 }
 
 /// Replace the two machine-dependent substrings with fixed placeholders.

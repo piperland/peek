@@ -665,8 +665,10 @@ where
     // The one non-root positional, when the command has one. Resolved here rather than inside each
     // arm so there is a single place that converts a token to a target and a single place that can
     // report a non-UTF-8 one.
-    let argument_label: &'static str = if spec.name == "rm" { "path" } else { "target" };
-    let argument: Option<String> = if spec.root == RootSource::Flag {
+    // The label is the *table's* name for the argument, not a guess from the command name, so
+    // `peek rm a.rs` complains about a missing `path` and `peek explain` about a missing `target`.
+    let argument_label: &'static str = spec.positionals.first().copied().unwrap_or("target");
+    let argument: Option<String> = if spec.root == RootSource::Flag && spec.required > 0 {
         match rest.first() {
             Some(value) => Some(text(value, spec.name, argument_label)?),
             None => {
@@ -677,6 +679,10 @@ where
             }
         }
     } else {
+        // A flag-rooted command with no positional at all — `status` and `doctor`. Both diagnose
+        // the repository rather than naming a thing in it, so demanding a target was wrong twice
+        // over: it made the two commands unusable, and it taught the help text to describe an
+        // argument the table says does not exist. The table is the authority, so it decides.
         None
     };
     // Only the `RootSource::Flag` commands have one, and each of them requires it, so this is never
