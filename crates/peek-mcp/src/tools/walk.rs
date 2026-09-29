@@ -32,6 +32,7 @@ use crate::outcome::{ToolError, Verdict};
 use crate::params::Args;
 use crate::session::Session;
 use crate::tools::ToolAnswer;
+use crate::tools::target;
 
 /// Who uses a target, one hop.
 pub fn callers(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAnswer, ToolError> {
@@ -109,16 +110,15 @@ fn walk_tool(
     let walk = {
         let store = session.reader()?;
         let query = Query::with_options(store, options);
-        let resolved = query
-            .resolve(&target)
-            .map_err(|error| fill_candidates(store, &error))?;
+        let identity =
+            target::resolve(store, options, &target).map_err(|error| fill_candidates(store, &error))?;
         let request = WalkRequest {
             direction,
             depth: depth.unwrap_or(1),
             kind,
         };
         query
-            .walk(resolved.id(), request)
+            .walk(&identity, request)
             .map_err(|error| fill_candidates(store, &error))?
     };
 

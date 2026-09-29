@@ -882,11 +882,11 @@ fn render_edge(edge: &Relation, unit: &EntityId, list_candidates: bool) -> Strin
 /// A string that matches nothing is [`QueryError::UnknownTarget`], and the message says which of
 /// the three it was not.
 ///
-/// `pub(crate)` rather than private because [`crate::query::Query::resolve`] re-exports it. That
-/// method exists so the CLI and the MCP server can name a target the same way this compiler does
-/// instead of each carrying a second copy of these three lookups, and a copy of a resolution order
-/// is a copy of a chance to get it wrong.
-pub(crate) fn resolve_target(query: &Query<'_>, target: &str) -> Result<Target, QueryError> {
+/// Private, and deliberately so. A caller that has only a string compiles the smallest pack the
+/// engine accepts and takes the identity off it, which runs these same three lookups in this same
+/// order; `peek-core` does not need a second entry point that returns the identity alone, and a
+/// public one would be a second way in for a rule that already has a way.
+fn resolve_target(query: &Query<'_>, target: &str) -> Result<Target, QueryError> {
     let store = query.store();
     let limit = query.options().entities_per_file;
 

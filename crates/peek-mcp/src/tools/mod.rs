@@ -20,6 +20,7 @@ pub mod context;
 pub mod doctor;
 pub mod explain;
 pub mod index;
+pub mod target;
 pub mod walk;
 pub mod watch;
 

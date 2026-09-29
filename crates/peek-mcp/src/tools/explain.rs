@@ -17,8 +17,8 @@
 //! # Why the target is a string
 //!
 //! A caller has a name read off a screen, not an `EntityId`. The three lookups — path, qualified
-//! name, bare name, in that order — are the engine's, reached through `Query::resolve`, so there
-//! is exactly one resolution path in the product. An ambiguous name comes back as
+//! name, bare name, in that order — are the engine's, reached through [`crate::tools::target`], so
+//! there is exactly one resolution path in the product. An ambiguous name comes back as
 //! `ambiguous_target` with every candidate; it is never resolved by picking the first.
 
 use serde::Serialize;
@@ -30,6 +30,7 @@ use crate::outcome::{Outcome, ToolError, Verdict};
 use crate::params::Args;
 use crate::session::Session;
 use crate::tools::ToolAnswer;
+use crate::tools::target;
 
 /// Report every edge at a target, and the provenance chain to it.
 pub fn explain(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAnswer, ToolError> {
@@ -50,8 +51,11 @@ pub fn explain(session: &mut Session, arguments: Option<&Value>) -> Result<ToolA
     let resolved = {
         let store = session.reader()?;
         let query = Query::with_options(store, options);
-        let target = query.resolve(&target).map_err(|error| resolve_error(store, &error))?;
-        query.explain(target.id()).map_err(|error| resolve_error(store, &error))?
+        let identity =
+            target::resolve(store, options, &target).map_err(|error| resolve_error(store, &error))?;
+        query
+            .explain(&identity)
+            .map_err(|error| resolve_error(store, &error))?
     };
 
     let uncertain = resolved.uncertain().count();
