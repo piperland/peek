@@ -92,10 +92,19 @@ impl Install {
     /// The override is what makes the index location deterministic; without it `doctor` would
     /// resolve to the real per-user cache, and a test that broke an index would break the
     /// developer's actual one.
+    ///
+    /// Deliberately does **not** settle first. A checkpoint folds the log into the database, which
+    /// would *repair* a database file a test had just damaged — and a test that quietly undoes its
+    /// own damage is worse than no test. Tests that want a settled index ask for one.
     fn diagnose(&self) -> Diagnosis {
         paths::set_root_override(Some(self.index.clone()));
-        self.settle();
         diagnose(self.path())
+    }
+
+    /// Settle the index and then diagnose it, which is what a real caller does.
+    fn settled_diagnosis(&self) -> Diagnosis {
+        self.settle();
+        self.diagnose()
     }
 
     /// A store opened against this install's index, for breaking it on purpose.
@@ -160,7 +169,7 @@ fn an_index_that_cannot_be_opened_is_a_failure_that_names_what_to_do() {
     fs::create_dir_all(database.parent().expect("the index has a parent")).expect("make the dir");
     fs::write(&database, b"this is not a sqlite database, it is a sentence").expect("write it");
 
-    let diagnosis = install.diagnose();
+    let diagnosis = install.settled_diagnosis();
     assert!(!diagnosis.is_healthy(), "an unopenable index is not healthy");
     let openable = findings_of(&diagnosis, Check::IndexOpenable);
     assert_eq!(openable.len(), 1, "{openable:?}");
@@ -177,7 +186,7 @@ fn a_never_indexed_install_says_so_rather_than_failing() {
     // The most common first run. `Store::open` creates the index, so this is a healthy install
     // with nothing in it — a state with an obvious next step, not a fault.
     let install = Install::empty("never-indexed");
-    let diagnosis = install.diagnose();
+    let diagnosis = install.settled_diagnosis();
 
     assert!(diagnosis.is_healthy(), "{}", diagnosis.report());
     let generation = findings_of(&diagnosis, Check::Generation);
@@ -195,7 +204,7 @@ fn an_untouched_but_empty_index_is_a_notice_not_a_failure() {
     // fine, so the problem is "you have not run the indexer", not "something is broken".
     let install = Install::empty("untouched");
     let _store = install.store();
-    let diagnosis = install.diagnose();
+    let diagnosis = install.settled_diagnosis();
 
     let generation = findings_of(&diagnosis, Check::Generation);
     assert_eq!(generation.len(), 1, "{generation:?}");
@@ -221,7 +230,7 @@ fn a_healthy_index_passes_every_check_and_says_what_it_measured() {
     )
     .expect("index the repository");
 
-    let diagnosis = install.diagnose();
+    let diagnosis = install.settled_diagnosis();
     assert!(
         diagnosis.is_healthy(),
         "a healthy install must be reported healthy:\n{}",
@@ -284,6 +293,8 @@ fn a_damaged_index_fails_the_integrity_check_and_offers_a_rebuild() {
     // assume any damage is detectable.
     fs::write(&database, &bytes[..bytes.len() - 700]).expect("truncate the database");
 
+    // Settled *before* the damage, never after: a checkpoint would fold the log into the
+    // truncated file and quietly repair it, and the test would then be proving nothing.
     let diagnosis = install.diagnose();
     // Either the damage stops SQLite opening the file, or `integrity_check` catches it. Both are
     // the correct outcome; what must not happen is a pass.
@@ -328,7 +339,7 @@ fn a_store_from_a_different_shape_is_refused_rather_than_guessed_at() {
         .expect("rewrite the recorded version");
     drop(connection);
 
-    let diagnosis = install.diagnose();
+    let diagnosis = install.settled_diagnosis();
     assert!(!diagnosis.is_healthy(), "{}", diagnosis.report());
     // The store refuses to open at all, which is the correct response, and the refusal is the
     // diagnosis.
@@ -413,7 +424,7 @@ fn a_dangling_edge_is_caught_even_with_the_guards_disabled() {
         .expect("delete the target behind the store's back");
     drop(connection);
 
-    let diagnosis = install.diagnose();
+    let diagnosis = install.settled_diagnosis();
     let orphans = findings_of(&diagnosis, Check::OrphanEdges);
     assert_eq!(orphans.len(), 1, "{orphans:?}");
     assert_eq!(
@@ -448,7 +459,7 @@ fn undecided_relations_are_a_notice_because_they_are_work_remaining_not_damage()
         .expect("commit");
     drop(store);
 
-    let diagnosis = install.diagnose();
+    let diagnosis = install.settled_diagnosis();
     let pending = findings_of(&diagnosis, Check::PendingWork);
     assert_eq!(pending.len(), 1, "{pending:?}");
     assert_eq!(pending[0].severity, Severity::Notice);
@@ -483,20 +494,96 @@ fn ambiguity_is_reported_as_a_fact_about_the_code_and_not_as_a_defect() {
         .expect("commit");
     drop(store);
 
-    let diagnosis = install.diagnose();
+    // Four ambiguous edges and four resolved ones, so the share is a realistic minority rather
+    // than the 100% a single-relation fixture produces — which the next test covers separately.
+    let mut update = IndexUpdate::empty()
+        .with_entity(function("src/a.rs", "a"))
+        .with_entity(function("src/target.rs", "target"))
+        .with_entity(function("src/one.rs", "shared"))
+        .with_entity(function("src/two.rs", "shared"));
+    for name in ["a", "b", "c", "d"] {
+        update = update
+            .with_entity(function("src/callers.rs", name))
+            .with_relation(Relation::ambiguous(
+                RelationKind::Calls,
+                id("src/callers.rs", EntityKind::Function, name),
+                "shared",
+                span(),
+                vec![
+                    id("src/one.rs", EntityKind::Function, "shared"),
+                    id("src/two.rs", EntityKind::Function, "shared"),
+                ],
+            ))
+            .with_relation(Relation::resolved(
+                RelationKind::Calls,
+                id("src/callers.rs", EntityKind::Function, name),
+                id("src/target.rs", EntityKind::Function, "target"),
+                "target",
+                span(),
+                crate::model::Evidence::SameFile,
+            ));
+    }
+    store.apply_update(update).expect("commit");
+    drop(store);
+
+    let diagnosis = install.settled_diagnosis();
     let ambiguity = findings_of(&diagnosis, Check::Ambiguity);
     assert_eq!(ambiguity.len(), 1, "{ambiguity:?}");
     assert_eq!(
         ambiguity[0].severity,
         Severity::Notice,
-        "a small amount of ambiguity is information, not a fault: {}",
+        "a minority of ambiguous edges is information, not a fault: {}",
         diagnosis.report()
     );
     assert!(diagnosis.is_healthy());
     assert!(
-        ambiguity[0].detail.contains("2 candidates"),
+        ambiguity[0].detail.contains("8 candidates"),
         "the finding must carry the candidate count: {:?}",
         ambiguity[0]
+    );
+}
+
+#[test]
+fn a_graph_that_is_mostly_ambiguous_is_escalated_because_the_graph_is_thin() {
+    // The other branch of the same rule, and the one that matters. Ambiguity is a Notice at a low
+    // share because it is a fact about the code; at a high share it is a fact about *this index* —
+    // the graph cannot answer most questions, and a user who is not told that will draw
+    // conclusions from edges that do not exist.
+    let install = Install::empty("mostly-ambiguous");
+    let mut store = install.store();
+    let mut update = IndexUpdate::empty()
+        .with_entity(function("src/one.rs", "shared"))
+        .with_entity(function("src/two.rs", "shared"));
+    for name in ["a", "b", "c", "d"] {
+        update = update
+            .with_entity(function("src/callers.rs", name))
+            .with_relation(Relation::ambiguous(
+                RelationKind::Calls,
+                id("src/callers.rs", EntityKind::Function, name),
+                "shared",
+                span(),
+                vec![
+                    id("src/one.rs", EntityKind::Function, "shared"),
+                    id("src/two.rs", EntityKind::Function, "shared"),
+                ],
+            ));
+    }
+    store.apply_update(update).expect("commit");
+    drop(store);
+
+    let diagnosis = install.settled_diagnosis();
+    let ambiguity = findings_of(&diagnosis, Check::Ambiguity);
+    assert_eq!(ambiguity.len(), 1, "{ambiguity:?}");
+    assert_eq!(
+        ambiguity[0].severity,
+        Severity::Warn,
+        "every edge ambiguous is a graph that cannot answer questions: {}",
+        diagnosis.report()
+    );
+    assert!(
+        diagnosis.is_healthy(),
+        "a warning is still a working index: {}",
+        diagnosis.report()
     );
 }
 
@@ -621,7 +708,7 @@ fn the_report_leads_with_the_worst_finding_because_that_is_the_one_people_read()
     )
     .expect("index the repository");
 
-    let diagnosis = install.diagnose();
+    let diagnosis = install.settled_diagnosis();
     let report = diagnosis.report();
     let first_line = report.lines().next().expect("a report has a first line");
     assert!(
@@ -651,8 +738,8 @@ fn two_diagnoses_of_one_install_agree() {
     )
     .expect("index the repository");
 
-    let first = install.diagnose();
-    let second = install.diagnose();
+    let first = install.settled_diagnosis();
+    let second = install.settled_diagnosis();
     assert_eq!(first.report(), second.report());
     assert_eq!(first.worst(), second.worst());
     assert_eq!(
