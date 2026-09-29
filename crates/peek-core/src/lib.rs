@@ -18,6 +18,7 @@ pub mod doctor;
 pub mod extract;
 pub mod indexer;
 pub mod model;
+pub mod query;
 pub mod resolve;
 pub mod store;
 pub mod watch;
