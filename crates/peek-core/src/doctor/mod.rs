@@ -210,7 +210,9 @@ impl Diagnosis {
     pub fn report(&self) -> String {
         let mut ordered: Vec<&Finding> = self.findings.iter().collect();
         // Stable within a severity, so two runs over an unchanged index print the same report.
-        ordered.sort_by(|a, b| b.severity.cmp(&a.severity));
+        // `sort_by_key` is the tool for this and says so; the comparison above spelled out what it
+        // does, which is not a virtue in a sort.
+        ordered.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
         let mut out = String::new();
         for finding in ordered {
             out.push_str(&format!("[{}] {}\n", finding.severity.as_str(), finding.summary));
@@ -532,11 +534,13 @@ fn check_ambiguity(stats: &StoreStats) -> Finding {
             "every decided edge names exactly one target",
         );
     }
-    let percent = if total > 0 {
-        stats.ambiguous_relations * 100 / total
-    } else {
-        0
-    };
+    // `checked_div` rather than a guard, so the zero case is impossible to get wrong by
+    // accident: an empty relation table has no percentage.
+    let percent = stats
+        .ambiguous_relations
+        .checked_mul(100)
+        .and_then(|scaled| scaled.checked_div(total))
+        .unwrap_or(0);
     // Ambiguity is not a defect, so this is a notice and never a warning: it is a fact about the
     // codebase that a consumer needs to be able to see. A tool that reported it as a problem
     // would be training the user to ignore the field that tells them where the graph is thin.
@@ -671,11 +675,10 @@ pub fn refusal_reasons(root: &Path) -> Vec<(&'static str, u64)> {
             WalkIssueReason::UnsupportedExtension { .. } => "unsupported_extension",
             WalkIssueReason::TooLarge { .. } => "too_large",
             WalkIssueReason::NotUtf8 { .. } => "not_utf8",
-            _ => "other",
         };
         *counts.entry(name).or_default() += 1;
     }
-    counts.into_iter().map(|(name, count)| (name, count)).collect()
+    counts.into_iter().collect()
 }
 
 #[cfg(test)]

@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::{Check, Diagnosis, Severity, diagnose, refusal_reasons};
 use crate::discover::DiscoveryOptions;
 use crate::indexer;
-use crate::model::{Entity, EntityId, EntityKind, IndexUpdate, Relation, RelationKind, RepoPath, ResolutionState, Span};
-use crate::store::paths;
+use crate::model::{Entity, EntityId, EntityKind, Relation, RelationKind, RepoPath, Span};
+use crate::store::{IndexUpdate, paths};
 use crate::store::{Durability, RepoId, Store};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
