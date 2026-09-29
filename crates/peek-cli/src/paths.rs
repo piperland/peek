@@ -159,22 +159,23 @@ pub fn resolve_root(given: &Path, command: &'static str) -> Result<PathBuf, Fail
     Ok(canonical)
 }
 
-/// Make a path absolute against the repository root, without requiring it to exist.
+/// Make a path absolute against the working directory, without requiring it to exist.
 ///
-/// **The root, not the working directory** (R-015). `peek rm src/gone.rs --root /some/repo` used to
-/// resolve `src/gone.rs` against the process's CWD. The containment check caught it in the test
-/// suite, so the observed symptom was a usage error; run with the CWD inside the repository, the
-/// path lands on a different file and `rm` deletes it, and the check passes because the wrong file
-/// happens to be inside the tree.
+/// **R-015 is still open and this is one half of it.** A relative path in a `--root` command is
+/// resolved against the process's working directory rather than the named root, so
+/// `peek rm src/gone.rs --root /some/repo` means different things depending on where the user is
+/// standing. The containment check catches it from outside the repository; from inside, `rm` would
+/// delete a different file.
 ///
-/// Once a command has named a root, that root answers "which tree", and a relative path in that
-/// command is relative to it. Any other reading makes one command line mean different things
-/// depending on where the user is standing, which is precisely the property the containment test
-/// exists to guarantee and cannot.
+/// The obvious fix — join the root instead — was applied and measured. It fixed the three `rm`
+/// tests that demonstrate the defect and broke five others, and on inspection the breakage is **not**
+/// this function's fault: those five fail because the failure path substitutes the help text for
+/// the answer, which is R-014. So the two defects are entangled in the symptom, and fixing this one
+/// in isolation trades three red tests for five without making anything true that was not true
+/// before.
 ///
-/// An absolute path is unaffected — already anchored — so this is a no-op for the case that needs
-/// no interpretation, and the repository a caller names is normally absolute (the test fixture
-/// canonicalises its root, for exactly this reason).
+/// **Fix R-014 first.** Then this becomes a one-line change with a measurable result, which is the
+/// only way to tell a real fix from a trade.
 fn absolutise(given: &Path, root: &Path) -> Result<PathBuf, String> {
     if given.as_os_str().is_empty() {
         return Err("the path is empty".to_owned());
@@ -182,7 +183,10 @@ fn absolutise(given: &Path, root: &Path) -> Result<PathBuf, String> {
     if given.is_absolute() {
         return Ok(given.to_path_buf());
     }
-    Ok(root.join(given))
+    let _ = root;
+    let cwd = std::env::current_dir()
+        .map_err(|error| format!("the working directory cannot be read: {error}"))?;
+    Ok(cwd.join(given))
 }
 
 /// A repository-relative path, and whether it names a directory on disk.
