@@ -838,7 +838,7 @@ mod tests {
         let bare = locate(&path("cross/alpha/src/gateway.rs"), &layout);
         let in_repository = locate(
             &path("crates/peek-core/tests/fixtures/modules/cross/alpha/src/gateway.rs"),
-            layout,
+            &layout,
         );
         assert_eq!(bare, in_repository);
         assert_eq!(in_repository.qualified_name("::"), "alpha::gateway");
