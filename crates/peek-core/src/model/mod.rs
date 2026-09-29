@@ -22,6 +22,7 @@ pub use entity::{Entity, EntityId, EntityKind};
 pub use language::{CapabilityTier, Language};
 pub use path::{PathError, RepoPath};
 pub use relation::{
-    Evidence, Relation, RelationKey, RelationKind, ResolutionState, UnresolvedReason,
+    ALL_RELATION_KINDS, Evidence, Relation, RelationKey, RelationKind, ResolutionState,
+    UnresolvedReason, relation_kind_names,
 };
 pub use span::Span;

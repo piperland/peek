@@ -127,6 +127,66 @@ impl RelationKind {
     pub fn is_dependency(self) -> bool {
         !self.is_structural()
     }
+
+    /// The kind a spelling names, or `None` for a spelling this build does not have.
+    ///
+    /// The inverse of [`RelationKind::as_str`], and the reason it lives here rather than in a
+    /// caller. A surface that accepts a relation kind as text — a CLI flag, an MCP argument — has
+    /// to decide what to do with a string that is not one, and the answer cannot be "no filter":
+    /// audit D, section F, records the engine this replaces answering `--kind nonsense` with
+    /// every kind and the caller reading it as a filtered result. Refusing is the only honest
+    /// option, and this function is what makes refusing possible without a second list of the
+    /// vocabulary to keep in step with the enum.
+    pub fn parse(text: &str) -> Option<Self> {
+        ALL_RELATION_KINDS
+            .iter()
+            .copied()
+            .find(|kind| kind.as_str() == text)
+    }
+}
+
+/// Every relation kind, in declaration order.
+///
+/// One list, owned by the enum's own module, so a caller that needs to offer the vocabulary cannot
+/// fall out of step with it. The order is the order the variants are declared in — structural
+/// first, then module, usage, types, hierarchy, behaviour — which is the order that reads as a
+/// grouping rather than as an accident.
+pub const ALL_RELATION_KINDS: [RelationKind; 27] = [
+    RelationKind::Defines,
+    RelationKind::Contains,
+    RelationKind::Owns,
+    RelationKind::Imports,
+    RelationKind::Exports,
+    RelationKind::Reexports,
+    RelationKind::References,
+    RelationKind::Calls,
+    RelationKind::Reads,
+    RelationKind::Writes,
+    RelationKind::Mutates,
+    RelationKind::UsesType,
+    RelationKind::Returns,
+    RelationKind::Accepts,
+    RelationKind::Throws,
+    RelationKind::Constructs,
+    RelationKind::Instantiates,
+    RelationKind::Inherits,
+    RelationKind::Implements,
+    RelationKind::Overrides,
+    RelationKind::ConfiguredBy,
+    RelationKind::TestedBy,
+    RelationKind::RoutesTo,
+    RelationKind::Handles,
+    RelationKind::Publishes,
+    RelationKind::Subscribes,
+];
+
+/// The vocabulary as text, in the same order as [`ALL_RELATION_KINDS`].
+///
+/// For an error message that has to name every spelling rather than say "unknown kind", because a
+/// caller who is told a kind is wrong and not what the right ones are will simply guess again.
+#[must_use]
+pub fn relation_kind_names() -> Vec<&'static str> {
+    ALL_RELATION_KINDS.iter().map(|kind| kind.as_str()).collect()
 }
 
 impl fmt::Display for RelationKind {
@@ -519,7 +579,10 @@ pub struct RelationKey {
 
 #[cfg(test)]
 mod tests {
-    use super::{Evidence, Relation, RelationKind, ResolutionState, UnresolvedReason};
+    use super::{
+        ALL_RELATION_KINDS, Evidence, Relation, RelationKind, ResolutionState, UnresolvedReason,
+        relation_kind_names,
+    };
     use crate::model::entity::{EntityId, EntityKind};
     use crate::model::path::RepoPath;
     use crate::model::span::Span;
@@ -842,38 +905,37 @@ mod tests {
 
     #[test]
     fn every_relation_kind_has_a_unique_label() {
-        let all = [
-            RelationKind::Defines,
-            RelationKind::Contains,
-            RelationKind::Owns,
-            RelationKind::Imports,
-            RelationKind::Exports,
-            RelationKind::Reexports,
-            RelationKind::References,
-            RelationKind::Calls,
-            RelationKind::Reads,
-            RelationKind::Writes,
-            RelationKind::Mutates,
-            RelationKind::UsesType,
-            RelationKind::Returns,
-            RelationKind::Accepts,
-            RelationKind::Throws,
-            RelationKind::Constructs,
-            RelationKind::Instantiates,
-            RelationKind::Inherits,
-            RelationKind::Implements,
-            RelationKind::Overrides,
-            RelationKind::ConfiguredBy,
-            RelationKind::TestedBy,
-            RelationKind::RoutesTo,
-            RelationKind::Handles,
-            RelationKind::Publishes,
-            RelationKind::Subscribes,
-        ];
-        let mut labels: Vec<&str> = all.iter().map(|k| k.as_str()).collect();
+        let mut labels: Vec<&str> = ALL_RELATION_KINDS.iter().map(|k| k.as_str()).collect();
         let count = labels.len();
         labels.sort_unstable();
         labels.dedup();
         assert_eq!(labels.len(), count, "relation kind labels must be unique");
+    }
+
+    #[test]
+    fn the_listed_kinds_are_the_ones_the_enum_has() {
+        // `ALL_RELATION_KINDS` is what a surface offers as its vocabulary. If a kind is added to
+        // the enum and not to the list, a caller is silently unable to ask for it — the same shape
+        // of defect as the predecessor's `--kind nonsense` becoming "no filter", one level up.
+        // The count is a literal rather than a derived number so that adding a variant without
+        // updating the list fails here instead of quietly narrowing the vocabulary.
+        assert_eq!(ALL_RELATION_KINDS.len(), 27);
+    }
+
+    #[test]
+    fn parsing_a_kind_name_inverts_printing_one() {
+        // A surface that accepts a kind as text has to refuse an unknown one, and refusing needs
+        // this to be a true inverse rather than a second list that can drift from the enum.
+        for kind in ALL_RELATION_KINDS {
+            let spelled = kind.as_str();
+            assert_eq!(
+                RelationKind::parse(spelled),
+                Some(kind),
+                "`{spelled}` did not parse back to the kind it was printed from"
+            );
+        }
+        assert_eq!(RelationKind::parse("nonsense"), None);
+        assert_eq!(RelationKind::parse("Calls"), None, "the spelling is lowercase");
+        assert_eq!(relation_kind_names().len(), ALL_RELATION_KINDS.len());
     }
 }
