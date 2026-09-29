@@ -251,7 +251,7 @@ impl Default for ResolutionOptions {
         // be spelled exactly right to *disable* something is a switch that will be on when the
         // measurement needs it off, and the measurement will be wrong in a way nobody notices.
         let use_module_table = std::env::var(ENV_MODULE_TABLE)
-            .map(|value| value != "0" && value.to_ascii_lowercase() != "false")
+            .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
             .unwrap_or(true);
         Self {
             entities_per_file: 512,
