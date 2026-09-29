@@ -228,6 +228,13 @@ impl<'a> Args<'a> {
     ///
     /// The alternative is the audit's `--kind nonsense` → no filter: a caller who misspells a kind
     /// gets every kind back and reads the result as a filtered one.
+    ///
+    /// The vocabulary and the parser are the engine's — `RelationKind::parse` and
+    /// `relation_kind_names` — rather than a list written here, because a second list of the
+    /// relation kinds is a second thing to keep in step with the enum. That is the one engine
+    /// widening this filter makes this crate depend on: drop `ALL_RELATION_KINDS` and the walk
+    /// tools stop compiling, so the two are one change's worth of dependency and not two
+    /// independent ones.
     pub fn relation_kind(
         &self,
         name: &'static str,
