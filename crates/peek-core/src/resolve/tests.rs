@@ -275,7 +275,15 @@ fn the_module_table_switch_really_turns_the_table_off() {
         let mut update = crate::store::IndexUpdate::empty();
         for relation in relations_of(&store, RelationKind::Imports) {
             let mut pending = relation.clone();
+            let evidence = match &relation.resolution {
+                ResolutionState::Pending { evidence, .. } => evidence.clone(),
+                ResolutionState::Resolved { by } => by.clone(),
+                ResolutionState::Inferred { by, .. } => by.clone(),
+                ResolutionState::Ambiguous { .. } => Evidence::NameOnly,
+                ResolutionState::Unresolved { .. } => Evidence::NameOnly,
+            };
             pending.resolution = ResolutionState::Pending {
+                evidence,
                 basis: "reset for the second arm".to_owned(),
             };
             update = update.with_relation(pending);
@@ -311,7 +319,7 @@ fn the_module_table_switch_really_turns_the_table_off() {
         "the table sees only alpha's file: the struct and the phantom impl: {with_table:?}"
     );
     assert!(
-        with_table.iter().all(|path| path == &"crates/alpha/src/gateway.rs"),
+        with_table.iter().all(|path| path.as_str() == "crates/alpha/src/gateway.rs"),
         "every candidate is in the package the import named: {with_table:?}"
     );
     assert!(
@@ -322,7 +330,7 @@ fn the_module_table_switch_really_turns_the_table_off() {
     assert!(
         without_table
             .iter()
-            .any(|path| path == &"crates/gamma/src/gateway.rs"),
+            .any(|path| path.as_str() == "crates/gamma/src/gateway.rs"),
         "and gamma is exactly the wrong answer: {without_table:?}"
     );
 }
