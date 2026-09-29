@@ -106,8 +106,17 @@ pub fn locate(given: &Path, command: &'static str) -> Result<Location, Failure> 
 ///
 /// The default, `.`, resolves against the process's working directory, so `peek status` with no
 /// argument is the obvious thing and still reaches a canonical root.
+///
+/// **This is the one place a relative path means "relative to where I am standing",** and it is
+/// the root itself rather than something inside it. That is not an inconsistency with
+/// [`absolutise`]: naming a root is a statement about the process, and a path *within* the root is
+/// a statement about the tree. The distinction is that the root has no other candidate — there is
+/// nothing to be relative to except the CWD — whereas a path inside a root that has been named
+/// explicitly must not silently depend on where the user is standing.
 pub fn resolve_root(given: &Path, command: &'static str) -> Result<PathBuf, Failure> {
-    let absolutised = absolutise(given).map_err(|detail| {
+    let working = std::env::current_dir()
+        .map_err(|error| format!("the working directory cannot be read: {error}"))?;
+    let absolutised = absolutise(given, &working).map_err(|detail| {
         Failure::usage(
             command,
             Refusal::new(
