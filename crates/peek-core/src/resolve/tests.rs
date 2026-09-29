@@ -1051,10 +1051,17 @@ fn a_pass_with_nothing_in_scope_examines_nothing_and_commits_nothing() {
     // implementation could get wrong by doing work anyway, which is exactly the behaviour
     // contract G8 measures.
     let tree = TempTree::new("empty-scope");
-    tree.write("src/one.rs", "fn a() {}\n");
+    tree.write("src/one.rs", "fn helper() {}\nfn go() { helper(); }\n");
 
     let mut store = tree.index_without_resolving();
-    resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
+    // The edge is decided first, so a pass that reached outside its scope would have a decided
+    // edge to re-examine and this test would fail rather than pass for the wrong reason.
+    let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
+    assert!(
+        first.examined > 0,
+        "the fixture must contain an edge, or an empty scope proves nothing: {}",
+        first.summary()
+    );
     let before = store.generation();
 
     let report = resolve_paths(
