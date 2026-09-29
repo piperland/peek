@@ -60,6 +60,7 @@
 //! exclusive file lock (audit A15).
 
 mod error;
+pub mod paths;
 mod repo;
 mod row;
 mod schema;
@@ -96,6 +97,7 @@ pub struct Store {
     repo: RepoId,
     generation: u64,
     schema_version: u32,
+    durability: Durability,
 }
 
 impl Store {
@@ -109,7 +111,22 @@ impl Store {
     ///
     /// The parent directory is created if missing, since the OS cache root will not exist on a
     /// machine's first run.
+    ///
+    /// Commits are [`Durability::Full`] unless a caller asks otherwise via [`Store::open_with`].
     pub fn open(path: &Path, repo: &RepoId) -> Result<Self, StoreError> {
+        Self::open_with(path, repo, Durability::default())
+    }
+
+    /// Open with an explicit durability level.
+    ///
+    /// The level is applied here, at the only place a connection is created, because
+    /// `synchronous` is a per-connection setting: a store opened without it has silently lost its
+    /// guarantee and the file itself would not say so.
+    pub fn open_with(
+        path: &Path,
+        repo: &RepoId,
+        durability: Durability,
+    ) -> Result<Self, StoreError> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent).map_err(|e| {
@@ -136,7 +153,7 @@ impl Store {
 
         conn.busy_timeout(BUSY_TIMEOUT)
             .map_err(|e| StoreError::Io(format!("cannot set busy timeout: {e}")))?;
-        configure(&conn)?;
+        configure(&conn, durability)?;
 
         if !existed {
             schema::create_v1(&conn)?;
@@ -171,6 +188,7 @@ impl Store {
             repo: repo.clone(),
             generation,
             schema_version,
+            durability,
         })
     }
 
@@ -194,7 +212,12 @@ impl Store {
     }
 
     /// The connection, for the submodules that do the actual work.
-    fn conn(&self) -> &Connection {
+    /// The connection, for the diagnostics and pragmas that are part of this type's contract.
+    ///
+    /// Not general-purpose: handing out `&Connection` would let a caller run arbitrary SQL against
+    /// a store whose integrity depends on the write path being the only writer. It exists so
+    /// `synchronous` can be read back and asserted, which is a guarantee rather than a query.
+    pub fn conn(&self) -> &Connection {
         &self.conn
     }
 
@@ -230,6 +253,16 @@ impl Store {
             )));
         }
         Ok(())
+    }
+
+    /// The durability this connection was opened with.
+    ///
+    /// Recorded rather than re-read, because the *point* is to report what the caller was
+    /// promised at open time. A `doctor` that queried the pragma instead would be describing the
+    /// connection rather than the guarantee, and could not tell the difference between a store
+    /// opened `Full` and one opened `Normal` by a different build.
+    pub fn durability(&self) -> Durability {
+        self.durability
     }
 
     /// Run SQLite's own integrity check over the whole database, and confirm the cached
@@ -281,7 +314,7 @@ impl Store {
 /// Audit A16: Cortex turned a failing `dir_size` into `0` via `unwrap_or(0)`, so its statistics
 /// were invented rather than measured. A pragma that silently does not apply is the same defect
 /// at a different layer, so each is read back.
-fn configure(conn: &Connection) -> Result<(), StoreError> {
+fn configure(conn: &Connection, durability: Durability) -> Result<(), StoreError> {
     let mode: String = conn
         .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
         .map_err(|e| StoreError::Query(format!("cannot enable WAL: {e}")))?;
@@ -291,16 +324,12 @@ fn configure(conn: &Connection) -> Result<(), StoreError> {
         )));
     }
 
-    // `synchronous = NORMAL` under WAL: durable across a process crash, without forcing an fsync
-    // on every commit. `FULL` would fsync per commit, a per-file syscall tax on a workload that
-    // commits in batches.
-    //
     // Enforced foreign keys, not merely declared ones. Without this the two foreign keys in the
     // schema are documentation: SQLite parses them, reports no error, and ignores them.
     //
     // Both are set through `execute_batch` because a pragma that *assigns* returns no rows, and
     // `query_row` would fail on the empty result rather than on the setting.
-    conn.execute_batch("PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;")
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|e| StoreError::Query(format!("cannot apply connection pragmas: {e}")))?;
 
     let foreign_keys: i64 = conn
@@ -311,6 +340,77 @@ fn configure(conn: &Connection) -> Result<(), StoreError> {
             "foreign keys are not enforced; deleting an entity would leave dangling relations"
                 .to_owned(),
         ));
+    }
+
+    set_durability(conn, durability)?;
+    Ok(())
+}
+
+/// How much a committed transaction is guaranteed to survive.
+///
+/// This is a parameter rather than a constant because the choice is a **contract** decision, not
+/// a tuning one, and it is the kind of decision that gets changed by someone who has not read
+/// what it means. `apply_update` returns statistics only after `COMMIT` has returned; that is the
+/// only reason a caller can trust them. Weakening durability here does not make the index faster
+/// in any way a user can perceive — it makes a reported success untrue under power loss.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Durability {
+    /// `synchronous = FULL`. `COMMIT` does not return until the write-ahead log has been fsynced.
+    ///
+    /// The default, and the only setting under which "the commit succeeded" and "the commit is on
+    /// disk" are the same statement. A power failure immediately after a successful `apply_update`
+    /// cannot lose the generation it reported.
+    #[default]
+    Full,
+    /// `synchronous = NORMAL`. Survives a process crash; may lose recently committed
+    /// transactions on power loss.
+    ///
+    /// Correct — WAL guarantees atomicity either way, so a torn state is impossible — but strictly
+    /// weaker: it can return success for a transaction the disk never received. It exists for one
+    /// reason, which is that it must be *askable for by name*. An unmeasured performance saving is
+    /// not a reason to change a guarantee; if someone later measures the fsync cost and decides it
+    /// is worth trading, this variant is where that decision belongs, and the default is the thing
+    /// they have to move.
+    Normal,
+}
+
+impl Durability {
+    /// The value `PRAGMA synchronous` expects.
+    const fn pragma_value(self) -> i64 {
+        match self {
+            Durability::Full => 2,
+            Durability::Normal => 1,
+        }
+    }
+
+    /// The spelling used in error messages and `doctor` output.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Durability::Full => "FULL",
+            Durability::Normal => "NORMAL",
+        }
+    }
+}
+
+/// Apply the durability level and read it back.
+///
+/// The read-back matters more than usual here, because `synchronous` is a **per-connection**
+/// setting rather than a persisted property of the file. A store opened without it is a store
+/// that silently lost its guarantee, and nothing in the file would say so. The single place that
+/// opens a connection is the single place that sets it.
+fn set_durability(conn: &Connection, durability: Durability) -> Result<(), StoreError> {
+    // Assigned via `query_row` on a statement that *returns* a row, so the value that took effect
+    // is the value that was read, not the value that was asked for.
+    let applied: i64 = conn
+        .query_row(&format!("PRAGMA synchronous = {}", durability.pragma_value()), [], |row| {
+            row.get(0)
+        })
+        .map_err(|e| StoreError::Query(format!("cannot set synchronous: {e}")))?;
+    if applied != durability.pragma_value() {
+        return Err(StoreError::Query(format!(
+            "synchronous is {applied}, not {}; a commit would return before it was durable",
+            durability.as_str()
+        )));
     }
     Ok(())
 }

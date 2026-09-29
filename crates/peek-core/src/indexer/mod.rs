@@ -30,7 +30,7 @@ use crate::discover::{
 };
 use crate::extract::ExtractedFile;
 use crate::model::{Language, RepoPath, ResolutionState};
-use crate::store::{IndexUpdate, Store, StoreError, UpdateStats};
+use crate::store::{IndexUpdate, RepoId, Store, StoreError, UpdateStats, paths};
 
 /// Everything an indexing run produced, including what it could not do.
 ///
@@ -167,6 +167,18 @@ pub enum IndexError {
     Discovery(#[from] crate::discover::DiscoveryError),
     #[error("the index store failed: {0}")]
     Store(#[from] StoreError),
+}
+
+/// Open the index for the repository at `root`, at its configured location.
+///
+/// The path is resolved rather than passed in, so that no caller can accidentally place the index
+/// inside the tree it describes. Audit A: the engine this replaces wrote `.cortex/` into every
+/// repository it touched and gitignored it — invisible to a reviewer, and carried by every clone.
+/// See [`crate::store::paths`].
+pub fn open_store(root: &Path) -> Result<Store, IndexError> {
+    let repo = RepoId::discover(root)?;
+    let path = paths::index_path(&repo)?;
+    Ok(Store::open(&path, &repo)?)
 }
 
 /// Build a complete index of `root`.

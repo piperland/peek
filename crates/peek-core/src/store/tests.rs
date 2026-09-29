@@ -22,7 +22,7 @@ use super::query::{
     outgoing_sql, relations_in_state_sql,
 };
 use super::row::ENTITY_COLUMNS;
-use super::{IndexUpdate, RepoId, SCHEMA_VERSION, Store, StoreError, schema};
+use super::{Durability, IndexUpdate, RepoId, SCHEMA_VERSION, Store, StoreError, schema};
 
 /// The size of the synthetic graph the traversal test builds.
 const GRAPH_SIZE: usize = 5_000;
@@ -1651,4 +1651,61 @@ fn a_removal_demotes_an_edge_before_deleting_the_entity_it_points_at() {
         2,
         "the demoted edge and the pre-existing external one"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Durability
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_store_is_opened_with_full_durability_by_default() {
+    // The contract is that a commit which returns success is on disk. Under WAL that holds for
+    // atomicity at any `synchronous` level, but `NORMAL` can still lose a *committed*
+    // transaction on power loss, which means `apply_update` can report statistics for a
+    // generation that never existed. `FULL` is the default for that reason alone; it is not a
+    // tuning parameter and it is asserted so that changing it is a deliberate act.
+    let dir = TempDir::new("durability-default");
+    let store = open(&dir);
+    assert_eq!(store.durability(), Durability::Full);
+}
+
+#[test]
+fn a_weaker_durability_is_possible_only_by_asking_for_it_explicitly() {
+    // It must be a named, reachable state rather than a constant someone edits. If there were no
+    // way to ask for it, the next person to want the speedup would change the default instead —
+    // which is invisible in review and weakens every install at once.
+    let dir = TempDir::new("durability-explicit");
+    let id = repo(&dir);
+    let store = Store::open_with(&dir.database(), &id, Durability::Normal).expect("open");
+    assert_eq!(store.durability(), Durability::Normal);
+}
+
+#[test]
+fn the_durability_setting_actually_reaches_the_connection() {
+    // `synchronous` is a per-connection setting, so recording the intent and failing to apply it
+    // would produce a store that *reports* `Normal` while being `Full`, or worse the reverse.
+    // The setting is read back from SQLite rather than assumed, which is the same discipline the
+    // other pragmas get.
+    let dir = TempDir::new("durability-applied");
+    let id = repo(&dir);
+    let store = Store::open_with(&dir.database(), &id, Durability::Normal).expect("open");
+    let raw: i64 = store
+        .conn()
+        .query_row("PRAGMA synchronous", [], |row| row.get(0))
+        .expect("read synchronous back");
+    assert_eq!(raw, 1, "NORMAL is 1 and FULL is 2; the pragma must have taken");
+}
+
+#[test]
+fn a_store_opened_weaker_still_reads_and_writes_correctly() {
+    // Weaker durability is a weaker *promise about power loss*, not a different database. If it
+    // changed behaviour, nobody would be able to adopt it at all.
+    let dir = TempDir::new("durability-weak-writes");
+    let id = repo(&dir);
+    let mut store = Store::open_with(&dir.database(), &id, Durability::Normal).expect("open");
+    store
+        .apply_update(IndexUpdate::empty().with_entity(bare_entity("src/a.rs", "main")))
+        .expect("commit");
+    assert!(store.generation() >= 1, "a weaker commit still counts");
+    store.checkpoint().expect("checkpoint");
 }
