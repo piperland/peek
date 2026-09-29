@@ -941,8 +941,10 @@ mod tests {
         // last. Adding a variant above the last therefore widens the range and is checked without
         // anything here being edited; adding one below it is a compile error, because the
         // discriminants are the enum's and inserting a variant renumbers them.
-        let listed: std::collections::BTreeSet<usize> =
-            ALL_RELATION_KINDS.iter().map(|kind| *kind as usize).collect();
+        let listed: std::collections::BTreeSet<usize> = ALL_RELATION_KINDS
+            .iter()
+            .map(|kind| *kind as usize)
+            .collect();
         let highest = RelationKind::Subscribes as usize;
         for discriminant in 0..=highest {
             assert!(
