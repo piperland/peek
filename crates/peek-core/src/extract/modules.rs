@@ -325,3 +325,554 @@ pub fn fingerprint(text: &str) -> String {
     format!("fnv1a64:{hash:016x}")
 }
 
+/// Read a committed fixture under `tests/fixtures/modules/`.
+///
+/// Panics when the file is missing rather than returning an empty string. A test that reads a
+/// fixture which is not committed passes for the wrong reason, which is the same defect as a
+/// test asserting on a file that does not exist — the `touponly`/`toponly` bug in this
+/// project's own discovery tests.
+#[cfg(test)]
+pub(crate) fn fixture_source(relative: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("modules")
+        .join(relative);
+    std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "fixture {} could not be read: {error}. It has to be committed, and the whole tree \
+             is force-added because the verification sandbox runs `git clean -fdx`.",
+            path.display()
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ModuleLayout, fingerprint, fixture_source, for_file, locate};
+    use crate::extract::registry;
+    use crate::model::{EntityKind, RelationKind, ResolutionState, Span};
+
+    /// Assert that every fixture this test module names is actually on disk.
+    ///
+    /// A table of paths nothing checks is a list of intentions. This is what turns it into a list
+    /// of files, and it fails as a *missing file* rather than as a puzzling assertion further
+    /// down.
+    #[test]
+    fn every_module_fixture_named_by_these_tests_is_committed() {
+        const NAMED: &[&str] = &[
+            "README.md",
+            "nested/src/lib.rs",
+            "nested/src/outer/mod.rs",
+            "nested/src/outer/middle/mod.rs",
+            "nested/src/outer/middle/inner.rs",
+            "several/src/lib.rs",
+            "several/src/a.rs",
+            "several/src/b.rs",
+            "several/src/c.rs",
+            "cross/alpha/src/lib.rs",
+            "cross/alpha/src/gateway.rs",
+            "cross/beta/src/lib.rs",
+            "cross/beta/src/service.rs",
+            "reexport/src/lib.rs",
+            "reexport/src/inner/mod.rs",
+            "reexport/src/inner/thing.rs",
+            "reexport/src/inner/helpers.rs",
+        ];
+        let empty: Vec<&str> = NAMED
+            .iter()
+            .copied()
+            .filter(|relative| fixture_source(relative).is_empty())
+            .collect();
+        assert!(empty.is_empty(), "fixtures that are committed but empty: {empty:?}");
+    }
+
+    fn path(s: &str) -> crate::model::RepoPath {
+        crate::model::RepoPath::new(s).expect("valid path")
+    }
+
+    /// The Rust layout, read from the registry rather than restated, so a test cannot pass
+    /// against a table the extractor no longer uses.
+    fn rust_layout() -> ModuleLayout {
+        registry::get(crate::model::Language::Rust)
+            .expect("rust spec")
+            .module_layout()
+            .expect("rust declares a module layout")
+    }
+
+    fn span() -> Span {
+        Span::new(0, 10, 1, 1, 1, 11).expect("valid span")
+    }
+
+    fn file_id(p: &str) -> crate::model::EntityId {
+        crate::model::EntityId::new(path(p), EntityKind::File, "x.rs", 0)
+    }
+
+    fn modules_for(p: &str) -> super::FileModules {
+        let spec = registry::get(crate::model::Language::Rust).expect("rust spec");
+        for_file(spec, &path(p), &file_id(p), span(), "fn a() {}")
+    }
+
+    fn module_names(p: &str) -> Vec<String> {
+        modules_for(p)
+            .entities
+            .iter()
+            .filter(|entity| entity.kind() == EntityKind::Module)
+            .map(|entity| entity.id.qualified_name().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_source_file_is_the_module_its_path_names() {
+        // The whole reason this file exists. `use regex_automata::util::look::Matcher;` can only
+        // be a lookup if something in the index is called `regex_automata::util::look`.
+        assert_eq!(
+            module_names("crates/regex-automata/src/util/look.rs"),
+            vec!["regex_automata::util::look".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_mod_rs_file_is_the_module_its_directory_names() {
+        // Rust has no separate directory entity: `a/mod.rs` *is* the module `a`, and the `mod`
+        // in its filename is a convention rather than part of the name.
+        assert_eq!(
+            module_names("crates/regex-automata/src/util/mod.rs"),
+            vec!["regex_automata::util".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_crate_root_file_is_the_module_named_for_its_package() {
+        // `lib` is a filename convention. Nothing can write `use lib::…`, so naming the module
+        // `lib` would be a name the source can never produce.
+        assert_eq!(
+            module_names("crates/regex/src/lib.rs"),
+            vec!["regex".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_crate_root_file_is_the_only_one_that_names_a_package() {
+        // `src/a/main.rs` is the module `pkg::a::main`. Treating it as a second package because
+        // its stem is `main` would split one package's namespace into two.
+        let layout = rust_layout();
+        assert!(
+            !locate(&path("crates/regex/src/a/main.rs"), &layout).is_package_root,
+            "a main.rs below the source root is a module, not a package"
+        );
+        assert_eq!(
+            locate(&path("crates/regex/src/a/main.rs"), &layout).qualified_name("::"),
+            "regex::a::main"
+        );
+        assert!(
+            locate(&path("crates/regex/src/lib.rs"), &layout).is_package_root,
+            "a lib.rs directly in the source root is the package root"
+        );
+    }
+
+    #[test]
+    fn a_nested_source_directory_is_not_a_second_package_root() {
+        // `src` is a directory name, not a reserved word. Taking the *first* one keeps every
+        // file under it in one namespace; taking the last would give `inner` its own.
+        let layout = rust_layout();
+        let inner = locate(&path("crates/foo/src/inner/src/look.rs"), &layout);
+        assert_eq!(inner.package, "foo");
+        assert_eq!(
+            inner.qualified_name("::"),
+            "foo::inner::src::look",
+            "a nested `src` is an ordinary directory segment"
+        );
+    }
+
+    #[test]
+    fn a_package_name_is_spelled_the_way_a_use_statement_spells_it() {
+        // Cargo replaces a hyphen with an underscore in the package name, and that underscore is
+        // the only spelling a `use` statement can have. Keeping the hyphen would make every
+        // cross-crate module name unmatchable.
+        let layout = rust_layout();
+        let located = locate(&path("crates/regex-automata/src/lib.rs"), &layout);
+        assert_eq!(located.package, "regex_automata");
+    }
+
+    #[test]
+    fn a_package_at_the_repository_root_is_named_after_its_source_root_and_says_so() {
+        // The one approximation that produces a name which is simply wrong. It is pinned here so
+        // that a future `Cargo.toml` reader can see exactly which case it has to fix, and so that
+        // nobody discovers the behaviour from a qualified name in a report.
+        let layout = rust_layout();
+        let located = locate(&path("src/lib.rs"), &layout);
+        assert_eq!(located.package, "src");
+        assert!(located.is_package_root);
+    }
+
+    #[test]
+    fn a_file_with_no_source_root_above_it_still_gets_a_module() {
+        // Refusing to emit a module would leave every non-Cargo Rust file in the index without a
+        // namespace, which is the same silent gap this whole change exists to close. The package
+        // name is wrong here and there is no honest way to do better from a path alone.
+        let layout = rust_layout();
+        let located = locate(&path("tests/helper.rs"), &layout);
+        assert_eq!(located.qualified_name("::"), "tests::helper");
+    }
+
+    #[test]
+    fn a_mod_rs_directly_in_the_source_root_does_not_take_the_crate_root_s_name() {
+        // `a/mod.rs` is the module `a` because there is a directory called `a`. A bare
+        // `src/mod.rs` has no such directory, and naming it after the package would put two
+        // different files in one namespace under one name.
+        let layout = rust_layout();
+        let located = locate(&path("crates/foo/src/mod.rs"), &layout);
+        assert_eq!(located.qualified_name("::"), "foo::mod");
+        assert!(!located.is_package_root);
+        assert_ne!(
+            located.qualified_name("::"),
+            locate(&path("crates/foo/src/lib.rs"), &layout).qualified_name("::"),
+        );
+    }
+
+    #[test]
+    fn a_file_at_the_repository_root_falls_back_to_its_own_name() {
+        // A file at the very top of a checkout has no directory above its source root and no
+        // directory of its own. Something has to be chosen, and an empty package would make
+        // every qualified name unmatchable.
+        let layout = rust_layout();
+        let located = locate(&path("toponly.rs"), &layout);
+        assert_eq!(located.package, "toponly");
+        assert_eq!(located.qualified_name("::"), "toponly::toponly");
+        assert!(!located.is_package_root, "and it declares no package");
+    }
+
+    #[test]
+    fn a_module_qualified_name_starts_with_the_package_even_when_there_are_no_segments() {
+        let layout = rust_layout();
+        let located = locate(&path("crates/regex/src/lib.rs"), &layout);
+        assert!(located.segments.is_empty());
+        assert_eq!(located.name(), "regex");
+        assert_eq!(located.qualified_name("::"), "regex");
+    }
+
+    #[test]
+    fn a_module_is_contained_in_the_file_that_writes_it() {
+        // The file entity and the module entity are different rows answering different questions,
+        // and without this edge nothing in the graph relates them.
+        let found = modules_for("crates/regex/src/lib.rs");
+        let contains = found
+            .relations
+            .iter()
+            .find(|relation| relation.kind == RelationKind::Contains)
+            .expect("the file contains the module");
+        assert_eq!(contains.source, file_id("crates/regex/src/lib.rs"));
+        assert_eq!(contains.target, found.module);
+        assert_eq!(contains.target_name, "regex");
+    }
+
+    #[test]
+    fn a_containment_edge_is_settled_by_grammar_and_never_re_decided() {
+        // The crate boundary is a fact about the build, not a claim about a name. A boundary
+        // stored as an inference would be re-decided on every refresh and could come back
+        // ambiguous after an unrelated edit.
+        let found = modules_for("crates/regex/src/lib.rs");
+        let boundaries: Vec<_> = found
+            .relations
+            .iter()
+            .filter(|relation| relation.source.kind() == EntityKind::Package)
+            .collect();
+        assert_eq!(boundaries.len(), 1, "{found:#?}");
+        assert_eq!(
+            boundaries[0].resolution,
+            ResolutionState::Resolved {
+                by: crate::model::Evidence::Containment
+            }
+        );
+        assert!(
+            !RelationKind::Contains.is_dependency(),
+            "a containment edge is structure, not a dependency, so it stays out of every \
+             dependency traversal"
+        );
+    }
+
+    #[test]
+    fn only_a_package_root_file_emits_a_package_entity() {
+        assert!(
+            modules_for("crates/regex/src/lib.rs")
+                .entities
+                .iter()
+                .any(|entity| entity.kind() == EntityKind::Package),
+            "the crate root is where the package is declared"
+        );
+        assert!(
+            !modules_for("crates/regex/src/automata/mod.rs")
+                .entities
+                .iter()
+                .any(|entity| entity.kind() == EntityKind::Package),
+            "a module file belongs to a package it does not declare"
+        );
+    }
+
+    #[test]
+    fn a_module_covers_the_whole_file_it_is_written_in() {
+        // A caller that asks "where is this module" gets the file, and a module with a two-byte
+        // span would say the module is the first two bytes of the file.
+        let found = modules_for("crates/regex/src/lib.rs");
+        let module = found
+            .entities
+            .iter()
+            .find(|entity| entity.kind() == EntityKind::Module)
+            .expect("a module entity");
+        assert_eq!(module.span, Some(span()));
+    }
+
+    #[test]
+    fn a_module_fingerprints_its_own_text_so_a_moved_module_is_still_the_same_one() {
+        let first = modules_for("crates/regex/src/lib.rs");
+        let again = modules_for("crates/regex/src/lib.rs");
+        let before = first
+            .entities
+            .iter()
+            .find(|entity| entity.kind() == EntityKind::Module)
+            .and_then(|entity| entity.structural_fingerprint.clone());
+        let after = again
+            .entities
+            .iter()
+            .find(|entity| entity.kind() == EntityKind::Module)
+            .and_then(|entity| entity.structural_fingerprint.clone());
+        assert_eq!(before, after);
+        assert!(
+            before.as_deref().is_some_and(|value| value.starts_with("fnv1a64:")),
+            "a module body can be hashed, so the fingerprint is filled in: {before:?}"
+        );
+    }
+
+    #[test]
+    fn the_fingerprint_matches_the_published_fnv1a_vectors() {
+        // An unreferenced hash is an unverifiable one. These three are the values the algorithm's
+        // own specification publishes for the 64-bit variant, so the function is checked against
+        // something outside this repository rather than against itself.
+        assert_eq!(fingerprint(""), "fnv1a64:cbf29ce484222325");
+        assert_eq!(fingerprint("a"), "fnv1a64:af63dc4c8601ec8c");
+        assert_eq!(fingerprint("foobar"), "fnv1a64:85944171f73967e8");
+    }
+
+    #[test]
+    fn a_language_with_no_module_layout_contributes_nothing() {
+        // The honest answer for a language whose file-to-module convention is unknown. The
+        // engine Peek replaces derived a module from any string containing a dot, a slash or a
+        // hyphen, and a kebab-cased JavaScript identifier matched (audit B7).
+        let without = crate::extract::spec::LanguageSpec {
+            language: crate::model::Language::Rust,
+            symbols: &[],
+            calls: &[],
+            imports: &[],
+            inheritance: None,
+            references: None,
+            scope_nodes: &[],
+            type_scope_nodes: &[],
+            module_nodes: &[],
+            modules: None,
+            grammar: || tree_sitter_rust::LANGUAGE.into(),
+        };
+        let found = for_file(
+            &without,
+            &path("crates/regex/src/lib.rs"),
+            &file_id("crates/regex/src/lib.rs"),
+            span(),
+            "fn a() {}",
+        );
+        assert!(found.is_empty(), "{found:#?}");
+        assert!(found.module.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // The committed trees
+    //
+    // Everything above proves the rule against paths written out by hand. These read real files
+    // out of `tests/fixtures/modules/`, so the rule is also proved against source somebody could
+    // compile.
+    // -----------------------------------------------------------------------
+
+    /// The module and package entities one committed fixture file contributes.
+    fn fixture_modules(relative: &str) -> Vec<String> {
+        let found = for_file(
+            registry::get(crate::model::Language::Rust).expect("rust spec"),
+            &path(relative),
+            &file_id(relative),
+            span(),
+            &fixture_source(relative),
+        );
+        let mut names: Vec<String> = found
+            .entities
+            .iter()
+            .map(|entity| format!("{} {}", entity.kind().as_str(), entity.id.qualified_name()))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_three_level_nested_tree_names_every_level_from_the_crate_root() {
+        // The shape `mod.rs` files exist for. Reading `mod outer;` as the module `outer` and
+        // stopping there would put every level below it outside any namespace at all.
+        assert_eq!(
+            fixture_modules("nested/src/lib.rs"),
+            vec!["module nested".to_owned(), "package nested".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("nested/src/outer/mod.rs"),
+            vec!["module nested::outer".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("nested/src/outer/middle/mod.rs"),
+            vec!["module nested::outer::middle".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("nested/src/outer/middle/inner.rs"),
+            vec!["module nested::outer::middle::inner".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_crate_with_several_modules_names_each_one_from_the_crate_root() {
+        assert_eq!(
+            fixture_modules("several/src/lib.rs"),
+            vec!["module several".to_owned(), "package several".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("several/src/a.rs"),
+            vec!["module several::a".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("several/src/b.rs"),
+            vec!["module several::b".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("several/src/c.rs"),
+            vec!["module several::c".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_module_declaration_and_the_file_that_defines_it_are_two_different_entities() {
+        // `mod a;` in `several/src/lib.rs` and `several/src/a.rs` describe one module from two
+        // sides. Collapsing them would lose the site that declared it; giving the declaration
+        // the same name as the file would lose the file it lives in.
+        let root = crate::extract::walker::extract_with(
+            registry::get(crate::model::Language::Rust).expect("rust spec"),
+            path("several/src/lib.rs"),
+            &fixture_source("several/src/lib.rs"),
+        );
+        assert!(root.is_clean(), "{:?}", root.degradation);
+        let declaration = root
+            .entities
+            .iter()
+            .find(|entity| {
+                entity.kind() == EntityKind::Module && !root.module_ids.contains(&entity.id)
+            })
+            .expect("`mod a;` declared a module entity in the file that declares it");
+        assert_eq!(declaration.id.path().as_str(), "several/src/lib.rs");
+        assert_eq!(declaration.id.qualified_name(), "a");
+        assert_eq!(
+            fixture_modules("several/src/a.rs"),
+            vec!["module several::a".to_owned()],
+            "and the file it names is a different entity, named for the path it is written at"
+        );
+    }
+
+    #[test]
+    fn two_packages_in_one_tree_get_two_names_and_no_shared_namespace() {
+        // The cross-crate case that dominated the measured decide rate. `use alpha::gateway::…`
+        // in the `beta` package is only a lookup if `alpha::gateway` exists as a name, and it is
+        // only distinct from `beta`'s own modules because the package prefix is in the name.
+        assert_eq!(
+            fixture_modules("cross/alpha/src/lib.rs"),
+            vec!["module alpha".to_owned(), "package alpha".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("cross/alpha/src/gateway.rs"),
+            vec!["module alpha::gateway".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("cross/beta/src/lib.rs"),
+            vec!["module beta".to_owned(), "package beta".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("cross/beta/src/service.rs"),
+            vec!["module beta::service".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_re_export_tree_names_the_module_it_publishes_part_of() {
+        assert_eq!(
+            fixture_modules("reexport/src/lib.rs"),
+            vec!["module reexport".to_owned(), "package reexport".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("reexport/src/inner/mod.rs"),
+            vec!["module reexport::inner".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("reexport/src/inner/thing.rs"),
+            vec!["module reexport::inner::thing".to_owned()]
+        );
+        assert_eq!(
+            fixture_modules("reexport/src/inner/helpers.rs"),
+            vec!["module reexport::inner::helpers".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_fixture_under_this_repository_produces_the_same_module_name_as_the_bare_tree() {
+        // The rule reads a repository-relative path, and the fixtures are read through a path
+        // relative to the fixture directory. If the two ever disagreed, the fixtures would be
+        // proving something the indexer would never do.
+        let layout = rust_layout();
+        let bare = locate(&path("cross/alpha/src/gateway.rs"), &layout);
+        let in_repository = locate(
+            &path("crates/peek-core/tests/fixtures/modules/cross/alpha/src/gateway.rs"),
+            layout,
+        );
+        assert_eq!(bare, in_repository);
+        assert_eq!(in_repository.qualified_name("::"), "alpha::gateway");
+    }
+
+    #[test]
+    fn every_committed_fixture_file_is_source_the_extractor_accepts_without_complaint() {
+        // A fixture that does not parse would make the module assertions above pass for the
+        // wrong reason, because a degraded file still produces its module entity. Naming the
+        // degradation is what stops that.
+        const NAMED: &[&str] = &[
+            "nested/src/lib.rs",
+            "nested/src/outer/mod.rs",
+            "nested/src/outer/middle/mod.rs",
+            "nested/src/outer/middle/inner.rs",
+            "several/src/lib.rs",
+            "several/src/a.rs",
+            "several/src/b.rs",
+            "several/src/c.rs",
+            "cross/alpha/src/lib.rs",
+            "cross/alpha/src/gateway.rs",
+            "cross/beta/src/lib.rs",
+            "cross/beta/src/service.rs",
+            "reexport/src/lib.rs",
+            "reexport/src/inner/mod.rs",
+            "reexport/src/inner/thing.rs",
+            "reexport/src/inner/helpers.rs",
+        ];
+        let mut degraded = Vec::new();
+        for relative in NAMED {
+            let extracted = crate::extract::walker::extract_with(
+                registry::get(crate::model::Language::Rust).expect("rust spec"),
+                path(relative),
+                &fixture_source(relative),
+            );
+            if !extracted.is_clean() {
+                degraded.push(format!("{relative}: {:?}", extracted.degradation));
+            }
+        }
+        assert!(
+            degraded.is_empty(),
+            "a fixture that does not parse makes every assertion about it meaningless: {degraded:?}"
+        );
+    }
+}

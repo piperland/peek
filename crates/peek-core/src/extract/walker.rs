@@ -6,7 +6,7 @@
 //! code change, and it is the direct opposite of Cortex, whose 27-language extractor was one
 //! hardcoded `match` arm that silently matched nothing for most of them.
 //!
-//! # Three things this walker is careful about
+//! # Four things this walker is careful about
 //!
 //! 1. **Receivers survive.** Cortex extracted a call's target as "the last identifier in the
 //!    callee subtree", so `a.b.c()` became `"c"` and the receiver was gone before resolution
@@ -20,13 +20,21 @@
 //! 3. **Ambiguity is not guessed away.** `S::new()` is byte-identical to `mod::new()` in Rust.
 //!    The walker marks such a call [`UnresolvedReason::Ambiguous`] rather than pretending to
 //!    know which it was.
+//!
+//! 4. **Adding structure does not disturb what already works.** A file's module structure is
+//!    emitted *alongside* the declarations rather than folded into them, and an inline `mod x`
+//!    keeps the qualified name it always had. A module is a declaration, not a reference, and
+//!    nothing here rewrites a symbol's identity to accommodate one: `qualified_name` is two
+//!    thirds of `EntityId`, so re-keying it would churn every method in the repository over a
+//!    refactor that moved nothing.
 
 use std::collections::HashMap;
 
 use tree_sitter::Node;
 
+use super::modules;
 use super::source::SourceText;
-use super::spec::{InheritanceStyle, LanguageSpec, NameStrategy, SymbolRule};
+use super::spec::{ImportRule, InheritanceStyle, LanguageSpec, NameStrategy, SymbolRule};
 use crate::model::{
     Entity, EntityId, EntityKind, Evidence, Language, Relation, RelationKind, RepoPath, Span,
     UnresolvedReason,
@@ -63,6 +71,15 @@ pub struct ExtractedFile {
     pub language: Language,
     pub entities: Vec<Entity>,
     pub relations: Vec<Relation>,
+    /// The module and package entities this extraction contributed, in the order they were
+    /// created.
+    ///
+    /// They are in [`Self::entities`] like everything else, because a consumer that filtered
+    /// them out would lose the module table. This list is here so a consumer can tell a module
+    /// *node* from a declaration node without re-deriving the file-to-module convention and
+    /// without inferring it from a name's shape — which is how a declaration ends up mistaken
+    /// for a namespace.
+    pub module_ids: Vec<EntityId>,
     /// `None` when the file parsed cleanly. A degraded file must never be reported as clean.
     pub degradation: Option<Degradation>,
 }
@@ -158,6 +175,12 @@ struct Walker<'a> {
     path: RepoPath,
     /// The file entity every module-level relation anchors on.
     file_id: EntityId,
+    /// The module this file *is*, when the spec has a module layout. `None` for a language
+    /// whose file-to-module convention is not known, which is a different thing from "this file
+    /// declares no module".
+    module_id: Option<EntityId>,
+    /// Every module and package entity this walk created, carried out on [`ExtractedFile`].
+    module_ids: Vec<EntityId>,
     entities: Vec<Entity>,
     relations: Vec<Relation>,
     scope: Vec<ScopeEntry>,
@@ -190,19 +213,27 @@ impl<'a> Walker<'a> {
             }],
             path,
             relations: Vec::new(),
+            module_id: None,
+            module_ids: Vec::new(),
             scope: Vec::new(),
             ordinals: HashMap::new(),
         }
     }
 
     fn span(&self, node: Node<'_>) -> Span {
-        match self.source.span(node.start_byte(), node.end_byte()) {
+        self.span_of(node.start_byte()..node.end_byte())
+    }
+
+    /// The span of a byte range, with a last-resort fallback for a range the source cannot be
+    /// asked about.
+    fn span_of(&self, range: std::ops::Range<usize>) -> Span {
+        match self.source.span(range.start, range.end) {
             Some(span) => span,
             // A Tree-sitter range is always well-formed and in bounds, so this is unreachable in
             // practice. A zero-width span at the last line keeps a pathological grammar from
             // aborting an entire file over a position calculation.
             None => {
-                let byte = u32::try_from(node.start_byte()).unwrap_or(0);
+                let byte = u32::try_from(range.start).unwrap_or(0);
                 let line = u32::try_from(self.source.line_count()).unwrap_or(1);
                 Span {
                     start_byte: byte,
@@ -456,7 +487,33 @@ impl<'a> Walker<'a> {
 
     /// Walk the tree.
     fn run(&mut self, root: Node<'_>) {
+        // Module structure first, so a module declaration declared later in the file has a
+        // parent to be contained by. The entities are appended to the same list as everything
+        // else; nothing downstream has to know they came from a different pass.
+        self.emit_file_modules();
         self.walk(root);
+    }
+
+    /// Emit the package and module this file contributes, before any declaration is walked.
+    fn emit_file_modules(&mut self) {
+        let spec = self.spec;
+        if spec.module_layout().is_none() {
+            return;
+        }
+        let text = self.source.text();
+        let found = modules::for_file(
+            spec,
+            &self.path,
+            &self.file_id,
+            self.span_of(0..text.len()),
+            text,
+        );
+        self.module_id = found.module.clone();
+        for entity in found.entities {
+            self.module_ids.push(entity.id.clone());
+            self.entities.push(entity);
+        }
+        self.relations.extend(found.relations);
     }
 
     fn walk(&mut self, node: Node<'_>) {
@@ -497,6 +554,17 @@ impl<'a> Walker<'a> {
             return None;
         }
 
+        // A module declaration is the one kind whose body is worth hashing, and only the spec can
+        // say which node types those are: the Rust table maps `impl_item` to `EntityKind::Module`
+        // as well, and keying this off the kind would fingerprint every impl block in a codebase
+        // as though it were a namespace. Read before the mutable calls below, because they borrow
+        // `self` exclusively.
+        let declares_module = self.spec.is_module_node(node.kind());
+        let fingerprint = match declares_module {
+            true => self.text(node).map(|body| modules::fingerprint(&body)),
+            false => None,
+        };
+
         // A function declared inside a type is a method, not a plain function. The language
         // spec cannot express this — `function_item` means one node type in every context — so
         // the distinction is made here, from the scope stack, rather than being declared twice
@@ -524,13 +592,21 @@ impl<'a> Walker<'a> {
             // Peek has no framework rules yet, so a `#[test]`-annotated function is the only
             // test signal available from source alone. Detect it conservatively.
             is_test: self.looks_like_test(node),
-            structural_fingerprint: None,
+            structural_fingerprint: fingerprint,
         };
         self.entities.push(entity);
 
         // Containment is expressed as relations rather than a side table, so that every edge in
-        // the graph has exactly one representation.
-        if let Some(parent) = self.scope.last().map(|entry| entry.id.clone()) {
+        // the graph has exactly one representation. A module declared at file level has no
+        // enclosing *declaration*, so it hangs off the module this file is rather than off the
+        // file: the two are the same namespace seen from two directions, and putting the module
+        // outside the file would leave the package's namespace unrooted.
+        let parent = match self.scope.last() {
+            Some(enclosing) => Some(enclosing.id.clone()),
+            None if declares_module => self.module_id.clone(),
+            None => None,
+        };
+        if let Some(parent) = parent {
             self.relations.push(Relation::resolved(
                 RelationKind::Contains,
                 parent,
@@ -605,7 +681,7 @@ impl<'a> Walker<'a> {
         }
 
         if let Some(rule) = self.spec.import_rule(node.kind()) {
-            self.emit_import(subject.clone(), node, rule.path_field);
+            self.emit_import(subject.clone(), node, rule);
         }
 
         if let Some(style) = self.spec.inheritance {
@@ -666,10 +742,19 @@ impl<'a> Walker<'a> {
     }
 
     /// Emit `imports` relations from a `use` declaration, preserving aliases.
-    fn emit_import(&mut self, source: EntityId, node: Node<'_>, path_field: Option<&str>) {
-        let Some(argument) = path_field.and_then(|field| node.child_by_field_name(field)) else {
+    fn emit_import(&mut self, source: EntityId, node: Node<'_>, rule: &ImportRule) {
+        let Some(argument) = rule.path_field.and_then(|field| node.child_by_field_name(field))
+        else {
             return;
         };
+        // `pub use` is still a binding in this module, so it is still an `Imports` edge and the
+        // resolver's R1 rung still places names against it. What the marker buys is the word in
+        // the basis, so `peek explain` can say the name is part of the module's public surface
+        // without re-parsing the file. It does *not* become a `Reexports` edge: that kind exists
+        // and is never emitted, because a second edge for the same binding would be decided by
+        // the same rung and land in the unresolved bucket twice, inflating the number the whole
+        // project is trying to bring down.
+        let reexport = self.has_child_of_kind(node, rule.reexport_markers);
         // Copy the text out so the binding walk does not borrow `self` while we push relations.
         let text = self.source.text().to_owned();
         let span = self.span(node);
@@ -677,6 +762,10 @@ impl<'a> Walker<'a> {
         collect_use_bindings(text.as_str(), argument, "", &mut bindings);
         for binding in bindings {
             let imported = binding.local.clone();
+            let basis = match reexport {
+                true => format!("re-export of `{imported}` from `{}`", binding.module),
+                false => format!("import of `{imported}`"),
+            };
             self.relations.push(Relation::pending(
                 RelationKind::Imports,
                 source.clone(),
@@ -686,9 +775,19 @@ impl<'a> Walker<'a> {
                     module: binding.module,
                     alias: binding.alias,
                 },
-                format!("import of `{}`", imported),
+                basis,
             ));
         }
+    }
+
+    /// Whether any direct child of `node` has one of the given kinds.
+    fn has_child_of_kind(&self, node: Node<'_>, kinds: &[&str]) -> bool {
+        if kinds.is_empty() {
+            return false;
+        }
+        let mut cursor = node.walk();
+        node.children(&mut cursor)
+            .any(|child| kinds.contains(&child.kind()))
     }
 
     /// Emit `implements` and `inherits` relations.
@@ -966,13 +1065,18 @@ fn collect_use_bindings(source: &str, node: Node<'_>, prefix: &str, out: &mut Ve
                 collect_use_bindings(source, child, prefix, out);
             }
         }
-        // `use a::*;` — the path is an unnamed child, not a field.
+        // `use a::*;` — the path is an unnamed child, not a field, so the text of the node is
+        // the whole `a::*`. The module a glob names is the prefix and the `*` is the local name;
+        // carrying the star into the path would hand the resolver a module called `a::*`, which
+        // is a path no `use` statement can ever spell. Inside a group — `use a::{b::*, c};` —
+        // the enclosing `scoped_use_list` has already put `a` in `prefix`, and the two join.
         "use_wildcard" => {
             let base = text_of(node).unwrap_or_default();
-            if !base.is_empty() {
+            let stem = base.strip_suffix("::*").unwrap_or(&base).trim();
+            if !stem.is_empty() {
                 out.push(UseBinding {
                     local: "*".to_owned(),
-                    module: join_path(prefix, &base),
+                    module: join_path(prefix, stem),
                     alias: None,
                 });
             }
@@ -1053,6 +1157,7 @@ pub fn extract_with(spec: &'static LanguageSpec, path: RepoPath, text: &str) -> 
             language: spec.language,
             entities: Vec::new(),
             relations: Vec::new(),
+            module_ids: Vec::new(),
             degradation: Some(Degradation {
                 error_nodes: 1,
                 missing_nodes: 0,
@@ -1067,6 +1172,7 @@ pub fn extract_with(spec: &'static LanguageSpec, path: RepoPath, text: &str) -> 
             language: spec.language,
             entities: Vec::new(),
             relations: Vec::new(),
+            module_ids: Vec::new(),
             degradation: Some(Degradation {
                 error_nodes: 1,
                 missing_nodes: 0,
@@ -1087,6 +1193,7 @@ pub fn extract_with(spec: &'static LanguageSpec, path: RepoPath, text: &str) -> 
         language: spec.language,
         entities: walker.entities,
         relations: walker.relations,
+        module_ids: walker.module_ids,
         degradation: (errors > 0 || missing > 0).then_some(Degradation {
             error_nodes: errors,
             missing_nodes: missing,
@@ -1125,6 +1232,99 @@ mod tests {
 
     fn relation_count(file: &ExtractedFile, kind: RelationKind) -> usize {
         file.relations.iter().filter(|r| r.kind == kind).count()
+    }
+
+    /// Extract at an arbitrary repository-relative path, which is the only thing that decides a
+    /// module's qualified name.
+    fn rust_at(path: &str, source: &str) -> ExtractedFile {
+        extract_with(
+            registry::get(crate::model::Language::Rust).expect("rust spec"),
+            RepoPath::new(path).unwrap_or_else(|| panic!("{path} is not a valid path")),
+            source,
+        )
+    }
+
+    /// The module and package entities this extraction contributed, as qualified names.
+    fn module_names(file: &ExtractedFile) -> Vec<String> {
+        let mut names: Vec<String> = file
+            .entities
+            .iter()
+            .filter(|entity| file.module_ids.contains(&entity.id))
+            .map(|entity| format!("{} {}", entity.kind().as_str(), entity.id.qualified_name()))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The `module` recorded in every `ImportBinding` on the given relations, in order.
+    fn import_modules(file: &ExtractedFile) -> Vec<String> {
+        let mut modules = Vec::new();
+        for relation in &file.relations {
+            if relation.kind != RelationKind::Imports {
+                continue;
+            }
+            match &relation.resolution {
+                ResolutionState::Pending {
+                    evidence: crate::model::Evidence::ImportBinding { module, .. },
+                    ..
+                } => modules.push(module.clone()),
+                other => panic!(
+                    "an import must carry its binding, got {other:?} for `{}`",
+                    relation.target_name
+                ),
+            }
+        }
+        modules
+    }
+
+    /// The one import edge in a file that has exactly one, so a test can look at its evidence.
+    fn only_import(file: &ExtractedFile) -> &crate::model::Relation {
+        let imports: Vec<&crate::model::Relation> = file
+            .relations
+            .iter()
+            .filter(|relation| relation.kind == RelationKind::Imports)
+            .collect();
+        assert_eq!(
+            imports.len(),
+            1,
+            "this fixture has exactly one import, and the relations were {:?}",
+            file.relations
+                .iter()
+                .map(|relation| format!("{} `{}`", relation.kind, relation.target_name))
+                .collect::<Vec<_>>()
+        );
+        imports[0]
+    }
+
+    /// A throwaway index directory that removes itself, so a test that needs one leaves nothing
+    /// behind for the next and a failing test does not strand a database in the temp folder.
+    struct ScratchIndex(std::path::PathBuf);
+
+    impl ScratchIndex {
+        fn new(label: &str) -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static COUNTER: AtomicU32 = AtomicU32::new(0);
+            let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "peek-extract-{label}-{}-{unique}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("create the scratch directory");
+            Self(path)
+        }
+
+        fn open(&self) -> crate::store::Store {
+            let repo =
+                crate::store::RepoId::discover(&self.0).expect("derive a repository identity");
+            crate::store::Store::open(&self.0.join("index.db"), &repo).expect("open the store")
+        }
+    }
+
+    impl Drop for ScratchIndex {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     #[test]
@@ -1514,8 +1714,26 @@ mod tests {
     #[test]
     fn containment_is_a_relation_not_a_side_table() {
         let file = rust("struct S; impl S { fn m(&self) {} }");
-        let contains = relation_count(&file, RelationKind::Contains);
-        assert_eq!(contains, 1, "the method is contained in the impl block");
+        let method = file
+            .entities
+            .iter()
+            .find(|entity| entity.id.qualified_name() == "S.m")
+            .expect("the method was extracted");
+        let edge = file
+            .relations
+            .iter()
+            .find(|relation| {
+                relation.kind == RelationKind::Contains
+                    && relation.target.as_ref() == Some(&method.id)
+            })
+            .expect("the method is contained in the impl block, not in a side table");
+        assert_eq!(edge.source.qualified_name(), "S");
+        assert_eq!(
+            edge.resolution,
+            ResolutionState::Resolved {
+                by: crate::model::Evidence::Containment
+            }
+        );
     }
 
     #[test]
@@ -1560,5 +1778,586 @@ mod tests {
         // supported.
         let markdown = RepoPath::new("README.md").expect("valid path");
         assert!(super::extract(markdown, "# hi").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Modules
+    //
+    // A module is a declaration, not a reference. Everything below is about the index gaining a
+    // module table without any symbol changing identity, any call changing target, and any
+    // module name out-ranking a real one.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_file_is_the_module_its_path_names() {
+        // The claim R-007 rests on. `use regex_automata::util::look::Matcher;` can only be a
+        // lookup if the index holds a module spelled `regex_automata::util::look`.
+        let file = rust_at("crates/regex-automata/src/util/look.rs", "pub struct Matcher;");
+        assert_eq!(
+            module_names(&file),
+            vec!["module regex_automata::util::look".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_mod_rs_file_is_the_module_its_directory_names_and_the_file_below_it_is_its_child() {
+        let directory = rust_at("crates/foo/src/util/mod.rs", "pub mod inner;");
+        let child = rust_at("crates/foo/src/util/look.rs", "pub struct Matcher;");
+        assert_eq!(
+            module_names(&directory),
+            vec!["module foo::util".to_owned()],
+            "the `mod` in `mod.rs` is a filename convention, not part of the name"
+        );
+        assert_eq!(
+            module_names(&child),
+            vec!["module foo::util::look".to_owned()],
+            "a file inside a module directory is that module's child, not a sibling"
+        );
+    }
+
+    #[test]
+    fn a_crate_root_file_names_its_package_and_only_the_crate_root_does() {
+        let root = rust_at("crates/regex/src/lib.rs", "pub mod automata;");
+        let member = rust_at("crates/regex/src/automata/mod.rs", "pub struct Util;");
+        assert_eq!(
+            module_names(&root),
+            vec![
+                "module regex".to_owned(),
+                "package regex".to_owned(),
+            ],
+            "the crate root is the one file that declares the package"
+        );
+        assert_eq!(
+            module_names(&member),
+            vec!["module regex::automata".to_owned()],
+            "a module inside a package does not declare a second package"
+        );
+    }
+
+    #[test]
+    fn a_module_declaration_keeps_the_qualified_name_it_always_had() {
+        // The compromise that makes this change safe. `mod inner` is the module `inner`, inside
+        // the file that is the module `foo::app`. Prefixing it would change the qualified name —
+        // and therefore the `EntityId` — of every symbol inside it, so a refactor that moved
+        // nothing would re-key every method in the repository.
+        let file = rust_at("crates/foo/src/app.rs", "pub mod inner { pub fn helper() {} }");
+        let names = qualified_names(&file);
+        assert!(
+            names.contains(&"inner".to_owned()),
+            "the inline module keeps its own name: {names:?}"
+        );
+        assert!(
+            names.contains(&"inner.helper".to_owned()),
+            "the function inside it keeps its qualified name: {names:?}"
+        );
+        assert!(
+            !names.contains(&"foo::app::inner.helper".to_owned()),
+            "and it is *not* re-keyed into the module path: {names:?}"
+        );
+    }
+
+    #[test]
+    fn a_module_declaration_is_contained_by_the_module_the_file_is() {
+        let file = rust_at("crates/foo/src/app.rs", "pub mod inner;");
+        let module = file
+            .entities
+            .iter()
+            .find(|entity| file.module_ids.contains(&entity.id))
+            .expect("the file is a module");
+        let inner = file
+            .entities
+            .iter()
+            .find(|entity| entity.name == "inner" && !file.module_ids.contains(&entity.id))
+            .expect("the declaration was extracted");
+        let edge = file
+            .relations
+            .iter()
+            .find(|relation| relation.target.as_ref() == Some(&inner.id))
+            .expect("the declaration is contained in the module that declares it");
+        assert_eq!(edge.kind, RelationKind::Contains);
+        assert_eq!(edge.source, module.id);
+        assert_eq!(
+            edge.resolution,
+            ResolutionState::Resolved {
+                by: crate::model::Evidence::Containment
+            }
+        );
+    }
+
+    #[test]
+    fn a_declaration_inside_a_module_is_contained_by_the_module_not_by_the_file() {
+        // A `use` at file level has always hung off the file entity, and it still does: moving it
+        // to the module would change the source of every existing import edge for no gain the
+        // resolver could use.
+        let file = rust_at(
+            "crates/foo/src/app.rs",
+            "pub mod inner { use crate::payments::Service; }",
+        );
+        let inner = file
+            .entities
+            .iter()
+            .find(|entity| entity.name == "inner" && !file.module_ids.contains(&entity.id))
+            .expect("the module was extracted");
+        let import = file
+            .relations
+            .iter()
+            .find(|relation| relation.kind == RelationKind::Imports)
+            .expect("the import survived");
+        assert_eq!(
+            import.source, inner.id,
+            "an import inside a module is scoped to that module"
+        );
+    }
+
+    #[test]
+    fn a_module_does_not_add_a_symbol_a_method_or_a_call_to_what_a_file_already_extracted() {
+        // The before/after proof. The expected values are what the walker on `origin/main`
+        // produced for this source, transcribed from the algorithm that produced them, so a
+        // change to any existing extraction shows up here as a diff rather than as an index that
+        // quietly differs.
+        let file = rust_at(
+            "crates/foo/src/app.rs",
+            r#"
+            use std::collections::HashMap;
+            use crate::payments::Service as Svc;
+
+            pub mod payments {
+                pub struct Service;
+                impl Service {
+                    pub fn new() -> Service { Service }
+                }
+            }
+            fn main() { payments::Service::new(); }
+            "#,
+        );
+        assert!(file.is_clean(), "{:?}", file.degradation);
+
+        let mut declarations: Vec<String> = file
+            .entities
+            .iter()
+            .filter(|entity| !file.module_ids.contains(&entity.id))
+            .map(|entity| {
+                format!(
+                    "{} {}#{}",
+                    entity.kind().as_str(),
+                    entity.id.qualified_name(),
+                    entity.id.ordinal()
+                )
+            })
+            .collect();
+        declarations.sort();
+        assert_eq!(
+            declarations,
+            vec![
+                "file app.rs#0".to_owned(),
+                "function main#0".to_owned(),
+                "method payments.Service.new#0".to_owned(),
+                "module payments#0".to_owned(),
+                "module payments.Service#0".to_owned(),
+                "struct payments.Service#0".to_owned(),
+            ],
+            "every entity, kind, qualified name and ordinal the walker produced before modules \
+             existed"
+        );
+
+        // An edge is new exactly when it touches a module entity this change introduced. Naming
+        // them is the point: a count would hide a `Contains` edge that quietly re-parented
+        // something that used to hang off the file.
+        let describe = |relation: &crate::model::Relation| {
+            let target = match relation.target.as_ref() {
+                Some(id) => format!("{} {}", id.kind().as_str(), id.qualified_name()),
+                // An import or a call has no target yet: the resolver decides it later, and
+                // until then the name as written is the whole of what is known.
+                None => relation.target_name.clone(),
+            };
+            format!(
+                "{} {} -> {}",
+                relation.kind.as_str(),
+                relation.source.qualified_name(),
+                target
+            )
+        };
+        let existing: Vec<String> = file
+            .relations
+            .iter()
+            .filter(|relation| {
+                !file.module_ids.contains(&relation.source)
+                    && !relation
+                        .target
+                        .as_ref()
+                        .is_some_and(|target| file.module_ids.contains(target))
+            })
+            .map(describe)
+            .collect();
+        assert_eq!(
+            existing,
+            vec![
+                "imports app.rs -> HashMap".to_owned(),
+                "imports app.rs -> Svc".to_owned(),
+                "contains payments -> struct payments.Service".to_owned(),
+                "contains payments -> module payments.Service".to_owned(),
+                "contains payments.Service -> method payments.Service.new".to_owned(),
+                "calls main -> new".to_owned(),
+            ],
+            "every relation the walker produced before modules existed, in source order"
+        );
+
+        let added: Vec<String> = file
+            .relations
+            .iter()
+            .filter(|relation| {
+                file.module_ids.contains(&relation.source)
+                    || relation
+                        .target
+                        .as_ref()
+                        .is_some_and(|target| file.module_ids.contains(target))
+            })
+            .map(describe)
+            .collect();
+        assert_eq!(
+            added,
+            vec![
+                "contains app.rs -> module foo::app".to_owned(),
+                "contains foo::app -> module payments".to_owned(),
+            ],
+            "the whole of the difference: the file contains the module it is, and that module \
+             contains the module the file declares"
+        );
+    }
+
+    #[test]
+    fn a_module_and_a_symbol_of_the_same_name_are_both_in_the_index_and_neither_replaced() {
+        // Audit B21 is what happens when a *file* beats a symbol: a well-formed empty answer
+        // instead of a reported ambiguity. A module is the same hazard one step along, so the
+        // first half of the answer is that the module and the symbol are different entities with
+        // different identities, and emitting one did not displace the other.
+        let file = rust_at("crates/foo/src/foo.rs", "pub fn foo() {}");
+        let module = file
+            .entities
+            .iter()
+            .find(|entity| file.module_ids.contains(&entity.id))
+            .expect("the file is a module");
+        let function = file
+            .entities
+            .iter()
+            .find(|entity| entity.kind() == EntityKind::Function)
+            .expect("the function was extracted");
+        assert_eq!(module.name, "foo");
+        assert_eq!(function.name, "foo");
+        assert_eq!(module.id.qualified_name(), "foo::foo");
+        assert_ne!(module.id, function.id);
+        assert!(
+            file.module_ids.contains(&module.id) && !file.module_ids.contains(&function.id),
+            "the module is in the module table and the function is not, which is what stops a \
+             consumer from treating every namespace as a declaration"
+        );
+    }
+
+    #[test]
+    fn a_module_never_wins_a_name_lookup_against_a_real_symbol() {
+        // The end-to-end half, through the store and the resolver rather than through a struct
+        // field. Two files: one declares a module and a function of the same name, the other
+        // calls that name with nothing in scope, which is the only route left for a name lookup.
+        //
+        // The property asserted is deliberately the *property*, not today's exact answer. Today
+        // the ladder finds two candidates and returns `Ambiguous`; if the resolver is later taught
+        // that a module is not a target of a bare name, the honest answer becomes `Inferred` on
+        // the function, and this test must keep passing. What it refuses to accept is a call that
+        // resolved to the module.
+        let declaring = rust_at("crates/foo/src/foo.rs", "pub fn foo() {}");
+        let calling = rust_at("crates/foo/src/caller.rs", "fn main() { foo(); }");
+        let module = declaring
+            .entities
+            .iter()
+            .find(|entity| declaring.module_ids.contains(&entity.id))
+            .expect("the file is a module")
+            .id
+            .clone();
+        let function = declaring
+            .entities
+            .iter()
+            .find(|entity| entity.kind() == EntityKind::Function)
+            .expect("the function was extracted")
+            .id
+            .clone();
+        let caller = calling
+            .entities
+            .iter()
+            .find(|entity| entity.kind() == EntityKind::Function)
+            .expect("the caller was extracted")
+            .id
+            .clone();
+
+        let scratch = ScratchIndex::new("module-lookup");
+        let mut store = scratch.open();
+        let mut update = crate::store::IndexUpdate::empty();
+        for entity in declaring.entities.iter().chain(calling.entities.iter()) {
+            update = update.with_entity(entity.clone());
+        }
+        for relation in declaring.relations.iter().chain(calling.relations.iter()) {
+            update = update.with_relation(relation.clone());
+        }
+        store.apply_update(update).expect("the extraction is storable");
+        let options = crate::resolve::ResolutionOptions::default();
+        let report = crate::resolve::resolve_all(&mut store, options).expect("the pass runs");
+        assert!(!report.pending_remaining, "{report:?}");
+
+        let call = store
+            .outgoing(&caller, Some(RelationKind::Calls), 16)
+            .expect("the call is readable")
+            .into_iter()
+            .find(|relation| relation.target_name == "foo")
+            .expect("the call to `foo` survived the round trip");
+        match &call.resolution {
+            ResolutionState::Ambiguous { candidates } => {
+                assert!(
+                    candidates.contains(&function) && candidates.contains(&module),
+                    "both candidates are written down and neither is a recommendation: \
+                     {candidates:?}"
+                );
+            }
+            other => {
+                assert_eq!(
+                    call.target.as_ref(),
+                    Some(&function),
+                    "the call was decided to something other than ambiguity and it must be the \
+                     function, never the module; it was {other:?}"
+                );
+            }
+        }
+        assert_ne!(
+            call.target.as_ref(),
+            Some(&module),
+            "a module is a declaration, not something a bare call can bind to: the call resolved \
+             to {:?} with state {}",
+            call.target,
+            call.resolution.describe()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Imports
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn an_import_carries_the_whole_path_it_was_written_with() {
+        // `use a::b::C;` collapsing to `C` is the exact defect this rules out: the module path
+        // in the evidence is what the resolver's R1 rung needs and there is nowhere else to get
+        // it from.
+        let file = rust_at(
+            "crates/foo/src/app.rs",
+            r#"
+            use crate::a::B;
+            use super::C;
+            use self::D;
+            use other_crate::E;
+            "#,
+        );
+        assert_eq!(
+            import_modules(&file),
+            vec![
+                "crate::a::B".to_owned(),
+                "super::C".to_owned(),
+                "self::D".to_owned(),
+                "other_crate::E".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_import_of_a_named_item_keeps_the_module_and_the_item_apart() {
+        // `use a::b::C` may mean the item `C` in module `a::b` or the module `a::b::C`, and
+        // nothing in the syntax says which. The resolver tries both readings, so the evidence has
+        // to carry the whole path and not a pre-judgement about which it is.
+        let file = rust_at("crates/foo/src/app.rs", "use crate::a::b::C;");
+        assert_eq!(import_modules(&file), vec!["crate::a::b::C".to_owned()]);
+        let import = file            .relations
+            .iter()
+            .find(|relation| relation.kind == RelationKind::Imports)
+            .expect("the import survived");
+        assert_eq!(import.target_name, "C", "the local name is the last segment");
+    }
+
+    #[test]
+    fn an_alias_carries_the_path_it_renamed_not_just_the_new_name() {
+        let file = rust_at("crates/foo/src/app.rs", "use crate::a::b::C as Renamed;");
+        assert_eq!(import_modules(&file), vec!["crate::a::b::C".to_owned()]);
+        match &only_import(&file).resolution {
+            ResolutionState::Pending {
+                evidence: crate::model::Evidence::ImportBinding { alias, .. },
+                ..
+            } => assert_eq!(alias.as_deref(), Some("Renamed")),
+            other => panic!("expected an import binding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_group_import_gives_every_name_the_full_path_to_it() {
+        let file = rust_at("crates/foo/src/app.rs", "use crate::a::{B, b::C as D};");
+        assert_eq!(
+            import_modules(&file),
+            vec!["crate::a::B".to_owned(), "crate::a::b::C".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_glob_import_binds_the_star_and_names_the_module_it_opens() {
+        // The star is the local name and the prefix is the path. A glob is not a name anything
+        // can be resolved against — the resolver's first step is to refuse it as `Unsupported` —
+        // so the only thing that has to be right is that neither half is mistaken for the other.
+        let file = rust_at(
+            "crates/foo/src/app.rs",
+            r#"
+            use crate::a::b::*;
+            use crate::c::{d::*, e};
+            "#,
+        );
+        let locals: Vec<&str> = file
+            .relations
+            .iter()
+            .filter(|relation| relation.kind == RelationKind::Imports)
+            .map(|relation| relation.target_name.as_str())
+            .collect();
+        assert_eq!(locals, vec!["*", "*", "e"], "a star is a binding, not a name");
+        assert_eq!(
+            import_modules(&file),
+            vec![
+                "crate::a::b".to_owned(),
+                "crate::c::d".to_owned(),
+                "crate::c::e".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_public_use_is_a_binding_whose_basis_says_it_is_part_of_the_public_surface() {
+        // It stays an `Imports` edge, because the resolver's R1 rung reads only `Imports` and a
+        // re-export is a name every other file in the module is resolved against. Making it a
+        // second, differently-typed edge would double the unresolved bucket without adding a
+        // single placement.
+        let file = rust_at("crates/foo/src/lib.rs", "pub use crate::a::B;");
+        assert_eq!(relation_count(&file, RelationKind::Imports), 1);
+        assert_eq!(
+            relation_count(&file, RelationKind::Reexports),
+            0,
+            "one binding is one edge; a second edge for the same binding would be decided by the \
+             same rung and land in the unresolved bucket twice"
+        );
+        match &only_import(&file).resolution {
+            ResolutionState::Pending { basis, .. } => assert!(
+                basis.contains("re-export") && basis.contains("crate::a::B"),
+                "the basis has to say both what was re-exported and from where: {basis:?}"
+            ),
+            other => panic!("expected a pending import, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_private_use_is_a_binding_and_does_not_claim_to_be_a_re_export() {
+        let file = rust_at("crates/foo/src/lib.rs", "use crate::a::B;");
+        match &only_import(&file).resolution {
+            ResolutionState::Pending { basis, .. } => {
+                assert!(!basis.contains("re-export"), "{basis:?}")
+            }
+            other => panic!("expected a pending import, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // The committed import trees
+    // -----------------------------------------------------------------------
+
+    /// Extract a committed fixture through the same path the indexer would use.
+    fn fixture(relative: &str) -> ExtractedFile {
+        rust_at(relative, &crate::extract::modules::fixture_source(relative))
+    }
+
+    #[test]
+    fn a_cross_package_import_names_a_module_in_the_other_package() {
+        // The measured problem. `use alpha::gateway::Gateway;` in `beta` cannot be placed without
+        // a module table, and with one it is a name the index already holds: `alpha::gateway`.
+        let service = fixture("cross/beta/src/service.rs");
+        assert_eq!(
+            import_modules(&service),
+            vec!["alpha::gateway::Gateway".to_owned()],
+            "the path keeps the package prefix, so the first segment is another crate rather than \
+             a module of this one"
+        );
+        let reexport = fixture("cross/beta/src/lib.rs");
+        assert_eq!(
+            import_modules(&reexport),
+            vec!["alpha::gateway::Gateway".to_owned()],
+            "a re-export across packages carries the same complete path"
+        );
+    }
+
+    #[test]
+    fn a_crate_internal_import_names_a_module_in_the_same_package() {
+        let service = fixture("several/src/b.rs");
+        assert_eq!(import_modules(&service), vec!["crate::a::Alpha".to_owned()]);
+    }
+
+    #[test]
+    fn a_renamed_re_export_binds_the_new_name_and_remembers_the_old_path() {
+        let lib = fixture("reexport/src/lib.rs");
+        let renamed = lib
+            .relations
+            .iter()
+            .find(|relation| relation.target_name == "Renamed")
+            .expect("the re-export bound `Renamed`");
+        match &renamed.resolution {
+            ResolutionState::Pending {
+                evidence: crate::model::Evidence::ImportBinding { module, alias },
+                basis,
+            } => {
+                assert_eq!(module, "crate::inner::Thing", "the path is not lost to the alias");
+                assert_eq!(alias.as_deref(), Some("Renamed"));
+                assert!(basis.contains("re-export"), "{basis:?}");
+            }
+            other => panic!("expected an import binding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_glob_re_export_opens_a_module_without_binding_any_of_the_names_inside_it() {
+        // The temptation here is to bind `assist` because the file that defines it is in the
+        // same crate. Nothing in the syntax says which names a glob brings in, so binding one
+        // would be a guess about the author's intent, and the star is the only thing the
+        // declaration actually says.
+        let lib = fixture("reexport/src/lib.rs");
+        let targets: Vec<&str> = lib
+            .relations
+            .iter()
+            .filter(|relation| relation.kind == RelationKind::Imports)
+            .map(|relation| relation.target_name.as_str())
+            .collect();
+        assert_eq!(targets, vec!["Renamed", "*"], "{targets:?}");
+        assert_eq!(
+            import_modules(&lib),
+            vec![
+                "crate::inner::Thing".to_owned(),
+                "crate::inner::helpers".to_owned(),
+            ],
+            "the glob names the module it opens, with the star stripped off"
+        );
+    }
+
+    #[test]
+    fn a_module_in_a_reexport_tree_is_not_reachable_through_the_star_that_opens_it() {
+        // `assist` exists in `reexport::inner::helpers` and `*` opens that module. Asserting
+        // that no edge claims to bind `assist` is the negative half of the previous test, and it
+        // is the half that would catch a glob quietly turning into a name lookup — which is
+        // audit B6, where `from .utils import helper` became a repo-global lookup on `helper`.
+        let lib = fixture("reexport/src/lib.rs");
+        let invented: Vec<&str> = lib
+            .relations
+            .iter()
+            .filter(|relation| relation.target_name == "assist")
+            .map(|relation| relation.kind.as_str())
+            .collect();
+        assert!(
+            invented.is_empty(),
+            "a glob must not manufacture a binding for a name it never wrote: {invented:?}"
+        );
     }
 }
