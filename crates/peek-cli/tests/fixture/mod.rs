@@ -41,6 +41,19 @@
 //! A small, fixed Rust tree with one file per language feature that produces a relation the query
 //! surface needs: a function that calls another, a type with a method, a bare name, and a name that
 //! two files both declare so that ambiguity is reachable without inventing an index by hand.
+//!
+//! # Why a direct caller goes through [`run_direct`]
+//!
+//! `--index-dir` is read by the binary's `main`, not by [`peek_cli::run`], so a library caller has
+//! exactly one lever on where the index is resolved from: the process-global override. That makes
+//! the scoping a property of the *call* rather than of the command line, which no amount of
+//! `--root` can substitute for — and substituting it is exactly what a plausible-looking fix
+//! would have done, on a command line that already named the repository correctly. So the fixture
+//! scopes every run it starts and names the repository on the command line as well, and a test
+//! that drives the library itself goes through [`run_direct`] rather than handing an invocation
+//! straight to `peek_cli::run`. A test that holds [`with_index_root`] itself — `watch.rs` and
+//! `end_to_end.rs` do, each for the parsed invocation or the sink's lines it needs afterwards — is
+//! holding it for the length of one run in the same way, and says so where it does.
 
 // `expect` and `panic` are denied workspace-wide; an integration test is a separate crate and does
 // not inherit the library's `cfg_attr(test, allow(..))`, so it is exempted here for the same reason
@@ -57,8 +70,8 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
 
 use peek_cli::args;
-use peek_cli::progress::Silent;
-use peek_cli::{Invocation, Output};
+use peek_cli::progress::{Progress, Silent};
+use peek_cli::{Failure, Invocation, Output};
 
 // Imported under a different name: this module's own `run` takes a repository and a command line,
 // and inside its own body the two would otherwise be the same identifier.
@@ -223,12 +236,29 @@ impl Drop for Guard {
 
 /// Run `body` with the engine resolving indexes under `repository`'s own index directory.
 ///
-/// The only place a test needs this if it is not using [`run`]: several tests drive
-/// `peek_cli::run` directly, to supply their own progress sink or to render a golden, and without
-/// this they would resolve their index in whatever the developer has cached — the exact surprise
-/// the override exists to prevent.
+/// The primitive the rest of this module is built on. [`run`], [`run_verbatim`] and [`run_direct`]
+/// each hold a guard for the length of one command; a test that needs the guard around something
+/// else — an invocation it parsed once and will use twice, or a sink it reads after the call —
+/// asks for it directly.
+///
+/// **The install is checked rather than assumed.** The override is process-global state the engine
+/// reads on every resolution, and both ways it can be wrong make the command answer about a tree
+/// nobody asked about: a run that resolved the developer's own cache reads an index this fixture
+/// never wrote, and a run that resolved nothing at all refuses with `no_index`, which reads as a
+/// missing index rather than as a misdirected one. Asserting here means a disagreement is
+/// reported against the helper that caused it rather than against whichever test happened to be
+/// asserting on a refusal.
 pub fn with_index_root<T>(repository: &Repository, body: impl FnOnce() -> T) -> T {
     let _guard = override_lock().override_root(&repository.index_root);
+    let resolved = peek_core::store::paths::root().expect("the index root resolves");
+    assert_eq!(
+        resolved,
+        repository.index_root,
+        "the fixture installed {} and the engine resolved {} for this run, so the two disagree \
+         about where this repository's index lives",
+        repository.index_root.display(),
+        resolved.display(),
+    );
     body()
 }
 
@@ -511,6 +541,39 @@ pub fn run_verbatim(repository: &Repository, argv: &[&str]) -> Ran {
     let tokens: Vec<std::ffi::OsString> =
         argv.iter().copied().map(std::ffi::OsString::from).collect();
     execute(repository, tokens, None)
+}
+
+/// Run a command line **exactly as written**, driving `peek_cli::run` with a sink the test owns.
+///
+/// This is [`peek_cli::run`] with the one thing it cannot do for itself: it resolves the index
+/// root from the process-global override while the guard is held. A test needs it to read the raw
+/// result — a [`Failure`] rather than the unified [`Ran`] — or to watch what its own sink was told,
+/// neither of which [`run`] can arrange.
+///
+/// **It exists because parse, scope and run were three separate steps at every call site, and a
+/// call site can spell two of them.** Two tests in `golden.rs` built the invocation, handed it to
+/// `peek_cli::run`, and forgot the scoping: the `index` command in the same test wrote the index
+/// under this fixture's cache while the `context` command that followed resolved it from the
+/// process default, found nothing, and refused with `no_index`. Both tests went on to report a
+/// budget problem, because a refusal is a refusal and only the *kind* disagreed. Here the three
+/// steps are one call.
+///
+/// The line is parsed verbatim and gets no repository named for it, so a caller must say where it
+/// means. That is the trade: this helper does not know a command's shape the way [`run`] does, and
+/// pretending otherwise is how `--root` came to be handed to `index`, which accepts and ignores it.
+///
+/// The guard is released before this returns. The result is owned data and the engine resolves
+/// nothing after the call, so holding the override longer would narrow the window in which other
+/// tests are blocked for no gain.
+pub fn run_direct(
+    repository: &Repository,
+    argv: &[&str],
+    progress: &mut dyn Progress,
+) -> Result<Output, Failure> {
+    let tokens: Vec<std::ffi::OsString> =
+        argv.iter().copied().map(std::ffi::OsString::from).collect();
+    let invocation = args::parse(tokens).expect("the command line a test wrote must parse");
+    with_index_root(repository, || run_invocation(&invocation, progress))
 }
 
 /// Parse, check and run one command line. `written` is the command line as the test typed it, and

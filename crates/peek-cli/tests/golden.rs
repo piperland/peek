@@ -95,29 +95,22 @@ fn assert_golden(name: &str, expected: &str, actual: &str) {
 
 /// Run a command line and render it, which is what the binary does.
 ///
-/// The index root is scoped by the fixture rather than left to the developer's cache: this helper
-/// bypasses `fixture::run`, so without it the command would resolve its index wherever the
-/// process is configured to keep one, and a golden would be generated against a different tree.
+/// Through `fixture::run_direct`, which is what scopes the index root: without it the command
+/// would resolve its index wherever the process is configured to keep one, and a golden would be
+/// generated against a different tree.
 fn render(repository: &Repository, argv: &[&str]) -> String {
-    let owned: Vec<std::ffi::OsString> = argv
-        .iter()
-        .map(|argument| std::ffi::OsString::from(*argument))
-        .collect();
-    let invocation = args::parse(owned).expect("the command line must parse");
-    fixture::with_index_root(repository, || {
-        let mut silent = Silent;
-        match run_invocation(&invocation, &mut silent) {
-            Ok(output) => {
-                assert_eq!(
-                    output.exit_code, 0,
-                    "{argv:?} exited {}: {:?}",
-                    output.exit_code, output.refusal
-                );
-                output.render()
-            }
-            Err(failure) => panic!("{argv:?} failed: {}", failure.render()),
+    let mut silent = Silent;
+    match fixture::run_direct(repository, argv, &mut silent) {
+        Ok(output) => {
+            assert_eq!(
+                output.exit_code, 0,
+                "{argv:?} exited {}: {:?}",
+                output.exit_code, output.refusal
+            );
+            output.render()
         }
-    })
+        Err(failure) => panic!("{argv:?} failed: {}", failure.render()),
+    }
 }
 
 /// Run a command line and return the output whatever its status.
@@ -127,15 +120,9 @@ fn run_any(repository: &Repository, argv: &[&str]) -> peek_cli::Output {
     // inspect a *refused* answer uses `fixture::run`, which is the one place the two
     // representations meet. Reaching for it here and being surprised by an `Err` is the mistake
     // this comment exists to prevent.
-    let owned: Vec<std::ffi::OsString> = argv
-        .iter()
-        .map(|argument| std::ffi::OsString::from(*argument))
-        .collect();
-    let invocation = args::parse(owned).expect("the command line must parse");
-    fixture::with_index_root(repository, || {
-        let mut silent = Silent;
-        run_invocation(&invocation, &mut silent).expect("the command must produce an output")
-    })
+    let mut silent = Silent;
+    let outcome = fixture::run_direct(repository, argv, &mut silent);
+    outcome.expect("the command must produce an output")
 }
 
 /// Replace the two machine-dependent substrings with fixed placeholders.
@@ -147,6 +134,81 @@ fn run_any(repository: &Repository, argv: &[&str]) -> peek_cli::Output {
 fn normalise(text: &str, repository: &Repository) -> String {
     text.replace(repository.root_str(), "<root>")
         .replace(&repository.index_path().display().to_string(), "<index>")
+}
+
+#[test]
+fn the_index_the_fixture_wrote_is_the_one_a_direct_call_reads() {
+    // **The disagreement that failed two of the tests below.** The `index` command in those tests
+    // went through a helper that scoped the index root, so it wrote into this fixture's cache.
+    // The `context` command that followed was handed straight to `peek_cli::run` with no scoping,
+    // so it resolved the index from the process default — where an identity derived from a
+    // temporary directory that did not exist a minute ago cannot have one. It refused with
+    // `no_index`, which is also exit 3 and also an `Err`, so the only thing that disagreed was the
+    // kind and both tests reported a budget defect instead.
+    //
+    // `--root` would not have told you. Every one of those command lines already named the
+    // repository, and the root is not what decides where the index is: `--index-dir` is read by
+    // the binary's `main` and not by `peek_cli::run`, so a library caller has one lever on the
+    // index root and it is the process-global override the fixture installs.
+    //
+    // Asserted in both directions, because either half alone would pass for the wrong reason.
+    let repository = Repository::small("golden-index-agreement");
+    fixture::run(&repository, &["index"]);
+    let written = repository.index_path();
+    assert!(
+        written.is_file(),
+        "the fixture's own build must have written {written:?}"
+    );
+
+    // The positive half: a direct call, scoped the way every helper here scopes one, resolves and
+    // reads exactly that file. Compared as a path rather than as an answer type, because the answer
+    // type is what two wrong index roots can both produce.
+    let found = run_any(
+        &repository,
+        &[
+            "context",
+            "wallet_charge",
+            "--budget",
+            "20000",
+            "--root",
+            repository.root_str(),
+        ],
+    );
+    assert_eq!(
+        found.index_path,
+        written.display().to_string(),
+        "a direct call must read the very file the fixture wrote"
+    );
+    assert!(
+        matches!(&found.answer, Answer::Context(_)),
+        "the direct call must have found that index rather than refused: {:?}",
+        found.refusal
+    );
+
+    // The negative half, and the reason the positive half is worth anything: the same command line
+    // with the fixture's scoping left off resolves somewhere else entirely. If this ever stopped
+    // being true the fixture's cache had become the process default, every run in this file would
+    // go on finding the index by accident, and the scoping would be untested rather than working.
+    let owned: Vec<std::ffi::OsString> = [
+        "context",
+        "wallet_charge",
+        "--budget",
+        "20000",
+        "--root",
+        repository.root_str(),
+    ]
+    .iter()
+    .map(|argument| std::ffi::OsString::from(*argument))
+    .collect();
+    let invocation = args::parse(owned).expect("parse");
+    let mut silent = Silent;
+    let unscoped = run_invocation(&invocation, &mut silent)
+        .expect_err("an unscoped call cannot have found this repository's index");
+    assert_eq!(
+        unscoped.refusal.kind.as_str(),
+        peek_cli::exit::kind::NO_INDEX,
+        "a call that resolved the wrong index root must say so as a missing index: {unscoped:?}"
+    );
 }
 
 #[test]
@@ -184,18 +246,11 @@ fn a_complete_context_pack_renders_exactly_as_committed() {
 /// output of a non-zero exit, and a helper that panics on any non-zero exit cannot record it. The
 /// exit code is still checked by the caller; this only stops the helper from pre-empting it.
 fn render_any(repository: &Repository, argv: &[&str]) -> String {
-    let owned: Vec<std::ffi::OsString> = argv
-        .iter()
-        .map(|argument| std::ffi::OsString::from(*argument))
-        .collect();
-    let invocation = args::parse(owned).expect("the command line must parse");
-    fixture::with_index_root(repository, || {
-        let mut silent = Silent;
-        match run_invocation(&invocation, &mut silent) {
-            Ok(output) => output.render(),
-            Err(failure) => failure.render(),
-        }
-    })
+    let mut silent = Silent;
+    match fixture::run_direct(repository, argv, &mut silent) {
+        Ok(output) => output.render(),
+        Err(failure) => failure.render(),
+    }
 }
 
 #[test]
@@ -515,20 +570,25 @@ fn a_context_refused_for_its_report_is_a_refusal_and_states_the_minimum() {
     // The message must carry the minimum so one round trip fixes it.
     let repository = Repository::small("golden-context-tiny");
     render(&repository, &["index", repository.root_str()]);
-    let owned: Vec<std::ffi::OsString> = [
-        "context",
-        "wallet_charge",
-        "--budget",
-        "1",
-        "--root",
-        repository.root_str(),
-    ]
-    .iter()
-    .map(|argument| std::ffi::OsString::from(*argument))
-    .collect();
-    let invocation = args::parse(owned).expect("parse");
+    // Through `run_direct`, so this command resolves the index the `index` command above wrote.
+    // Handing the invocation to `peek_cli::run` unscoped resolves it from the process default
+    // instead, where a repository that existed seconds ago cannot have an index — and the
+    // refusal that comes back is `no_index`, which is still exit 3 and still an `Err`, so only
+    // the kind was wrong and the failure read as a budget defect.
     let mut silent = Silent;
-    let failure = run_invocation(&invocation, &mut silent).expect_err("must be refused");
+    let failure = fixture::run_direct(
+        &repository,
+        &[
+            "context",
+            "wallet_charge",
+            "--budget",
+            "1",
+            "--root",
+            repository.root_str(),
+        ],
+        &mut silent,
+    )
+    .expect_err("must be refused");
     assert_eq!(failure.exit_code(), 3);
     assert_eq!(
         failure.refusal.kind.as_str(),
@@ -554,14 +614,18 @@ fn a_context_with_no_budget_is_refused_rather_than_given_an_invented_one() {
     // size an answer.
     let repository = Repository::small("golden-context-no-budget");
     render(&repository, &["index", repository.root_str()]);
-    let owned: Vec<std::ffi::OsString> =
-        ["context", "wallet_charge", "--root", repository.root_str()]
-            .iter()
-            .map(|argument| std::ffi::OsString::from(*argument))
-            .collect();
-    let invocation = args::parse(owned).expect("parse");
     let mut silent = Silent;
-    let failure = run_invocation(&invocation, &mut silent).expect_err("must be refused");
+    let failure = fixture::run_direct(
+        &repository,
+        &[
+            "context",
+            "wallet_charge",
+            "--root",
+            repository.root_str(),
+        ],
+        &mut silent,
+    )
+    .expect_err("must be refused");
     assert_eq!(failure.exit_code(), 3);
     assert_eq!(
         failure.refusal.kind.as_str(),
