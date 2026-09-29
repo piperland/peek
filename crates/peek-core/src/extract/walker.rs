@@ -2064,11 +2064,11 @@ mod tests {
         // field. Two files: one declares a module and a function of the same name, the other
         // calls that name with nothing in scope, which is the only route left for a name lookup.
         //
-        // The property asserted is deliberately the *property*, not today's exact answer. Today
-        // the ladder finds two candidates and returns `Ambiguous`; if the resolver is later taught
-        // that a module is not a target of a bare name, the honest answer becomes `Inferred` on
-        // the function, and this test must keep passing. What it refuses to accept is a call that
-        // resolved to the module.
+        // **This assertion is stronger than it was.** It used to accept `Ambiguous` between the
+        // function and the module, on the argument that reporting both is honest. The resolver now
+        // ranks a namespace below a symbol — a call cannot target a module — so the honest answer
+        // is the function, and an ambiguity here is a defect rather than caution. The property
+        // asserted is still the property: never the module.
         let declaring = rust_at("crates/foo/src/foo.rs", "pub fn foo() {}");
         let calling = rust_at("crates/foo/src/caller.rs", "fn main() { foo(); }");
         let module = declaring
@@ -2115,23 +2115,18 @@ mod tests {
             .into_iter()
             .find(|relation| relation.target_name == "foo")
             .expect("the call to `foo` survived the round trip");
-        match &call.resolution {
-            ResolutionState::Ambiguous { candidates } => {
-                assert!(
-                    candidates.contains(&function) && candidates.contains(&module),
-                    "both candidates are written down and neither is a recommendation: \
-                     {candidates:?}"
-                );
-            }
-            other => {
-                assert_eq!(
-                    call.target.as_ref(),
-                    Some(&function),
-                    "the call was decided to something other than ambiguity and it must be the \
-                     function, never the module; it was {other:?}"
-                );
-            }
-        }
+        assert!(
+            !call.resolution.is_ambiguous(),
+            "a module and a symbol share the name, which is not uncertainty: {}",
+            call.resolution.describe()
+        );
+        assert_eq!(
+            call.target.as_ref(),
+            Some(&function),
+            "the call was decided to something other than ambiguity and it must be the function, \
+             never the module; it was {}",
+            call.resolution.describe()
+        );
         assert_ne!(
             call.target.as_ref(),
             Some(&module),
@@ -2139,6 +2134,63 @@ mod tests {
              to {:?} with state {}",
             call.target,
             call.resolution.describe()
+        );
+    }
+
+    #[test]
+    fn an_impl_block_is_indexed_as_a_namespace_and_is_not_in_the_module_table() {
+        // R-012's shape, pinned where it is created rather than where it was noticed.
+        //
+        // The row has to exist: `impl_block_creates_a_scope_so_methods_get_qualified_names` is
+        // only true because the scope stack's `id` is a real entity, and a `Contains` edge whose
+        // source row is absent is a dangling edge the foreign key rejects. So the fix for a scope
+        // competing with its own type's name cannot be "do not emit it", and this test fails
+        // loudly if anyone tries — which is the point of asserting the *row* rather than the
+        // behaviour.
+        //
+        // What the resolver must do with it is a different matter and is decided in
+        // `crate::resolve`: a namespace is outranked by a symbol. What is pinned here is that the
+        // block is **not** a module declaration — it is not in `module_ids`, so nothing treats it
+        // as a path the module table can look up — and that its qualified name is the bare type
+        // name, which is the reason a name-shape heuristic cannot tell the two apart.
+        let file = rust_at(
+            "crates/foo/src/gateway.rs",
+            "pub struct Gateway;\nimpl Gateway { pub fn send(&self) {} }\n",
+        );
+        assert!(file.is_clean(), "{:?}", file.degradation);
+
+        let impl_block = file
+            .entities
+            .iter()
+            .find(|entity| {
+                entity.kind() == EntityKind::Module && !file.module_ids.contains(&entity.id)
+            })
+            .expect("the impl block is indexed as a namespace");
+        assert_eq!(impl_block.name, "Gateway");
+        assert_eq!(impl_block.id.qualified_name(), "Gateway");
+        assert_eq!(impl_block.id.path().as_str(), "crates/foo/src/gateway.rs");
+
+        let method = file
+            .entities
+            .iter()
+            .find(|entity| entity.kind() == EntityKind::Method)
+            .expect("the method was extracted");
+        assert_eq!(
+            method.id.qualified_name(),
+            "Gateway.send",
+            "method qualification does not depend on whether the scope is a namespace"
+        );
+        let containment = file
+            .relations
+            .iter()
+            .find(|relation| {
+                relation.kind == RelationKind::Contains
+                    && relation.target.as_ref() == Some(&method.id)
+            })
+            .expect("the method is contained by the impl block");
+        assert_eq!(
+            containment.source, impl_block.id,
+            "so the row is load-bearing: delete it and this edge dangles"
         );
     }
 
