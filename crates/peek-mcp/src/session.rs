@@ -275,7 +275,15 @@ impl Session {
                      the watch holds it",
                     running.id
                 ),
-                "call `watch_stop` with that watch_id first, then run this again",
+                // The number, not the words "that watch_id". The advice is the field a caller acts
+                // on, and it is read by a program that has not been given any id: naming the
+                // member rather than its value is a reference to something the caller cannot see,
+                // and the refusal it is attached to is precisely "here is the watch that is in
+                // your way". Spelled as the call itself, so there is nothing to reconstruct.
+                format!(
+                    "call `watch_stop` with {{\"watch_id\": {}}} first, then run this again",
+                    running.id
+                ),
             )),
         }
     }
