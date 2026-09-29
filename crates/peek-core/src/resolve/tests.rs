@@ -292,7 +292,10 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
             "import_binding",
             "and the evidence is still the author's own import: {import:?}"
         ),
-        other => panic!("expected a resolved import, got {other:?}: {}", state_of(&import)),
+        other => panic!(
+            "expected a resolved import, got {other:?}: {}",
+            state_of(&import)
+        ),
     }
 
     // The impl block is still indexed. Fixing the lookup was not a deletion: the methods inside it
@@ -490,7 +493,9 @@ fn a_receiver_resolves_when_its_type_is_in_the_callers_file_and_stops_when_it_is
          as two entities named `Gateway`: {owners:?}"
     );
     assert!(
-        owners.iter().any(|entity| entity.kind() == EntityKind::Struct),
+        owners
+            .iter()
+            .any(|entity| entity.kind() == EntityKind::Struct),
         "and one of them is the type: {owners:?}"
     );
 
