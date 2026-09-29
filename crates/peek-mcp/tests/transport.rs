@@ -38,9 +38,9 @@ mod common;
 
 use common::{Offence, names_stdout, prints_to_stdout, sources, writes_to_stdout};
 
-/// Every source file in the crate is listed in [`common::sources`], together with the scan both
-/// stdout guards use. They live in one place because they are one claim, and a guard written twice
-/// is a guard that can be tightened in one file and not the other.
+// Every source file in the crate is listed in `common::sources`, together with the scan both
+// stdout guards use. They live in one place because they are one claim, and a guard written twice
+// is a guard that can be tightened in one file and not the other.
 
 /// A child server, and the pipes it speaks through.
 struct Server {
@@ -436,7 +436,7 @@ fn the_stdout_scan_reads_code_and_cannot_be_satisfied_by_prose() {
         ("a bare call", "    println!(\"ready\");\n"),
         ("a discarded call", "    let _ = println!(\"ready\");\n"),
         ("a qualified call", "    std::println!(\"ready\");\n"),
-        ("a write! to a handle", "    writeln!(io::stdout(), \"ready\").ok();\n"),
+        ("a write to a handle", "    writeln!(io::stdout(), \"ready\").ok();\n"),
         ("a bare handle", "    let out = std::io::stdout();\n"),
         ("a use of the module", "use std::io::stdout;\n"),
     ] {

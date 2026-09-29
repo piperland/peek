@@ -35,8 +35,13 @@
 //! stated rather than hidden: the subprocess run in `transport.rs` is the net for the paths it
 //! drives, and no source scan can be a net for a crate this one does not contain.
 
-// The printing macros whose invocation writes to stdout. `eprintln!` and `eprint!` are absent on
-// purpose: stderr is the diagnostic channel, and `session::Log` is its correct spelling.
+// This module is compiled into more than one test binary and each uses a different part of it, so
+// a caller that needs only the print scan would get a dead-code warning for the stdout scan. The
+// alternative is three copies of the scan, which is the thing this file exists to stop.
+#![allow(dead_code)]
+
+/// The printing macros whose invocation writes to stdout. `eprintln!` and `eprint!` are absent on
+/// purpose: stderr is the diagnostic channel, and `session::Log` is its correct spelling.
 const PRINT_MACROS: [&str; 3] = ["print", "println", "dbg"];
 
 /// Every source file in the crate, as `(path, contents)`.
