@@ -31,7 +31,9 @@
 //! method, a missing tool name — is a JSON-RPC error, because those are protocol faults rather than
 //! answers.
 
-use std::io::{self, BufRead, Read, Write};
+// `Read` is not imported: `Lines` is bounded by `BufRead`, whose supertrait is `Read`, and the
+// read inside `Lines::next` goes through that bound rather than through a concrete handle.
+use std::io::{self, BufRead, Write};
 
 use serde_json::{Value, json};
 
