@@ -591,7 +591,7 @@ impl<'s> Resolver<'s> {
         Ok(match found.is_empty() {
             true => None,
             false => {
-                Some(self.from_candidates(found, "resolved through an import binding in this file"))
+                Some(self.decide_candidates(found, "resolved through an import binding in this file"))
             }
         })
     }
@@ -737,7 +737,7 @@ impl<'s> Resolver<'s> {
             true => Decision::Unresolved {
                 reason: UnresolvedReason::NoCandidate,
             },
-            false => self.from_candidates(
+            false => self.decide_candidates(
                 found,
                 &format!(
                     "the receiver `{receiver}` was matched to a type declared in this file while \
@@ -771,7 +771,7 @@ impl<'s> Resolver<'s> {
         }
         Ok(match found.is_empty() {
             true => None,
-            false => Some(self.from_candidates(
+            false => Some(self.decide_candidates(
                 found,
                 "resolved through a qualified path this file can locate",
             )),
@@ -793,7 +793,7 @@ impl<'s> Resolver<'s> {
         }
         Ok(match found.is_empty() {
             true => None,
-            false => Some(self.from_candidates(found, "resolved to a definition in this file")),
+            false => Some(self.decide_candidates(found, "resolved to a definition in this file")),
         })
     }
 
@@ -854,7 +854,7 @@ impl<'s> Resolver<'s> {
     /// case-folded match. A `Resolved` decision writes no basis, because `ResolutionState` has no
     /// basis field for it; the rule is readable from the evidence class alone, which is what
     /// [`rule_name`] returns.
-    fn from_candidates(&mut self, mut found: Vec<Found>, guess_note: &str) -> Decision {
+    fn decide_candidates(&mut self, mut found: Vec<Found>, guess_note: &str) -> Decision {
         // Sorted by hand rather than with `sort_by_key`, because the key is a tuple containing a
         // `Reverse` and a `String`-bearing identity, and the point of the comparison is to be
         // readable: strongest evidence first, then a stable identity order.

@@ -723,9 +723,8 @@ fn a_full_build_resolves_its_own_relations_in_a_second_reportable_pass() {
         "and it examined something: {}",
         resolution.summary()
     );
-    assert_eq!(
-        resolution.pending_remaining,
-        false,
+    assert!(
+        !resolution.pending_remaining,
         "a full build must leave nothing pending: {}",
         resolution.summary()
     );
