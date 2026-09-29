@@ -1896,8 +1896,11 @@ pub fn decorate() -> u32 {
 ",
     );
 
+    // Polled rather than slept, so the test is as fast as the platform allows and as slow as it
+    // must be. The ceiling is two seconds, which is far more than a local filesystem needs to
+    // deliver one event and far less than a test suite should spend waiting for one.
     let mut applied = 0;
-    for _ in 0..100 {
+    for _ in 0..40 {
         std::thread::sleep(std::time::Duration::from_millis(50));
         let status = call(&mut fixture.session, "index_status", json!({}));
         applied = status["watch"]["applied"].as_u64().unwrap_or(0);
@@ -1909,9 +1912,13 @@ pub fn decorate() -> u32 {
     assert_eq!(
         stopped["stopped_cleanly"],
         json!(true),
-        "the watch stopped cleanly whether or not it saw the change: {stopped}"
+        "the watch stopped cleanly whether or not it saw the change ({applied} applied): {stopped}"
     );
-    assert_eq!(stopped["failed"].as_u64(), Some(0), "and no refresh failed: {stopped}");
+    assert_eq!(
+        stopped["failed"].as_u64(),
+        Some(0),
+        "and no refresh failed: {stopped}"
+    );
     // Whatever the platform did with the notification, the claim that must hold is that a stopped
     // watch leaves a consistent index rather than a claim about how quickly it noticed.
     let found = call(
