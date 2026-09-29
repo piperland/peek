@@ -45,6 +45,7 @@ use peek_cli::answer::Answer;
 use peek_cli::exit::Status;
 use peek_cli::progress::Silent;
 use peek_cli::{args, run as run_invocation};
+use peek_core::query::BudgetStatus;
 
 /// The committed goldens.
 const CONTEXT_COMPLETE: &str = include_str!("golden/context-complete.txt");
@@ -164,6 +165,24 @@ fn a_complete_context_pack_renders_exactly_as_committed() {
     assert_golden("context-complete", CONTEXT_COMPLETE, &actual);
 }
 
+/// Render a command that is *expected* to fail, without asserting that it did not.
+///
+/// Separate from [`render`] because a golden for a refusal or a failed diagnosis has to pin the
+/// output of a non-zero exit, and a helper that panics on any non-zero exit cannot record it. The
+/// exit code is still checked by the caller; this only stops the helper from pre-empting it.
+fn render_any(_repository: &Repository, argv: &[&str]) -> String {
+    let owned: Vec<std::ffi::OsString> = argv
+        .iter()
+        .map(|argument| std::ffi::OsString::from(*argument))
+        .collect();
+    let invocation = args::parse(owned).expect("the command line must parse");
+    let mut silent = Silent;
+    match run_invocation(&invocation, &mut silent) {
+        Ok(output) => output.render(),
+        Err(failure) => failure.render(),
+    }
+}
+
 #[test]
 fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped() {
     // The case the whole rule about budgets exists for. A smaller budget must produce a smaller
@@ -171,13 +190,48 @@ fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped
     // the `status: reduced` line.
     let repository = Repository::small("golden-context-reduced");
     render(&repository, &["index", repository.root_str()]);
-    let text = render(
+
+    // The budget is **found**, not written down. An earlier version of this test hardcoded 80,
+    // which is below the engine's report reserve — so the command was refused rather than reduced
+    // and the test was asserting on a refusal while claiming to test a reduced pack. A budget that
+    // is below the floor is not a small budget, it is a rejected one, and the two are different
+    // outputs with different meanings.
+    //
+    // So: start from a budget that certainly fits, and halve until the engine reports the pack as
+    // reduced rather than complete. That is a sweep rather than a constant, so the golden keeps
+    // testing what it names when the floor, the reserve or the neighbourhood changes.
+    let mut budget = 100_000u64;
+    let mut reduced_at = None;
+    for _ in 0..24 {
+        let answer = run_any(
+            &repository,
+            &[
+                "context",
+                "wallet_charge",
+                "--budget",
+                &budget.to_string(),
+                "--root",
+                repository.root_str(),
+            ],
+        );
+        if !matches!(answer.answer, Answer::Context(ref a) if a.pack.budget.status == BudgetStatus::Reduced)
+        {
+            reduced_at = Some(budget);
+            break;
+        }
+        budget = budget / 2;
+    }
+    let Some(reduced_at) = reduced_at else {
+        panic!("no budget in the sweep produced a reduced pack; the fixture is too small to omit");
+    };
+
+    let text = render_any(
         &repository,
         &[
             "context",
             "wallet_charge",
             "--budget",
-            "80",
+            &reduced_at.to_string(),
             "--root",
             repository.root_str(),
         ],
@@ -224,7 +278,7 @@ fn a_broken_install_renders_exactly_as_committed() {
         b"not a database at all, only a sentence pretending to be one",
     )
     .expect("corrupt the index so that Store::open refuses it before reading a single row");
-    let text = render(&repository, &["doctor", "--root", repository.root_str()]);
+    let text = render_any(&repository, &["doctor", "--root", repository.root_str()]);
     let actual = normalise(&text, &repository);
     assert!(
         actual.contains("[fail]"),
