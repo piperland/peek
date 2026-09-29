@@ -223,7 +223,7 @@ impl Store {
             // something the model would refuse to construct, which is a defect and not a detail,
             // and a caller that dropped it would report a live file as absent — a deletion that
             // did not happen.
-            let path = RepoPath::new(raw).ok_or_else(|| {
+            let path = RepoPath::new(&raw).ok_or_else(|| {
                 StoreError::Query(format!(
                     "the index holds the path {raw:?}, which is not repository-relative"
                 ))
