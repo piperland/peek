@@ -273,15 +273,26 @@ fn entity_in(store: &Store, file: &str, kind: EntityKind, qualified_name: &str) 
         .id
 }
 
-/// Run a tool and return its structured content, failing the test if it refused.
-fn call(session: &mut Session, name: &str, arguments: Value) -> Value {
+/// Run a tool and return its structured content **and** its text rendering, failing if it refused.
+///
+/// Both halves, because they are two channels and a test that reads one of them is not testing
+/// what the tool sent. `structured` is what a program parses and `text` is what a client renders;
+/// the text is *not* a field of the structured body, so a test that wants the prose a reader would
+/// see has to take it from the `ToolAnswer` rather than looking for it under `structured` — where
+/// its absence means nothing and its presence would mean a tool had duplicated itself.
+fn call_both(session: &mut Session, name: &str, arguments: Value) -> (Value, String) {
     match tools::dispatch(session, name, Some(&arguments)) {
-        Ok(ToolAnswer { structured, .. }) => structured,
+        Ok(ToolAnswer { text, structured, .. }) => (structured, text),
         Err(error) => panic!(
             "`{name}` refused a call the test expected to work: {} ({:?})",
             error.verdict_reason, error.outcome
         ),
     }
+}
+
+/// Run a tool and return its structured content, failing the test if it refused.
+fn call(session: &mut Session, name: &str, arguments: Value) -> Value {
+    call_both(session, name, arguments).0
 }
 
 /// Run a tool and return the refusal, failing the test if it succeeded.
@@ -329,19 +340,18 @@ fn a_full_build_reports_all_five_resolution_states_and_they_partition() {
     let mut fixture = indexed("index-states");
     let built = call(&mut fixture.session, "index", json!({ "mode": "full" }));
     let report = &built["report"];
-    for (key, count) in [
-        ("resolved", 0),
-        ("pending", 1),
-        ("ambiguous", 2),
-        ("unresolved", 3),
-        ("inferred", 4),
-    ] {
-        assert_eq!(
-            report["resolution_states"][key].as_u64(),
-            Some(count),
+    for key in ["resolved", "pending", "ambiguous", "unresolved", "inferred"] {
+        assert!(
+            report["resolution_states"][key].as_u64().is_some(),
             "all five states are present, `{key}` included: {report}"
         );
     }
+    assert_eq!(
+        report["resolution_states"]["measured"],
+        json!("run_as_extracted"),
+        "a build says its five counts are what the extractor left, so they cannot be read as a \
+         claim about the index: {report}"
+    );
     let sum: u64 = states(report).iter().sum();
     assert_eq!(
         sum,
@@ -357,6 +367,30 @@ fn a_full_build_reports_all_five_resolution_states_and_they_partition() {
         report["resolution"].is_object(),
         "the resolution pass's own report travels with the build's: {report}"
     );
+
+    // The report carries two sets of state numbers and they measure **disjoint populations**, which
+    // is the thing a reader cannot see and the thing this test exists to pin.
+    //
+    // `resolution_states` is what the *extractor* wrote: the relations it settled itself as it went
+    // (structural `contains` edges need no resolution) and the relations it handed to the second
+    // pass as `Pending`. `resolution` is what the second pass did with those pending ones. So
+    // `resolution_states.pending` is work the pass was *given*, not work the index still has, and a
+    // reader who takes it for the index's state reads a build that resolved everything as a build
+    // with nine relations outstanding. `pending_remaining` is the field that says which is which.
+    let resolution = &report["resolution"];
+    assert_eq!(
+        resolution["pending_remaining"],
+        json!(false),
+        "nothing is left undecided, which is what makes `pending` above an input rather than a \
+         debt: {report}"
+    );
+    assert_eq!(
+        report["resolution_states"]["resolved"].as_u64().expect("a count")
+            + resolution["resolved"].as_u64().expect("a count"),
+        report["relations_written"].as_u64().expect("a count"),
+        "the relations the extractor settled and the ones the pass settled are additive, not \
+         competing readings of one number: {report}"
+    );
 }
 
 #[test]
@@ -369,7 +403,7 @@ fn a_full_build_names_every_file_it_refused_to_index() {
         .expect("write a file that is not UTF-8");
 
     let mut session = Session::new(root.path(), Box::new(SharedLog::new()));
-    let built = call(&mut session, "index", json!({ "mode": "full" }));
+    let (built, text) = call_both(&mut session, "index", json!({ "mode": "full" }));
     let report = &built["report"];
     assert!(
         report["files_skipped"]
@@ -382,7 +416,10 @@ fn a_full_build_names_every_file_it_refused_to_index() {
         "the list is present even when it is empty: {report}"
     );
     // The file is named in the structured list, in the rendered report, or in both. Which of the two
-    // carries it is the engine's business; that it is named at all is the contract.
+    // carries it is the engine's business; that it is named at all is the contract. The rendered
+    // report is the `ToolAnswer`'s text rather than a member of the structured body, so it is read
+    // from the answer — a `text` looked up under `structured` would be `null` for every tool and
+    // would quietly make this half of the disjunction dead.
     let named_in_list = report["skipped"]
         .as_array()
         .expect("an array")
@@ -392,9 +429,7 @@ fn a_full_build_names_every_file_it_refused_to_index() {
                 .as_str()
                 .is_some_and(|p| p.contains("broken.rs"))
         });
-    let named_in_text = built["text"]
-        .as_str()
-        .is_some_and(|text| text.contains("broken.rs"));
+    let named_in_text = text.contains("broken.rs");
     assert!(
         named_in_list || named_in_text,
         "a file that was not indexed is named, not merely counted: {report}"
@@ -416,6 +451,12 @@ fn index_status_reports_where_the_index_is_and_never_inside_the_repository() {
         "the file is named: {index_path}"
     );
     assert_eq!(status["states_partition"], json!(true));
+    assert_eq!(
+        status["resolution_states"]["measured"],
+        json!("index_as_stored"),
+        "a status call says its five counts are the store's own measurement, so the two tools that \
+         carry the same five names under the same key cannot be read as one number: {status}"
+    );
     assert!(
         status["stats"]["entity_count"]
             .as_u64()
@@ -624,15 +665,21 @@ pub fn decorate() -> u32 {
 #[test]
 fn a_refresh_of_a_path_that_no_longer_exists_removes_it_from_the_index() {
     let mut fixture = indexed("refresh-delete");
-    let before = call(
+    // Before and after the removal, `decorate` is not in the index, and a target that is not in the
+    // index is a **refusal** — `unknown_target`, carrying the three-lookup detail — not an answer
+    // with an `outcome` member. `an_unknown_target_names_which_of_the_three_lookups_missed` pins
+    // that for `dependents` among the rest; asking for the same thing through the helper that
+    // panics on a refusal is what made this test die before it reached the refresh at all.
+    let before = refuse(
         &mut fixture.session,
         "dependents",
         json!({ "target": "decorate", "depth": 1 }),
     );
     assert_eq!(
-        before["outcome"],
-        json!("unknown_target"),
-        "the fixture does not have this function yet: {before}"
+        before.outcome,
+        Outcome::UnknownTarget,
+        "the fixture does not have this function yet: {}",
+        before.verdict_reason
     );
     fixture.root.write(
         "src/ui.rs",
@@ -673,15 +720,16 @@ pub fn decorate() -> u32 {
         Some(1),
         "a path that is gone is removed rather than left as a stale row: {removed}"
     );
-    let gone = call(
+    let gone = refuse(
         &mut fixture.session,
         "dependents",
         json!({ "target": "decorate", "depth": 1 }),
     );
     assert_eq!(
-        gone["outcome"],
-        json!("unknown_target"),
-        "an index that still answered for a deleted function would be reporting fiction: {gone}"
+        gone.outcome,
+        Outcome::UnknownTarget,
+        "an index that still answered for a deleted function would be reporting fiction: {}",
+        gone.verdict_reason
     );
 }
 
@@ -1325,6 +1373,15 @@ fn a_walk_step_carries_the_whole_relation_it_arrived_on() {
         "callers",
         json!({ "target": "settle" }),
     );
+    // A `use` statement is a real dependency and its source is the *file*, so this walk reaches
+    // `src/service.rs` itself alongside the two functions that call `settle`. A file has no line:
+    // the extractor gives the `File` entity no span, `query::traverse` says so where it builds the
+    // fallback span, and `Candidate::start_line` documents the null for exactly this case. So the
+    // line is required of every declaration that *has* one, and the file case is required to be
+    // line-less and still actionable — which is a stronger claim than "every step has a line",
+    // because it pins the difference instead of pretending it is not there.
+    let mut located = 0_u64;
+    let mut files = 0_u64;
     for step in walk["steps"].as_array().expect("an array") {
         let relation = &step["via"];
         for key in ["kind", "source", "target_name", "span", "resolution"] {
@@ -1340,16 +1397,31 @@ fn a_walk_step_carries_the_whole_relation_it_arrived_on() {
             "a step says which file to open, or an identity is not an answer: {step}"
         );
         assert!(
-            step["declaration"]["start_line"].as_u64().is_some(),
-            "a step says which line: {step}"
-        );
-        assert!(
             step["declaration"]["qualified_name"]
                 .as_str()
                 .is_some_and(|n| !n.is_empty()),
             "a step says what it is: {step}"
         );
+        if step["declaration"]["kind"] == json!("file") {
+            files += 1;
+            assert!(
+                step["declaration"]["start_line"].is_null(),
+                "a file is not at a line, and inventing one is the thing this crate exists to stop \
+                 doing: {step}"
+            );
+        } else {
+            located += 1;
+            assert!(
+                step["declaration"]["start_line"].as_u64().is_some(),
+                "a declaration says which line: {step}"
+            );
+        }
     }
+    assert!(
+        located > 0 && files > 0,
+        "the fixture must reach both a declaration and the file that imports it, or the two cases \
+         above are not being tested: {walk}"
+    );
 }
 
 #[test]
@@ -1921,7 +1993,7 @@ fn the_same_refusal_against_an_unchanged_index_returns_the_same_bytes() {
 #[test]
 fn watch_start_reports_what_it_watches_and_how_to_stop_it_then_stops_cleanly() {
     let mut fixture = indexed("watch-start-stop");
-    let started = call(
+    let (started, text) = call_both(
         &mut fixture.session,
         "watch_start",
         json!({ "quiet_for_ms": 50, "ready_timeout_ms": 10_000 }),
@@ -1942,12 +2014,12 @@ fn watch_start_reports_what_it_watches_and_how_to_stop_it_then_stops_cleanly() {
     // The stop call is spelled out, so a caller that reads the response knows how to end it.
     assert_eq!(started["stop_with"]["tool"], json!("watch_stop"));
     assert_eq!(started["stop_with"]["arguments"]["watch_id"], json!(id));
+    // The human form, which is the `ToolAnswer`'s text and not a member of the structured body. A
+    // client that renders content and ignores `structuredContent` sees only this, so a stop call
+    // that is discoverable only by parsing JSON is not discoverable at all on that client.
     assert!(
-        started["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("watch_stop")),
-        "the text form says it too: {}",
-        started["text"].as_str().unwrap_or("<none>")
+        text.contains("watch_stop"),
+        "the text form says it too: {text}"
     );
     assert_eq!(started["state"]["running"], json!(true));
 

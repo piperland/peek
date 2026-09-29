@@ -15,6 +15,24 @@
 //! always present, the sum the engine computed, and a `states_partition` boolean saying whether
 //! the five add up to `relations_written`. A mismatch is then visible rather than inferable.
 //!
+//! # Why the states are labelled with what they measure
+//!
+//! A build's five states and a status call's five states are different quantities under one name,
+//! and a reader who assumes they are the same is wrong in the direction that matters. A build
+//! reports the states the **extractor** left relations in, and the extraction pass is the *input*
+//! to resolution rather than a result — so a build that resolved all nine of its pending relations
+//! reports `pending: 9` beside `pending_remaining: false`, and read as a description of the index
+//! it says the opposite of the truth.
+//!
+//! The engine is not at fault and this module does not paper over it. `IndexReport` documents its
+//! own counters as the extractor's output and carries the resolver's decisions in a separate
+//! `resolution` object. The honest per-run *post-pass* count is not derivable from either: for a
+//! refresh the resolver also decides edges the run did not write, so adding its totals to the
+//! extractor's would be arithmetic dressed as a measurement, and reading the store instead would
+//! describe the whole index rather than the run. So the two are reported as the two measurements
+//! they are — [`StatesMeasure`] travels with the counts — and the gap is closed by saying which is
+//! which rather than by inventing a third number that neither of them supports.
+//!
 //! # Why `index_status` reports two generations
 //!
 //! [`Store::stats`] reports the generation its handle was *opened at*, because that is the value
@@ -234,15 +252,38 @@ struct IndexBody {
     report: IndexReportView,
 }
 
-/// The five resolution states, and whether they are a partition of what was written.
+/// The five resolution states, and which measurement they are.
 ///
 /// All five are always present. A reader who has to notice a missing key to know a state is absent
 /// is a reader who will not notice.
+///
+/// # Why this is one type used for two measurements
+///
+/// `index` and `index_status` both report five numbers under the same name, and the two are **not**
+/// the same quantity. `index` reports the states of the relations *one run wrote*, counted as the
+/// extractor left them — the input to the resolution pass, which is why a fully successful build
+/// can report a non-zero `pending` here. `index_status` reports the states the *store* measures
+/// across the whole index at the moment of the call, which is the only one of the two that
+/// answers "how good is this index".
+///
+/// A payload carrying the first under a name that reads like the second is the worst of both: a
+/// caller is told the index is worse than it is, and every accuracy number downstream of it is
+/// wrong in the pessimistic direction. So the measurement travels with the counts — see
+/// [`StatesMeasure`] — rather than being left to the field name and a reader's inference. The
+/// engine is not at fault here: `IndexReport` documents its own counters as the extractor's
+/// output and carries the pass's decisions in a separate field, and this module passes both
+/// through rather than reconciling them into one number it cannot measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ResolutionStates {
+    /// Which measurement the five counts below are.
+    pub measured: StatesMeasure,
     /// Proven: exactly one target, with evidence that supports it.
     pub resolved: u64,
-    /// Extracted but not yet decided. Zero after a successful pass; non-zero means work remains.
+    /// Extracted but not decided **yet**.
+    ///
+    /// Under [`StatesMeasure::RunAsExtracted`] this counts relations the pass was given and then
+    /// decided, so it is not outstanding work; `IndexReport::resolution` says how it went. Under
+    /// [`StatesMeasure::IndexAsStored`] it is exactly the work remaining in the index.
     pub pending: u64,
     /// More than one candidate fits and none was proven correct.
     pub ambiguous: u64,
@@ -252,11 +293,26 @@ pub struct ResolutionStates {
     pub inferred: u64,
 }
 
+/// Which measurement a [`ResolutionStates`] carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatesMeasure {
+    /// The relations one indexing run wrote, in the states the extractor left them in.
+    ///
+    /// The extraction pass is the *input* to resolution, never a result: the extractor does not
+    /// decide anything, so every count here was true before the resolver ran. The result is the
+    /// run's `resolution` object.
+    RunAsExtracted,
+    /// The whole index, as the store's own `GROUP BY resolution_state` measures it now.
+    IndexAsStored,
+}
+
 impl ResolutionStates {
     /// The counts an index report produced.
     #[must_use]
     pub fn of(report: &IndexReport) -> Self {
         Self {
+            measured: StatesMeasure::RunAsExtracted,
             resolved: report.relations_resolved,
             pending: report.relations_pending,
             ambiguous: report.relations_ambiguous,
@@ -269,6 +325,7 @@ impl ResolutionStates {
     #[must_use]
     pub fn of_stats(stats: &StoreStats) -> Self {
         Self {
+            measured: StatesMeasure::IndexAsStored,
             resolved: stats.resolved_relations,
             pending: stats.pending_relations,
             ambiguous: stats.ambiguous_relations,
@@ -374,14 +431,29 @@ impl IndexReportView {
     #[must_use]
     pub fn render(&self) -> String {
         let mut text = self.summary.clone();
+        // Labelled, not bare. The same five words beside `pending: 9` and `pending_remaining:
+        // false` read as a contradiction unless the reader is told that the first line is the
+        // extractor's output and the second is the pass's decision about it.
         text.push_str(&format!(
-            "\nresolution states: {} resolved, {} inferred, {} ambiguous, {} unresolved, {} pending",
+            "\nas extracted: {} resolved, {} inferred, {} ambiguous, {} unresolved, {} pending",
             self.resolution_states.resolved,
             self.resolution_states.inferred,
             self.resolution_states.ambiguous,
             self.resolution_states.unresolved,
             self.resolution_states.pending
         ));
+        if let Some(resolution) = &self.resolution {
+            text.push_str(&format!(
+                "\nafter the resolution pass: {} examined, {} resolved, {} inferred, {} ambiguous, \
+                 {} unresolved, pending remaining: {}",
+                resolution.examined,
+                resolution.resolved,
+                resolution.inferred,
+                resolution.ambiguous,
+                resolution.unresolved,
+                resolution.pending_remaining
+            ));
+        }
         text.push_str(&format!(
             "\npartition: {} — {} of {} relations accounted for",
             if self.states_partition { "yes" } else { "NO" },
