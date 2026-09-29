@@ -775,18 +775,19 @@ fn a_refresh_of_a_file_repairs_the_edges_that_pointed_into_it() {
             10,
         )
         .expect("query");
+    assert_eq!(
+        repaired.len(),
+        1,
+        "editing a file must not drop the calls that point into it: {repaired:?}"
+    );
     let states: Vec<String> = repaired
         .iter()
         .map(|edge| format!("{} -> {:?}", edge.target_name, edge.resolution))
         .collect();
-    assert_eq!(
-        repaired.len(),
-        1,
-        "editing a file must not drop the calls that point into it: {states:?}"
-    );
     assert!(
         repaired[0].target.is_some(),
-        "and the edge must be bound to a target again, not left dangling: {states:?}"
+        "and the edge must be bound to a target again, not left dangling: {states:?} — {}",
+        resolution.summary()
     );
     // Whether `callees` can follow it is a separate question and is answered by the *state* of the
     // edge, not by whether the row survived. An edge bound only by a repo-wide uniqueness check is
