@@ -542,7 +542,7 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
     }
 
     // And through the adjacency path, which is the one a consumer actually uses.
-    let source = id("src/caller.rs", EntityKind::Function, "main", 0);
+    let source = id("src/caller.rs", EntityKind::Function, "main");
     let edges = store.outgoing(&source, None, 32).expect("outgoing");
     assert!(
         edges.iter().any(|edge| edge.resolution.is_pending()),
