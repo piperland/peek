@@ -45,13 +45,22 @@ fn an_unknown_flag_is_refused_and_the_known_ones_are_listed() {
 fn an_unknown_command_suggests_the_one_that_was_meant() {
     let error = args::parse(["contex"]).expect_err("a misspelled command must be refused");
     match &error {
-        UsageError::UnknownCommand { name, suggestion, .. } => {
+        UsageError::UnknownCommand {
+            name, suggestion, ..
+        } => {
             assert_eq!(name, "contex");
-            assert_eq!(*suggestion, Some("context"), "one edit away must be suggested");
+            assert_eq!(
+                *suggestion,
+                Some("context"),
+                "one edit away must be suggested"
+            );
         }
         other => panic!("expected an unknown command, got {other:?}"),
     }
-    assert!(error.message().contains("did you mean `context`"), "{error:?}");
+    assert!(
+        error.message().contains("did you mean `context`"),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -78,7 +87,11 @@ fn a_flag_given_to_a_command_that_does_not_take_it_is_refused_rather_than_ignore
         } => {
             assert_eq!(*flag, "budget");
             assert_eq!(*command, "status");
-            assert_eq!(belongs_to, &vec!["context"], "--budget belongs to context only");
+            assert_eq!(
+                belongs_to,
+                &vec!["context"],
+                "--budget belongs to context only"
+            );
         }
         other => panic!("expected a flag-not-valid-here error, got {other:?}"),
     }
@@ -211,7 +224,10 @@ fn the_full_flag_only_reaches_the_index_command() {
 fn no_arguments_prints_the_help_rather_than_failing() {
     // `peek` on its own is a request for orientation. Refusing it would be the opposite of
     // helpful, and it is a different thing from `peek <nonsense>`, which is refused below.
-    assert_eq!(args::parse(Vec::<String>::new()).expect("parse").command, Command::Help);
+    assert_eq!(
+        args::parse(Vec::<String>::new()).expect("parse").command,
+        Command::Help
+    );
     assert_eq!(args::parse(["help"]).expect("parse").command, Command::Help);
 }
 
@@ -240,7 +256,10 @@ fn a_depth_of_zero_is_accepted_because_it_is_a_question_with_an_answer() {
 fn a_depth_beyond_the_hop_type_is_refused_rather_than_truncated() {
     let error = args::parse(["dependents", "Foo", "--depth", "99999999999"])
         .expect_err("a depth past u32 must be refused");
-    assert!(matches!(error, UsageError::NotANumber { flag: "depth", .. }), "{error:?}");
+    assert!(
+        matches!(error, UsageError::NotANumber { flag: "depth", .. }),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -339,7 +358,10 @@ fn the_help_text_states_the_exit_codes_and_what_each_one_means() {
         (exit::EXIT_UNHEALTHY, "failing check"),
     ] {
         let line = format!("  {code}  ");
-        assert!(text.contains(&line), "the help omits exit code {code}: {text}");
+        assert!(
+            text.contains(&line),
+            "the help omits exit code {code}: {text}"
+        );
         assert!(
             text.contains(meaning),
             "the help does not say what exit code {code} means"
@@ -398,9 +420,18 @@ fn every_status_maps_to_exactly_one_exit_code_and_they_are_distinct() {
         Status::Failed.exit_code(),
     ];
     let unique: std::collections::BTreeSet<u8> = codes.iter().copied().collect();
-    assert_eq!(unique.len(), codes.len(), "two statuses share an exit code: {codes:?}");
+    assert_eq!(
+        unique.len(),
+        codes.len(),
+        "two statuses share an exit code: {codes:?}"
+    );
     assert_eq!(Status::Ok.exit_code(), 0, "success must be zero");
-    for status in [Status::Usage, Status::Refused, Status::Unhealthy, Status::Failed] {
+    for status in [
+        Status::Usage,
+        Status::Refused,
+        Status::Unhealthy,
+        Status::Failed,
+    ] {
         assert_ne!(status.exit_code(), 0, "{status:?} must not exit zero");
     }
 }
@@ -429,7 +460,10 @@ fn a_refusal_prints_its_candidates_and_its_minimum() {
     // D-0004: the caller disambiguates, so every candidate must travel with the refusal. D-0009:
     // a refused budget states the minimum, so one round trip is enough to fix it.
     let refusal = exit::Refusal::new(kind::AMBIGUOUS_TARGET, "three candidates")
-        .with_candidates(vec!["src/a.rs::render".to_owned(), "src/b.rs::render".to_owned()])
+        .with_candidates(vec![
+            "src/a.rs::render".to_owned(),
+            "src/b.rs::render".to_owned(),
+        ])
         .with_minimum(60);
     let rendered = refusal.render();
     assert!(rendered.contains("2 candidate(s)"), "{rendered}");
@@ -466,7 +500,10 @@ fn quiet_suppresses_narration_and_changes_nothing_else() {
     let loud = run(&repository, &["index", repository.root_str()]);
     let quiet = run(&repository, &["index", repository.root_str(), "--quiet"]);
     assert_eq!(loud.output.render(), quiet.output.render());
-    assert!(!loud.output.progress.is_empty(), "index must narrate something");
+    assert!(
+        !loud.output.progress.is_empty(),
+        "index must narrate something"
+    );
     assert_eq!(
         quiet.output.progress.len(),
         loud.output.progress.len(),
@@ -482,7 +519,11 @@ fn every_command_records_its_narration_so_the_json_mode_is_complete() {
     let repository = Repository::small("narration");
     let output = run(&repository, &["index", repository.root_str()]);
     assert!(
-        output.output.progress.iter().any(|line| line.contains("generation")),
+        output
+            .output
+            .progress
+            .iter()
+            .any(|line| line.contains("generation")),
         "no narration mentions the build: {:?}",
         output.output.progress
     );
@@ -517,8 +558,18 @@ fn the_json_mode_names_the_command_and_the_code_on_every_command() {
             "",
         ),
         (vec!["explain", "wallet_charge"], "explain", "explain", ""),
-        (vec!["callers", "wallet_charge"], "callers", "walk", "callers"),
-        (vec!["callees", "wallet_charge"], "callees", "walk", "callees"),
+        (
+            vec!["callers", "wallet_charge"],
+            "callers",
+            "walk",
+            "callers",
+        ),
+        (
+            vec!["callees", "wallet_charge"],
+            "callees",
+            "walk",
+            "callees",
+        ),
         (
             vec!["dependents", "wallet_charge"],
             "dependents",
@@ -531,7 +582,10 @@ fn the_json_mode_names_the_command_and_the_code_on_every_command() {
         let output = run(&repository, &argv);
         let value: serde_json::Value =
             serde_json::from_str(&output.output.render_json()).expect("parse");
-        assert_eq!(value["command"], envelope, "{command:?} named the wrong command");
+        assert_eq!(
+            value["command"], envelope,
+            "{command:?} named the wrong command"
+        );
         assert_eq!(
             value["exit_code"], output.output.exit_code,
             "{command:?} disagreed with itself about the code"
@@ -566,7 +620,10 @@ fn status_refuses_a_repository_with_no_index_rather_than_creating_one() {
     let outcome = run(&repository, &["status"]);
     assert_eq!(outcome.output.status, Status::Refused);
     assert_eq!(outcome.output.exit_code, 3);
-    assert_eq!(outcome.output.refusal.as_ref().map(|r| r.kind.as_str()), Some(kind::NO_INDEX));
+    assert_eq!(
+        outcome.output.refusal.as_ref().map(|r| r.kind.as_str()),
+        Some(kind::NO_INDEX)
+    );
     assert!(
         !repository.index_path().exists(),
         "the command must not have created the index it refused to report on"
@@ -617,7 +674,11 @@ fn status_says_the_five_resolution_states_account_for_every_relation() {
     let repository = Repository::small("status-partition");
     run(&repository, &["index", repository.root_str()]);
     match &run(&repository, &["status"]).output.answer {
-        Answer::Status(StatusAnswer { counts, states_partition, .. }) => {
+        Answer::Status(StatusAnswer {
+            counts,
+            states_partition,
+            ..
+        }) => {
             assert!(states_partition, "the counts do not partition: {counts:?}");
             let sum = counts.resolved_relations
                 + counts.ambiguous_relations
@@ -645,7 +706,10 @@ fn status_states_what_it_did_not_do() {
         "did not compare the index against the working tree",
         "did not read a byte of source",
     ] {
-        assert!(joined.contains(expected), "status does not say: {expected}\n{joined}");
+        assert!(
+            joined.contains(expected),
+            "status does not say: {expected}\n{joined}"
+        );
     }
 }
 
@@ -710,7 +774,10 @@ fn a_cold_build_reports_the_mode_and_the_files_it_indexed() {
     assert_eq!(outcome.output.exit_code, 0);
     match &outcome.output.answer {
         Answer::Index(answer) => {
-            assert_eq!(answer.mode, "build", "no generation exists, so this is a cold build");
+            assert_eq!(
+                answer.mode, "build",
+                "no generation exists, so this is a cold build"
+            );
             assert!(answer.files_indexed > 0, "nothing was indexed: {answer:?}");
             assert!(answer.generation > 0);
             assert!(
@@ -732,7 +799,10 @@ fn a_warm_run_refreshes_rather_than_rebuilding() {
         other => panic!("expected two index answers, got {other:?}"),
     };
     assert_eq!(first_answer.mode, "build");
-    assert_eq!(second_answer.mode, "refresh", "a second run must not rebuild from scratch");
+    assert_eq!(
+        second_answer.mode, "refresh",
+        "a second run must not rebuild from scratch"
+    );
     assert!(
         second_answer.generation > first_answer.generation,
         "a refresh commits, so the generation must advance: {} then {}",
@@ -756,7 +826,10 @@ fn a_full_rebuild_clears_the_index_and_names_what_it_cleared() {
                 "a rebuild must name the top-level entries it cleared: {answer:?}"
             );
             assert!(
-                answer.did_not.iter().any(|line| line.contains("crash between them")),
+                answer
+                    .did_not
+                    .iter()
+                    .any(|line| line.contains("crash between them")),
                 "a clear and a build are separate transactions, and that must be said: {:?}",
                 answer.did_not
             );
@@ -775,7 +848,10 @@ fn a_full_rebuild_on_an_empty_index_says_there_was_nothing_to_clear() {
         Answer::Index(answer) => {
             assert!(answer.cleared_paths.is_empty());
             assert!(
-                answer.notes.iter().any(|note| note.contains("nothing to clear")),
+                answer
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("nothing to clear")),
                 "{:?}",
                 answer.notes
             );
@@ -808,7 +884,10 @@ fn a_deleted_file_is_removed_from_the_index_by_a_later_run() {
         Answer::Status(StatusAnswer { counts, .. }) => counts.entity_count,
         other => panic!("expected a status answer, got {other:?}"),
     };
-    assert!(after < before, "the removed file's entities must be gone: {before} then {after}");
+    assert!(
+        after < before,
+        "the removed file's entities must be gone: {before} then {after}"
+    );
 }
 
 #[test]
@@ -820,7 +899,10 @@ fn a_file_that_is_not_valid_utf8_is_refused_rather_than_partially_indexed() {
     let repository = Repository::small("index-not-utf8");
     repository.write_invalid_utf8("src/broken.rs");
     let outcome = run(&repository, &["index", repository.root_str()]);
-    assert_eq!(outcome.output.exit_code, 0, "one bad file must not fail the run");
+    assert_eq!(
+        outcome.output.exit_code, 0,
+        "one bad file must not fail the run"
+    );
     match &outcome.output.answer {
         Answer::Index(answer) => {
             assert!(
@@ -828,7 +910,10 @@ fn a_file_that_is_not_valid_utf8_is_refused_rather_than_partially_indexed() {
                 "the undecodable file must be counted as skipped: {answer:?}"
             );
             assert!(
-                answer.skipped.iter().any(|entry| entry.path.contains("broken.rs")),
+                answer
+                    .skipped
+                    .iter()
+                    .any(|entry| entry.path.contains("broken.rs")),
                 "the undecodable file must be named: {:?}",
                 answer.skipped
             );
@@ -901,7 +986,10 @@ fn a_run_that_indexed_nothing_still_exits_zero_but_says_the_run_was_empty() {
     let doctor = run(&repository, &["doctor"]);
     match &doctor.output.answer {
         Answer::Doctor(answer) => assert!(
-            answer.findings.iter().any(|f| f.check == "generation" && f.summary.contains("empty")),
+            answer
+                .findings
+                .iter()
+                .any(|f| f.check == "generation" && f.summary.contains("empty")),
             "doctor must name the empty index: {answer:?}"
         ),
         other => panic!("expected a doctor answer, got {other:?}"),
@@ -936,20 +1024,35 @@ fn rm_removes_a_files_rows_and_leaves_the_file_on_disk() {
         Answer::Status(StatusAnswer { counts, .. }) => counts.relation_count,
         other => panic!("expected a status answer, got {other:?}"),
     };
-    let outcome = run(&repository, &["rm", "src/ledger.rs", "--root", repository.root_str()]);
+    let outcome = run(
+        &repository,
+        &["rm", "src/ledger.rs", "--root", repository.root_str()],
+    );
     assert_eq!(outcome.output.exit_code, 0);
     match &outcome.output.answer {
         Answer::Remove(answer) => {
             assert_eq!(answer.scope, "file");
-            assert_eq!(answer.indexed_paths_removed, 1, "one file was indexed at that path");
-            assert!(answer.entities_removed > 0, "nothing was deleted: {answer:?}");
+            assert_eq!(
+                answer.indexed_paths_removed, 1,
+                "one file was indexed at that path"
+            );
             assert!(
-                answer.notes.iter().any(|note| note.contains("no_candidate")),
+                answer.entities_removed > 0,
+                "nothing was deleted: {answer:?}"
+            );
+            assert!(
+                answer
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("no_candidate")),
                 "edges that pointed in are demoted, and that must be said: {:?}",
                 answer.notes
             );
             assert!(
-                answer.did_not.iter().any(|line| line.contains("did not touch the filesystem")),
+                answer
+                    .did_not
+                    .iter()
+                    .any(|line| line.contains("did not touch the filesystem")),
                 "{:?}",
                 answer.did_not
             );
@@ -964,20 +1067,32 @@ fn rm_removes_a_files_rows_and_leaves_the_file_on_disk() {
         Answer::Status(StatusAnswer { counts, .. }) => counts.relation_count,
         other => panic!("expected a status answer, got {other:?}"),
     };
-    assert!(after < before, "relations must be gone: {before} then {after}");
+    assert!(
+        after < before,
+        "relations must be gone: {before} then {after}"
+    );
 }
 
 #[test]
 fn rm_on_a_subtree_removes_everything_at_or_below_it_and_says_so() {
     let repository = Repository::small("rm-subtree");
     run(&repository, &["index", repository.root_str()]);
-    let outcome = run(&repository, &["rm", "src/ledger", "--root", repository.root_str()]);
+    let outcome = run(
+        &repository,
+        &["rm", "src/ledger", "--root", repository.root_str()],
+    );
     match &outcome.output.answer {
         Answer::Remove(answer) => {
             assert_eq!(answer.scope, "subtree");
-            assert!(answer.indexed_paths_removed > 0, "nothing was covered: {answer:?}");
             assert!(
-                answer.did_not.iter().any(|line| line.contains("whole subtree")),
+                answer.indexed_paths_removed > 0,
+                "nothing was covered: {answer:?}"
+            );
+            assert!(
+                answer
+                    .did_not
+                    .iter()
+                    .any(|line| line.contains("whole subtree")),
                 "the scope must be stated, because `rm src` and `rm src/main.rs` are different \
                  claims"
             );
@@ -992,7 +1107,10 @@ fn rm_on_a_path_the_index_never_held_reports_a_measured_zero() {
     // from a bare `0`.
     let repository = Repository::small("rm-absent");
     run(&repository, &["index", repository.root_str()]);
-    let outcome = run(&repository, &["rm", "src/never_seen.rs", "--root", repository.root_str()]);
+    let outcome = run(
+        &repository,
+        &["rm", "src/never_seen.rs", "--root", repository.root_str()],
+    );
     assert_eq!(outcome.output.exit_code, 0);
     match &outcome.output.answer {
         Answer::Remove(answer) => {
@@ -1019,7 +1137,11 @@ fn rm_refuses_a_path_outside_the_repository_and_names_both_places() {
     assert_eq!(outcome.output.exit_code, 2);
     let refusal = outcome.output.refusal.expect("a refusal is required");
     assert_eq!(refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
-    assert!(refusal.message.contains(&repository.root_str()), "{}", refusal.message);
+    assert!(
+        refusal.message.contains(&repository.root_str()),
+        "{}",
+        refusal.message
+    );
     assert!(refusal.message.contains("elsewhere"), "{}", refusal.message);
 }
 
@@ -1030,7 +1152,10 @@ fn rm_on_a_deleted_file_still_works_because_that_is_when_it_is_needed() {
     let repository = Repository::small("rm-deleted");
     run(&repository, &["index", repository.root_str()]);
     repository.remove("src/ledger.rs");
-    let outcome = run(&repository, &["rm", "src/ledger.rs", "--root", repository.root_str()]);
+    let outcome = run(
+        &repository,
+        &["rm", "src/ledger.rs", "--root", repository.root_str()],
+    );
     assert_eq!(outcome.output.exit_code, 0);
     match &outcome.output.answer {
         Answer::Remove(answer) => assert_eq!(
@@ -1044,7 +1169,10 @@ fn rm_on_a_deleted_file_still_works_because_that_is_when_it_is_needed() {
 #[test]
 fn rm_refuses_a_repository_with_no_index_rather_than_creating_one() {
     let repository = Repository::empty("rm-no-index");
-    let outcome = run(&repository, &["rm", "src/a.rs", "--root", repository.root_str()]);
+    let outcome = run(
+        &repository,
+        &["rm", "src/a.rs", "--root", repository.root_str()],
+    );
     assert_eq!(outcome.output.exit_code, 3);
     assert_eq!(
         outcome.output.refusal.as_ref().map(|r| r.kind.as_str()),
@@ -1066,8 +1194,14 @@ fn the_test_harness_gives_each_repository_its_own_index_and_cleans_up() {
     );
     let path = first.index_path();
     run(&first, &["index", first.root_str()]);
-    assert!(path.is_file(), "the build must have created the index at {path:?}");
+    assert!(
+        path.is_file(),
+        "the build must have created the index at {path:?}"
+    );
     let _cleanup = Cleanup::on(path.clone());
     drop(first);
-    assert!(!path.exists(), "dropping the repository must have removed its index");
+    assert!(
+        !path.exists(),
+        "dropping the repository must have removed its index"
+    );
 }

@@ -69,10 +69,7 @@ fn main() -> std::process::ExitCode {
     };
     // `--help` and `--version` are answers rather than usage errors, so they go to stdout like any
     // other. Only a *refused* command line goes to stderr.
-    let _ = matches!(
-        invocation.command,
-        Command::Help | Command::Version
-    );
+    let _ = matches!(invocation.command, Command::Help | Command::Version);
 
     let mut progress = Stderr {
         quiet: invocation.quiet,

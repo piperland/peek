@@ -87,12 +87,18 @@ fn status_prints_the_counts_the_store_measured() {
             assert_eq!(counts.relation_count, relation_count, "relation count");
             assert_eq!(counts.resolved_relations, resolved_relations, "resolved");
             assert_eq!(counts.ambiguous_relations, ambiguous_relations, "ambiguous");
-            assert_eq!(counts.unresolved_relations, unresolved_relations, "unresolved");
+            assert_eq!(
+                counts.unresolved_relations, unresolved_relations,
+                "unresolved"
+            );
             assert_eq!(counts.inferred_relations, inferred_relations, "inferred");
             assert_eq!(counts.pending_relations, pending_relations, "pending");
             assert_eq!(counts.candidate_count, candidate_count, "candidates");
             assert_eq!(counts.orphan_relations, orphan_relations, "orphans");
-            assert!(entity_count > 0, "the fixture indexed nothing, so this proves nothing");
+            assert!(
+                entity_count > 0,
+                "the fixture indexed nothing, so this proves nothing"
+            );
             assert!(relation_count > 0, "the fixture extracted no relations");
         }
         other => panic!("expected a status answer, got {other:?}"),
@@ -113,9 +119,18 @@ fn status_json_carries_the_same_counts_it_prints() {
     let value: serde_json::Value =
         serde_json::from_str(&printed.output.render_json()).expect("the JSON mode must parse");
     let counts = &value["answer"]["counts"];
-    assert_eq!(counts["generation"], measured.generation, "generation in JSON");
-    assert_eq!(counts["entity_count"], measured.entity_count, "entity count in JSON");
-    assert_eq!(counts["relation_count"], measured.relation_count, "relation count in JSON");
+    assert_eq!(
+        counts["generation"], measured.generation,
+        "generation in JSON"
+    );
+    assert_eq!(
+        counts["entity_count"], measured.entity_count,
+        "entity count in JSON"
+    );
+    assert_eq!(
+        counts["relation_count"], measured.relation_count,
+        "relation count in JSON"
+    );
     assert_eq!(
         counts["orphan_relations"], measured.orphan_relations,
         "orphan count in JSON"
@@ -195,7 +210,10 @@ fn a_refresh_of_one_changed_file_updates_that_file_and_nothing_else() {
 
     match &refreshed.output.answer {
         Answer::Index(answer) => {
-            assert_eq!(answer.mode, "refresh", "a warm run must refresh, not rebuild");
+            assert_eq!(
+                answer.mode, "refresh",
+                "a warm run must refresh, not rebuild"
+            );
             assert!(
                 answer.generation > before.generation,
                 "a refresh commits, so the generation must advance: {} then {}",
@@ -238,7 +256,10 @@ fn rm_removes_exactly_the_rows_of_the_path_it_names() {
         stats
     };
 
-    let removed = run(&repository, &["rm", "src/ui", "--root", repository.root_str()]);
+    let removed = run(
+        &repository,
+        &["rm", "src/ui", "--root", repository.root_str()],
+    );
     let after = {
         let store = open_store(&repository);
         let stats = store.stats().expect("counts");
@@ -255,7 +276,8 @@ fn rm_removes_exactly_the_rows_of_the_path_it_names() {
         }) => {
             assert_eq!(scope, "subtree");
             assert_eq!(
-                *entities_removed, after.entity_count.abs_diff(before.entity_count),
+                *entities_removed,
+                after.entity_count.abs_diff(before.entity_count),
                 "the command reported {entities_removed} entities removed and the store's count \
                  moved by {}",
                 after.entity_count.abs_diff(before.entity_count)
@@ -314,7 +336,12 @@ fn doctor_reports_a_healthy_install_as_healthy_and_exits_zero() {
     let repository = Repository::small("e2e-doctor-healthy");
     run(&repository, &["index", repository.root_str()]);
     let outcome = run(&repository, &["doctor"]);
-    assert_eq!(outcome.output.status, Status::Ok, "{:?}", outcome.output.refusal);
+    assert_eq!(
+        outcome.output.status,
+        Status::Ok,
+        "{:?}",
+        outcome.output.refusal
+    );
     assert_eq!(outcome.output.exit_code, 0);
     match &outcome.output.answer {
         Answer::Doctor(answer) => {
@@ -350,7 +377,10 @@ fn doctor_refuses_a_repository_it_had_to_create_an_index_for() {
                 "there was no index before this command ran"
             );
             assert!(
-                answer.did_not.iter().any(|line| line.contains("this command made")),
+                answer
+                    .did_not
+                    .iter()
+                    .any(|line| line.contains("this command made")),
                 "the answer must say the report describes an index it created: {:?}",
                 answer.did_not
             );
@@ -382,7 +412,10 @@ fn a_deliberately_broken_index_is_diagnosed_and_exits_four() {
         "a broken index must be unhealthy, not a quiet success: {:?}",
         outcome.output.refusal
     );
-    assert_eq!(outcome.output.exit_code, 4, "a failing check has its own code");
+    assert_eq!(
+        outcome.output.exit_code, 4,
+        "a failing check has its own code"
+    );
     match &outcome.output.answer {
         Answer::Doctor(answer) => {
             let failing: Vec<&str> = answer
@@ -410,7 +443,12 @@ fn the_whole_command_surface_answers_against_a_real_index() {
     // exists so that adding a command without a smoke test is visible, and so a dispatch arm that
     // never runs is caught.
     let repository = Repository::small("e2e-surface");
-    assert_eq!(run(&repository, &["index", repository.root_str()]).output.exit_code, 0);
+    assert_eq!(
+        run(&repository, &["index", repository.root_str()])
+            .output
+            .exit_code,
+        0
+    );
     let root = repository.root_str().to_owned();
     for (argv, expected) in [
         (vec!["status"], 0),
@@ -489,7 +527,8 @@ fn every_edge_an_explanation_lists_carries_a_resolution_state() {
             assert!(
                 query::every_edge_is_explained(&answer.explanation),
                 "an edge with no state is a record the index cannot explain about itself: {:?}",
-                answer.explanation
+                answer
+                    .explanation
                     .edges
                     .iter()
                     .map(|edge| edge.state.clone())
@@ -534,7 +573,11 @@ fn an_ambiguous_target_is_refused_with_every_candidate_named() {
     );
     // And the names are the two distinct files, so a caller can choose between them.
     let distinct: std::collections::BTreeSet<&String> = refusal.candidates.iter().collect();
-    assert_eq!(distinct.len(), refusal.candidates.len(), "the same candidate twice: {refusal:?}");
+    assert_eq!(
+        distinct.len(),
+        refusal.candidates.len(),
+        "the same candidate twice: {refusal:?}"
+    );
     let rendered = refusal.render();
     for candidate in &refusal.candidates {
         assert!(rendered.contains(candidate), "{rendered}");
@@ -558,11 +601,14 @@ fn a_symlinked_root_and_its_target_reach_the_same_index() {
     // through a symlink so the property is tested on every platform; a real symlink is tested
     // separately in `paths`'s own unit tests, which are gated on the platform allowing one.
     let direct = run(&repository, &["status", "--root", repository.root_str()]);
-    let roundabout = run(&repository, &[
-        "status",
-        "--root",
-        &format!("{}/src/..", repository.root_str()),
-    ]);
+    let roundabout = run(
+        &repository,
+        &[
+            "status",
+            "--root",
+            &format!("{}/src/..", repository.root_str()),
+        ],
+    );
     assert_eq!(
         direct.output.index_path, roundabout.output.index_path,
         "two spellings of one directory reached two indexes"
@@ -589,12 +635,27 @@ fn every_command_states_what_it_could_not_do() {
     let cases: Vec<(Vec<&str>, &str)> = vec![
         (vec!["status"], "did not walk the repository"),
         (vec!["doctor"], "did not run the resolver"),
-        (vec!["context", "wallet_charge", "--budget", "4000"], "counting rule"),
-        (vec!["explain", "wallet_charge"], "did not search for a name close to"),
-        (vec!["callers", "wallet_charge"], "ambiguous or unresolved edge"),
+        (
+            vec!["context", "wallet_charge", "--budget", "4000"],
+            "counting rule",
+        ),
+        (
+            vec!["explain", "wallet_charge"],
+            "did not search for a name close to",
+        ),
+        (
+            vec!["callers", "wallet_charge"],
+            "ambiguous or unresolved edge",
+        ),
         (vec!["callees", "wallet_charge"], "structural edges"),
-        (vec!["dependents", "wallet_charge"], "a depth of 0 returns nothing"),
-        (vec!["rm", "src/never_seen.rs"], "did not touch the filesystem"),
+        (
+            vec!["dependents", "wallet_charge"],
+            "a depth of 0 returns nothing",
+        ),
+        (
+            vec!["rm", "src/never_seen.rs"],
+            "did not touch the filesystem",
+        ),
         (vec!["index"], "did not compare file contents"),
     ];
     for (argv, expected) in cases {
@@ -653,7 +714,14 @@ fn a_corrupted_index_is_reported_by_every_command_that_opens_it_rather_than_read
     let path = repository.index_path();
     std::fs::write(&path, vec![b'x'; 4096]).expect("corrupt the index");
 
-    for command in ["status", "context", "explain", "callers", "callees", "dependents"] {
+    for command in [
+        "status",
+        "context",
+        "explain",
+        "callers",
+        "callees",
+        "dependents",
+    ] {
         let mut argv = vec![command, "wallet_charge"];
         if command == "status" {
             argv.truncate(1);
@@ -671,18 +739,25 @@ fn a_corrupted_index_is_reported_by_every_command_that_opens_it_rather_than_read
         };
         assert_ne!(code, 0, "{command} exited zero over a corrupted index");
         assert_eq!(
-            outcome.output.status, Status::Failed,
+            outcome.output.status,
+            Status::Failed,
             "{command} must report an engine failure, not a question it could not answer: \
              {refusal:?}"
         );
-        assert_eq!(refusal.kind.as_str(), kind::ENGINE, "{command}: {refusal:?}");
+        assert_eq!(
+            refusal.kind.as_str(),
+            kind::ENGINE,
+            "{command}: {refusal:?}"
+        );
     }
 }
 
 /// Assert the store still passes its own integrity check.
 fn store_verify(repository: &Repository) {
     let store = open_store(&repository);
-    store.verify().expect("the index must pass SQLite's integrity check");
+    store
+        .verify()
+        .expect("the index must pass SQLite's integrity check");
     assert_eq!(
         Path::new(&repository.index_path()),
         store.path(),

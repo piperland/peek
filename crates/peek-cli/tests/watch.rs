@@ -35,10 +35,10 @@ use peek_cli::args;
 use peek_cli::commands::watch::{Applied, Session, tick};
 use peek_cli::exit::Status;
 use peek_cli::progress::Silent;
-use peek_cli::{run as run_invocation};
+use peek_cli::run as run_invocation;
 use peek_core::discover::DiscoveryOptions;
 use peek_core::watch::native::Batch;
-use peek_core::watch::{plan_batch};
+use peek_core::watch::plan_batch;
 
 /// A batch built the way the watcher builds one: from raw event paths, through the same planner.
 fn batch(root: &std::path::Path, events: &[&str]) -> Batch {
@@ -77,7 +77,10 @@ fn a_session_applies_a_batch_and_advances_the_generation() {
     assert_eq!(session.batches, 1);
     assert_eq!(session.events, 1);
     assert_eq!(session.paths_reindexed, 1);
-    assert!(store.generation() > before, "a refresh commits, so the generation must advance");
+    assert!(
+        store.generation() > before,
+        "a refresh commits, so the generation must advance"
+    );
     assert_eq!(session.first_generation, Some(before));
     assert_eq!(
         session.last_generation,
@@ -106,8 +109,14 @@ fn a_batch_that_would_change_nothing_does_not_commit() {
     assert!(applied.ok);
     assert_eq!(applied.reindexed, 0);
     assert_eq!(store.generation(), before, "an empty batch must not commit");
-    assert_eq!(session.batches, 1, "the batch was still received and counted");
-    assert_eq!(session.first_generation, None, "no commit means no first generation");
+    assert_eq!(
+        session.batches, 1,
+        "the batch was still received and counted"
+    );
+    assert_eq!(
+        session.first_generation, None,
+        "no commit means no first generation"
+    );
 }
 
 #[test]
@@ -152,10 +161,7 @@ fn a_path_outside_the_repository_is_counted_separately() {
     session.apply(
         &mut store,
         repository.root(),
-        batch(
-            repository.root(),
-            &["../escape.rs", "src/ledger.rs"],
-        ),
+        batch(repository.root(), &["../escape.rs", "src/ledger.rs"]),
         &DiscoveryOptions::default(),
     );
     assert_eq!(session.outside_root, 1, "{session:?}");
@@ -299,8 +305,14 @@ fn the_watch_command_refuses_a_repository_with_no_index() {
     let mut silent = Silent;
     let failure = run_invocation(&invocation, &mut silent).expect_err("must be refused");
     assert_eq!(failure.exit_code(), 3);
-    assert_eq!(failure.refusal.kind.as_str(), peek_cli::exit::kind::NO_INDEX);
-    assert!(!repository.index_path().exists(), "the refusal must not have created one");
+    assert_eq!(
+        failure.refusal.kind.as_str(),
+        peek_cli::exit::kind::NO_INDEX
+    );
+    assert!(
+        !repository.index_path().exists(),
+        "the refusal must not have created one"
+    );
 }
 
 #[test]
@@ -378,7 +390,9 @@ fn a_watcher_over_a_healthy_index_leaves_no_failure_behind() {
     }
     assert_eq!(session.batches, 2);
     assert!(session.failures.is_empty(), "{:?}", session.failures);
-    store.verify().expect("the index must still pass its own integrity check");
+    store
+        .verify()
+        .expect("the index must still pass its own integrity check");
     drop(store);
     // And the refusal the watcher would raise is not raised.
     assert_eq!(Status::Ok.exit_code(), 0);

@@ -120,7 +120,9 @@ fn override_lock() -> MutexGuard<'static, ()> {
     let mutex = LOCK.get_or_init(|| Mutex::new(()));
     // A poisoned lock is safe to take: the guard is dropped on every path out of `run_with`, so
     // the override is always restored even when a test panics.
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Repository {
@@ -144,15 +146,19 @@ impl Repository {
     /// A fixture with only its directories.
     fn bare(label: &str) -> Self {
         let unique = NEXT.fetch_add(1, Ordering::Relaxed);
-        let base = std::env::temp_dir().join(format!(
-            "peek-cli-{label}-{}-{unique}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("peek-cli-{label}-{}-{unique}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("repo")).expect("create the repository");
         std::fs::create_dir_all(base.join("cache")).expect("create the index root");
-        let root = base.join("repo").canonicalize().expect("canonicalise the repository");
-        let index_root = base.join("cache").canonicalize().expect("canonicalise the index root");
+        let root = base
+            .join("repo")
+            .canonicalize()
+            .expect("canonicalise the repository");
+        let index_root = base
+            .join("cache")
+            .canonicalize()
+            .expect("canonicalise the index root");
 
         let guard = override_lock();
         peek_core::store::paths::set_root_override(Some(index_root.clone()));
@@ -261,7 +267,7 @@ pub fn run(repository: &Repository, argv: &[&str]) -> Ran {
             return Ran {
                 output: usage_output(argv, error),
                 narration: Vec::new(),
-            }
+            };
         }
     };
     // The library resolves the index root from the process-global override this repository set, so

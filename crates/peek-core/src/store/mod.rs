@@ -82,6 +82,8 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
 
+use crate::model::path::RepoPath;
+
 /// How long a statement waits for a competing writer before giving up.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 

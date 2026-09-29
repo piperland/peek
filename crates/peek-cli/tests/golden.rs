@@ -251,10 +251,16 @@ fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
             repository.root_str(),
         ],
     );
-    assert_eq!(output.exit_code, 3, "a pack with no target in it is a refusal");
+    assert_eq!(
+        output.exit_code, 3,
+        "a pack with no target in it is a refusal"
+    );
     assert_eq!(output.status, Status::Refused);
     let refusal = output.refusal.expect("a refusal must be carried");
-    assert_eq!(refusal.kind.as_str(), peek_cli::exit::kind::BUDGET_INSUFFICIENT);
+    assert_eq!(
+        refusal.kind.as_str(),
+        peek_cli::exit::kind::BUDGET_INSUFFICIENT
+    );
     assert!(
         refusal.minimum_tokens.is_some(),
         "a refused budget must state the floor that would have worked: {refusal:?}"
@@ -272,7 +278,10 @@ fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
     }
     let text = output.render();
     assert!(text.contains("status: insufficient"), "{text}");
-    assert!(text.contains("at least"), "the floor must be printed: {text}");
+    assert!(
+        text.contains("at least"),
+        "the floor must be printed: {text}"
+    );
 }
 
 #[test]
@@ -296,12 +305,18 @@ fn a_context_refused_for_its_report_is_a_refusal_and_states_the_minimum() {
     let mut silent = Silent;
     let failure = run_invocation(&invocation, &mut silent).expect_err("must be refused");
     assert_eq!(failure.exit_code(), 3);
-    assert_eq!(failure.refusal.kind.as_str(), peek_cli::exit::kind::BUDGET_TOO_SMALL);
+    assert_eq!(
+        failure.refusal.kind.as_str(),
+        peek_cli::exit::kind::BUDGET_TOO_SMALL
+    );
     let minimum = failure
         .refusal
         .minimum_tokens
         .expect("a budget refusal must state the minimum");
-    assert!(minimum > 1, "the minimum must exceed the refused budget: {minimum}");
+    assert!(
+        minimum > 1,
+        "the minimum must exceed the refused budget: {minimum}"
+    );
     let rendered = failure.render();
     assert!(rendered.contains("smallest budget"), "{rendered}");
     assert!(rendered.contains(&minimum.to_string()), "{rendered}");
@@ -314,20 +329,19 @@ fn a_context_with_no_budget_is_refused_rather_than_given_an_invented_one() {
     // size an answer.
     let repository = Repository::small("golden-context-no-budget");
     render(&repository, &["index", repository.root_str()]);
-    let owned: Vec<std::ffi::OsString> = [
-        "context",
-        "wallet_charge",
-        "--root",
-        repository.root_str(),
-    ]
-    .iter()
-    .map(|argument| std::ffi::OsString::from(*argument))
-    .collect();
+    let owned: Vec<std::ffi::OsString> =
+        ["context", "wallet_charge", "--root", repository.root_str()]
+            .iter()
+            .map(|argument| std::ffi::OsString::from(*argument))
+            .collect();
     let invocation = args::parse(owned).expect("parse");
     let mut silent = Silent;
     let failure = run_invocation(&invocation, &mut silent).expect_err("must be refused");
     assert_eq!(failure.exit_code(), 3);
-    assert_eq!(failure.refusal.kind.as_str(), peek_cli::exit::kind::NO_BUDGET);
+    assert_eq!(
+        failure.refusal.kind.as_str(),
+        peek_cli::exit::kind::NO_BUDGET
+    );
     assert!(failure.refusal.minimum_tokens.is_some(), "{failure:?}");
     let rendered = failure.render();
     assert!(rendered.contains("--budget"), "{rendered}");
@@ -352,6 +366,9 @@ fn the_golden_files_are_present_and_non_trivial() {
             text.lines().count() > 3,
             "the golden for {name} is too short to be a real rendering: {text:?}"
         );
-        assert!(!text.contains("<root>"), "the {name} golden must not be a copy of the output");
+        assert!(
+            !text.contains("<root>"),
+            "the {name} golden must not be a copy of the output"
+        );
     }
 }
