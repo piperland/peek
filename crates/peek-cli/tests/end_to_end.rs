@@ -55,7 +55,11 @@ fn status_prints_the_counts_the_store_measured() {
     let measured = store.stats().expect("the store's own counts");
     drop(store);
 
-    let Counts {
+    // The pattern names the store's own type, not the CLI's. Counts is a presentation struct
+    // that mirrors these fields; destructuring StoreStats as a `Counts` would silently compare a
+    // value with itself if the two ever converged, and would not compile the moment either
+    // renamed a field. The comparison that matters is counts.* against measured.*.
+    let peek_core::store::StoreStats {
         generation,
         schema_version,
         entity_count,
