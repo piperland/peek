@@ -154,13 +154,13 @@ pub fn context(session: &mut Session, arguments: Option<&Value>) -> Result<ToolA
         // The whole pack, as the engine built it. `Option` because a refusal produces no pack, and
         // `null` rather than an absent key so the shape does not depend on the outcome.
         pack: Some(pack.clone()),
-        /// The same rendered text, so a caller that only wants prose does not have to re-derive it
-        /// from the units — and so a caller can check that the two agree.
+        // The same rendered text, so a caller that only wants prose does not have to re-derive it
+        // from the units — and so a caller can check that the two agree.
         rendered: text.clone(),
-        /// How many edges in the pack are undecided, counted from the pack rather than asserted.
-        ///
-        /// A number a caller can read before deciding how much to trust the pack, which is the
-        /// single most useful thing to know about an answer of this shape.
+        // How many edges in the pack are undecided, counted from the pack rather than asserted.
+        //
+        // A number a caller can read before deciding how much to trust the pack, which is the
+        // single most useful thing to know about an answer of this shape.
         uncertain_edges: pack
             .edges()
             .filter(|edge| {

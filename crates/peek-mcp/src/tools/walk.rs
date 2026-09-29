@@ -138,16 +138,16 @@ fn walk_tool(
         request: walk.request,
         headline: walk.headline(),
         steps,
-        /// Taken from the walk's own counter rather than recounted here, so the number and the list
-        /// come from the same place in the engine and a caller can check them against each other.
+        // Taken from the walk's own counter rather than recounted here, so the number and the list
+        // come from the same place in the engine and a caller can check them against each other.
         followed_inferred: inferred,
         seeds: walk.seeds.clone(),
         visited: walk.visited,
         inspected: walk.inspected,
         closed: walk.closed,
         revisits: walk.revisits,
-        /// True when a limit stopped the walk, which is the difference between "nothing more
-        /// depends on this" and "the walk ran out of budget".
+        // True when a limit stopped the walk, which is the difference between "nothing more
+        // depends on this" and "the walk ran out of budget".
         bounded: walk.bounded,
         options: walk.options,
     };
