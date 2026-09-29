@@ -862,7 +862,10 @@ fn price_edges(
         if !fits(running, price.tokens, available) {
             // The first refusal ends the fill here too, and everything behind it is accounted for.
             for rest in &ordered[rank..] {
-                omitted.push(edge_omission(rest, edge_cost(counter, options, rest, &entity.id)));
+                omitted.push(edge_omission(
+                    rest,
+                    edge_cost(counter, options, rest, &entity.id),
+                ));
             }
             break;
         }
@@ -1671,17 +1674,25 @@ mod tests {
         // client discard it to read a value that never changed meaning is not a trade anyone
         // should have to make. This is the deserialiser `Omission::reason` is built from, so a
         // whole record written by an older build decodes through it too.
+        //
+        // The payload is the *field's* value, not a whole omission. The old internal tag made the
+        // enum itself read as `{"reason":"budget_exhausted"}`, so a whole omission read
+        // `{"reason":{"reason":"budget_exhausted"}, …}`. The first literals here were that whole
+        // object, one level too high, and they failed against a deserialiser that was correct —
+        // which is the failure mode worth recording: a test that looks like it covers the old shape
+        // and covers something that never existed. The second loop below is the whole record, which
+        // is the shape that actually exists.
         for (payload, expected) in [
             (
-                r#"{"reason":{"reason":"budget_exhausted"}}"#,
+                r#"{"reason":"budget_exhausted"}"#,
                 OmissionReason::BudgetExhausted,
             ),
             (
-                r#"{"reason":{"reason":"edge_limit"}}"#,
+                r#"{"reason":"edge_limit"}"#,
                 OmissionReason::EdgeLimit,
             ),
             (
-                r#"{"reason":{"reason":"exceeds_budget"}}"#,
+                r#"{"reason":"exceeds_budget"}"#,
                 OmissionReason::ExceedsBudget,
             ),
         ] {
@@ -1689,6 +1700,21 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{payload} must still decode: {error}"));
             assert_eq!(read, expected, "{payload} decoded to the wrong reason");
         }
+    }
+
+    #[test]
+    fn a_whole_omission_written_before_the_flat_form_is_still_read() {
+        // The shape that actually exists: a full omission record, with the reason wrapped in the
+        // second object, as every answer from a build before this one carries it.
+        let payload = r#"{"cost":{"bytes":78,"tokens":26},
+                          "reason":{"reason":"budget_exhausted"},
+                          "subject":"src/ledger.rs::audit",
+                          "what":"edge"}"#;
+        let read: Omission =
+            serde_json::from_str(payload).unwrap_or_else(|e| panic!("{payload} must read: {e}"));
+        assert_eq!(read.reason, OmissionReason::BudgetExhausted);
+        assert_eq!(read.what, "edge");
+        assert_eq!(read.subject, "src/ledger.rs::audit");
     }
 
     #[test]
@@ -1715,7 +1741,10 @@ mod tests {
         // The same refusal as on the model side: a spelling from a newer build is not read as the
         // nearest known one, because that would be a claim about why something was dropped.
         let outcome: Result<OmissionReason, _> = serde_json::from_str(r#""ran_out""#);
-        assert!(outcome.is_err(), "an unknown omission reason must not decode");
+        assert!(
+            outcome.is_err(),
+            "an unknown omission reason must not decode"
+        );
         let wrapped: Result<OmissionReason, _> = serde_json::from_str(r#"{"reason":"ran_out"}"#);
         assert!(
             wrapped.is_err(),

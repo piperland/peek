@@ -343,8 +343,10 @@ impl TryFrom<UnresolvedReasonWire> for UnresolvedReason {
             UnresolvedReasonWire::Wrapped { reason } | UnresolvedReasonWire::Bare(reason) => reason,
         };
         Self::parse(&text).ok_or_else(|| {
-            format!("{text:?} is not an unresolved reason this build knows, so refusing it rather \
-                     than reading it as something else")
+            format!(
+                "{text:?} is not an unresolved reason this build knows, so refusing it rather \
+                     than reading it as something else"
+            )
         })
     }
 }
@@ -901,7 +903,10 @@ mod tests {
         let bare: UnresolvedReason =
             serde_json::from_str(r#""external""#).expect("the written shape");
         assert_eq!(wrapped, bare);
-        assert_eq!(serde_json::to_string(&bare).expect("serialise"), r#""external""#);
+        assert_eq!(
+            serde_json::to_string(&bare).expect("serialise"),
+            r#""external""#
+        );
     }
 
     #[test]

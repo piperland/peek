@@ -1239,8 +1239,7 @@ fn every_declaration_the_fill_stopped_short_of_is_named_rather_than_dropped() {
     for budget in every_reducing_budget(&query) {
         let pack = pack_at(&query, budget);
         assert_eq!(
-            pack.budget.candidates_considered,
-            candidates,
+            pack.budget.candidates_considered, candidates,
             "the neighbourhood does not depend on the budget, so the same candidates were \
              examined at every one of them"
         );
