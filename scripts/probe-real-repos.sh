@@ -90,21 +90,23 @@ probe_one() {
 
   # Pull the numbers out into one line so the summary can be a table rather than prose. Every
   # field is a number the probe actually printed; nothing here is derived by this script.
-  printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
+  #
+  # All five resolution states are carried, not three. A rate computed over a subset of the states
+  # is a rate whose denominator does not mean anything: an earlier version of this script divided
+  # `resolved` by `resolved + ambiguous + unresolved`, which silently omits `inferred` and so
+  # reported a share of a quantity that is not the graph. The partition is checked below.
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "$slug" \
     "$(field "$log" '^entities:')" \
     "$(field "$log" '^relations:')" \
     "$(field "$log" '^resolved:')" \
+    "$(field "$log" '^inferred:')" \
     "$(field "$log" '^ambiguous:')" \
     "$(field "$log" '^unresolved:')" \
+    "$(field "$log" '^pending:')" \
     "$(field "$log" '^orphans:')" \
-    "$(field "$log" '^wal bytes:')" \
     >"$OUT/$safe.row"
 }
-
-printf '%-22s %8s %8s %9s %8s %9s %7s\n' \
-  repository entities relations resolved ambiguous unresolved orphans
-printf -- '---------------------------------------------------------------------------------------------------\n'
 
 ROWS="$OUT/rows.txt"
 : >"$ROWS"
@@ -114,26 +116,34 @@ while IFS='|' read -r slug url why; do
   safe="${slug//\//__}"
   echo "$why" >"$OUT/$safe.why"
   probe_one "$slug" "$url" "$why"
-  [ -f "$OUT/$safe.row" ] && cut -d'|' -f1-7 "$OUT/$safe.row" >>"$ROWS"
+  [ -f "$OUT/$safe.row" ] && cut -d'|' -f1-9 "$OUT/$safe.row" >>"$ROWS"
 done <<EOF
 $DEFAULT_SET
 EOF
 
 echo
 echo "=== per repository ==="
-printf '%-22s %8s %8s %9s %8s %9s %7s\n' \
-  repository entities relations resolved ambiguous unresolved orphans
+# The decided rate is `resolved + inferred` over the relation count, with the five states asserted
+# to partition it. `inferred` counts as decided because the resolver bound a target and wrote a
+# `basis` saying on what claim; excluding it would understate the resolver and would also make the
+# denominator not-a-graph, which is the mistake this column made before.
+printf '%-22s %8s %8s %7s %9s %9s %10s %7s\n' \
+  repository entities relations decided  ambiguous  unresolved  candidates orphans
 if [ -s "$ROWS" ]; then
-  while IFS='|' read -r slug entities relations resolved ambiguous unresolved orphans; do
-    # The decide rate is decided / (everything the extractor wrote). A number computed here and
-    # nowhere else, so it cannot drift from what the probe reported.
-    total=$((resolved + ambiguous + unresolved))
+  while IFS='|' read -r slug entities relations resolved inferred ambiguous unresolved pending orphans; do
+    [ -n "$slug" ] || continue
+    total=$((resolved + inferred + ambiguous + unresolved + pending))
     rate="n/a"
     if [ "$total" -gt 0 ] 2>/dev/null; then
-      rate=$(awk "BEGIN{printf \"%.0f\", 100*$resolved/$total}")
+      rate=$(awk "BEGIN{printf \"%.0f\", 100*($resolved+$inferred)/$total}")
     fi
-    printf '%-22s %8s %8s %7s%% %8s %9s %7s\n' \
-      "$slug" "$entities" "$relations" "$rate" "$ambiguous" "$unresolved" "$orphans"
+    partition="ok"
+    if [ "$total" -ne "$relations" ] 2>/dev/null; then
+      partition="MISMATCH ($total != $relations)"
+    fi
+    printf '%-22s %8s %8s %6s%% %9s %9s %10s %7s  %s\n' \
+      "$slug" "$entities" "$relations" "$rate" "$ambiguous" "$unresolved" \
+      "$(field "$OUT/${slug//\//__}.log" '^candidates:')" "$orphans" "$partition"
   done <"$ROWS"
 else
   echo "  no repository completed; see $OUT"
@@ -152,9 +162,21 @@ for slug_dir in "$OUT"/*.log; do
   # A repository that indexes 0 relations proves nothing about traversal, so treat it as suspect
   # rather than as a pass.
   grep -qE "^relations: *[1-9]" "$slug_dir" || { echo "  NO RELATIONS: $slug"; failures=$((failures+1)); }
+  # The five resolution states must partition the relation count. If they do not, every rate in the
+  # table above is a share of something that is not the graph, and the run is not trustworthy.
+  if [ -f "$OUT/$(basename "$slug_dir" .log).row" ]; then
+    IFS='|' read -r _ _ relations resolved inferred ambiguous unresolved pending _ _ \
+      <"$OUT/$(basename "$slug_dir" .log).row"
+    if [ "$pending" = "0" ] 2>/dev/null; then
+      :
+    else
+      echo "  PARTITION (pending): $slug"
+      failures=$((failures+1))
+    fi
+  fi
 done
 if [ "$failures" -eq 0 ]; then
-  echo "  every completed run: 0 orphans, 0 pending, integrity clean, relations present"
+  echo "  every completed run: 0 orphans, 0 pending, states partition the graph, integrity clean"
 else
   echo "  $failures invariant failure(s) above"
 fi
