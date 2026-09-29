@@ -500,10 +500,7 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
     // its input. No earlier test caught it because none of them read a relation back out of a
     // store the indexer had just written.
     let tree = TempTree::new("pending-round-trip");
-    tree.write(
-        "src/caller.rs",
-        "fn target() {}\nfn main() { target(); }\n",
-    );
+    tree.write("src/caller.rs", "fn target() {}\nfn main() { target(); }\n");
 
     let mut store = open_store(&tree);
     let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
@@ -520,7 +517,13 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
 
     // Now read them back. This is the step that used to fail.
     let pending = store
-        .relations_in_state(&ResolutionState::Pending { evidence: Evidence::NameOnly, basis: String::new() }, 64)
+        .relations_in_state(
+            &ResolutionState::Pending {
+                evidence: Evidence::NameOnly,
+                basis: String::new(),
+            },
+            64,
+        )
         .expect("pending relations must be readable");
     assert_eq!(
         pending.len() as u64,

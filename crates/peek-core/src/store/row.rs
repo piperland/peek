@@ -335,12 +335,10 @@ fn resolution_from_sql(
         // every query touching a freshly-extracted relation failed with `Corrupt` — including
         // `relations_in_state`, which is the resolver's entire input. A state the database can
         // store but not return is a state the system cannot use.
-        ("pending", ResolutionState::Pending { evidence, basis }) => {
-            ResolutionState::Pending {
-                evidence: evidence.clone(),
-                basis: basis.clone(),
-            }
-        }
+        ("pending", ResolutionState::Pending { evidence, basis }) => ResolutionState::Pending {
+            evidence: evidence.clone(),
+            basis: basis.clone(),
+        },
         (
             "ambiguous",
             ResolutionState::Unresolved {
