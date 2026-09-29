@@ -88,7 +88,7 @@ impl<'a> Args<'a> {
     }
 
     /// Every key the call sent, whether or not it means anything to this tool.
-    fn keys(&self) -> impl Iterator<Item = &String> {
+    fn keys(&self) -> impl Iterator<Item = &String> + '_ {
         self.object.into_iter().flat_map(|object| object.keys())
     }
 

@@ -212,7 +212,6 @@ impl Verdict {
         }
     }
 }
-
 /// One thing a name might have meant.
 ///
 /// The identity as the engine spells it, plus the three fields a caller needs to choose: what it
