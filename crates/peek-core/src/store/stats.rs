@@ -16,6 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
+use serde::Serialize;
 
 use super::Store;
 use super::error::StoreError;
@@ -25,7 +26,15 @@ use super::schema;
 ///
 /// Every field is counted at the moment [`Store::stats`] was called. Nothing is cached across
 /// calls and nothing is estimated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Serialize` so a status surface sends the store's own numbers rather than a re-typed copy. The
+/// one thing a consumer must remember is [`Self::generation`]: it is the generation **this handle
+/// was opened at**, not the generation on disk right now, so a process holding a long-lived reader
+/// alongside a writer sees a number that goes stale. The field is named honestly rather than being
+/// read from the database on the way out, because the other numbers are per-call measurements and
+/// mixing the two would be worse than saying which is which. A surface that has to report that
+/// staleness reads [`Store::stored_generation`] beside it and compares the two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct StoreStats {
     /// The schema these rows were written with.
     pub schema_version: u32,
@@ -178,9 +187,12 @@ fn wal_path(path: &Path) -> PathBuf {
 
 /// The generation recorded on disk, bypassing the value cached in the [`Store`].
 ///
-/// The two must always agree. A mismatch means the cached counter and the stored counter have
-/// diverged, which is precisely the torn state the generation exists to detect — and a check
-/// that is never performed detects nothing.
+/// The two answer different questions and a caller sometimes needs both: the cached one is what
+/// this handle was opened against, and this one is what the index says now. They differ whenever
+/// something has committed since — a watcher, or a second process — which is the normal state of a
+/// store being written to. A caller that wants to report staleness compares the two; a caller that
+/// wants integrity ([`Store::verify`]) expects them to agree, because a mismatch with no writer
+/// running is the torn state the generation exists to detect.
 pub fn stored_generation(conn: &Connection) -> Result<u64, StoreError> {
     let raw = schema::read_meta(conn, schema::META_GENERATION)?
         .ok_or_else(|| StoreError::Corrupt("the store has no generation row".to_owned()))?;

@@ -248,8 +248,28 @@ impl Store {
     /// Monotonically increasing for the life of the file, carried across migrations, and reset
     /// by nothing. A reader that caches a generation and later sees a smaller one is looking at
     /// a different index, not at an older version of this one.
+    ///
+    /// This is the value **this handle was opened at**. It does not move while the handle lives, so
+    /// a handle held open beside a writer stops being current the moment that writer commits;
+    /// [`Store::stored_generation`] is the other half of that pair.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The commit counter as the store records it *now*, read from the database rather than from
+    /// the cache.
+    ///
+    /// The two counters differ in exactly one situation and that situation is real: something has
+    /// committed since this handle was opened. A long-lived reader — a server session beside a
+    /// running watcher, a command that keeps its store open — therefore serves a figure that
+    /// stopped being true without saying so. Re-reading the row is one statement, and the value it
+    /// returns is the one a caller means by "the generation of this index".
+    ///
+    /// Deliberately read rather than refreshed: updating the cached value would make
+    /// [`Store::generation`] mean two different things depending on who asked last, and every
+    /// number [`Store::stats`] reports is a per-call measurement.
+    pub fn stored_generation(&self) -> Result<u64, StoreError> {
+        stats::stored_generation(&self.conn)
     }
 
     /// The connection, for the submodules that do the actual work.
