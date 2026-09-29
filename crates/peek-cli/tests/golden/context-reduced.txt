@@ -15,7 +15,7 @@ it addressable by name.
   -> calls src/ledger.rs::ledger_commit  [resolved (same_file)]  src/ledger.rs:21
   -> contains src/ledger.rs::wallet_charge.amount  [resolved (containment)]  src/ledger.rs:19
 candidates: 2 examined, 0 not reached
-note: the fill stopped at the first unit that did not fit rather than skipping to a smaller one, so this pack is a prefix of the full ranking
+note: the fill stopped at the first declaration that did not fit rather than skipping to a smaller one, so this pack is a prefix of the full ranking; every declaration behind that one is named in `omitted` with what it would have cost
 note: the answer is reduced, not truncated: a declaration is included whole or not at all, and the fill stopped at the first that did not fit rather than skipping to a smaller one. This is therefore a prefix of the full ranking
 could not:
   a unit is the index's own rendering of a declaration — kind, name, path, line, signature and doc comment — and not its body. Nothing here shows what is inside a function

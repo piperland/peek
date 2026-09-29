@@ -172,7 +172,10 @@ pub enum BudgetStatus {
     Reduced,
     /// The target itself does not fit. This is not a context slice; it is a report that the
     /// budget is too small for the question. [`ContextPack::units`] is empty and every candidate
-    /// is in [`ContextPack::omitted`] with [`OmissionReason::ExceedsBudget`].
+    /// is in [`ContextPack::omitted`]: the ones that cost more than the whole content budget as
+    /// [`OmissionReason::ExceedsBudget`], and the cheaper ones as
+    /// [`OmissionReason::BudgetExhausted`], because the target ranks first and so the fill
+    /// stopped before reaching any of them.
     ///
     /// This is the one state where the compiler returns `Ok` and an empty answer. It is a
     /// refusal rather than a failure because the target *was* resolved and the graph around it
@@ -216,6 +219,12 @@ pub struct BudgetReport {
     /// How the pack relates to the budget.
     pub status: BudgetStatus,
     /// Candidates the neighbourhood produced and the compiler examined.
+    ///
+    /// Every one of them, whether it ended up in [`ContextPack::units`] or in
+    /// [`ContextPack::omitted`]: the fill stops at the first declaration the budget cannot take, but
+    /// it still prices the rest of the ranking so it can name them with what they would have cost.
+    /// A pack that stopped early therefore reports the whole neighbourhood, and a caller holding one
+    /// of two candidates can account for both.
     pub candidates_considered: u64,
     /// How many of the target's relation reads stopped at the per-entity cap. Each one hides at
     /// least one candidate, so this is a **lower bound** on what was never reached rather than a
@@ -642,7 +651,7 @@ pub(crate) fn peek(
     let available = budget_tokens - reserve;
 
     let target = resolve_target(query, target_query)?;
-    let (candidates, mut notes, unexamined) = neighbourhood(query, &target)?;
+    let (mut candidates, mut notes, unexamined) = neighbourhood(query, &target)?;
 
     let mut units: Vec<ContextUnit> = Vec::new();
     let mut omitted: Vec<Omission> = Vec::new();
@@ -651,32 +660,46 @@ pub(crate) fn peek(
     let mut target_included = false;
     let mut stopped = false;
 
-    for candidate in candidates {
-        let Some(entity) = candidate.entity else {
-            notes.push(format!(
-                "`{}` is named by a relation in the index but has no entity row, so it was not \
-                 offered as context",
-                candidate.id.display()
-            ));
+    // Indexed rather than a `for` loop, because the `!fits` arm has to reach the ranking after the
+    // current candidate to account for it. The declaration is taken out of its slot with
+    // `Option::take` rather than cloned, because a pack is priced from rendered text and nothing
+    // here reads the same entity twice.
+    let mut rank = 0;
+    while rank < candidates.len() {
+        let candidate = &mut candidates[rank];
+        let Some(entity) = candidate.entity.take() else {
+            notes.push(missing_entity_note(&candidate.id));
+            rank += 1;
             continue;
         };
         considered += 1;
         let cost = Cost::of(&render_unit(&entity, &candidate.reason), counter);
 
         if !fits(spent, cost.tokens, available) {
-            let reason = if cost.tokens > available {
-                OmissionReason::ExceedsBudget
-            } else {
-                OmissionReason::BudgetExhausted
-            };
-            omitted.push(Omission {
-                subject: entity.id.display(),
-                what: Omitted::Unit,
-                reason,
-                cost,
-            });
+            // **The first refusal ends the fill.** The ranking is a total order and the walk
+            // follows it, so admitting a cheaper unit from further down would leave a hole in the
+            // middle of the pack: the caller would be given a worse-ranked declaration while
+            // being told a better-ranked one was dropped for want of room, which is the opposite of
+            // what the ranking means. `spent` does not grow here, so the old behaviour of setting
+            // `stopped` and continuing was re-testing every later candidate against budget nothing
+            // had been spent from.
             stopped = true;
-            continue;
+            omitted.push(unit_omission(&entity, cost, available));
+
+            // Every candidate behind the refusal is named too, each with what it would have cost.
+            // A bare `break` would drop the tail silently, and silently dropping is the same class
+            // of defect as admitting a later item: the caller is told less than the truth. The
+            // refused candidate itself is already named above, so the walk resumes after it.
+            for rest in &candidates[rank + 1..] {
+                let Some(entity) = &rest.entity else {
+                    notes.push(missing_entity_note(&rest.id));
+                    continue;
+                };
+                considered += 1;
+                let cost = Cost::of(&render_unit(entity, &rest.reason), counter);
+                omitted.push(unit_omission(entity, cost, available));
+            }
+            break;
         }
         spent = spent.saturating_add(cost.tokens);
         let is_target = matches!(candidate.reason, InclusionReason::Target);
@@ -698,11 +721,12 @@ pub(crate) fn peek(
 
         units.push(ContextUnit {
             entity,
-            reason: candidate.reason,
+            reason: candidate.reason.clone(),
             cost,
             edges,
             edges_cost,
         });
+        rank += 1;
     }
 
     let status = if !target_included {
@@ -720,8 +744,9 @@ pub(crate) fn peek(
     }
     if stopped {
         notes.push(
-            "the fill stopped at the first unit that did not fit rather than skipping to a \
-             smaller one, so this pack is a prefix of the full ranking"
+            "the fill stopped at the first declaration that did not fit rather than skipping to a \
+             smaller one, so this pack is a prefix of the full ranking; every declaration behind \
+             that one is named in `omitted` with what it would have cost"
                 .to_owned(),
         );
     }
@@ -770,7 +795,46 @@ fn fits(spent: u64, cost: u64, available: u64) -> bool {
     spent.saturating_add(cost) <= available
 }
 
-/// Price a unit's edges, taking as many as fit and naming every one that does not.
+/// The omission for a declaration the budget could not take.
+///
+/// The two reasons are claims about different things. [`OmissionReason::ExceedsBudget`] is a fact
+/// about this declaration alone: it costs more than the whole content budget, so it would not have
+/// fitted however the fill were ordered. Anything else was affordable and is not in the pack
+/// because the fill had already stopped by the time the walk reached it — which is exactly what
+/// makes a reduced pack a prefix rather than a subset.
+fn unit_omission(entity: &Entity, cost: Cost, available: u64) -> Omission {
+    Omission {
+        subject: entity.id.display(),
+        what: Omitted::Unit,
+        reason: if cost.tokens > available {
+            OmissionReason::ExceedsBudget
+        } else {
+            OmissionReason::BudgetExhausted
+        },
+        cost,
+    }
+}
+
+/// The note for a candidate the index names but holds no row for.
+///
+/// A note rather than an omission because it was never priced: it has no cost, and an omission
+/// carrying a cost of zero would claim the declaration was free.
+fn missing_entity_note(id: &EntityId) -> String {
+    format!(
+        "`{}` is named by a relation in the index but has no entity row, so it was not offered \
+         as context",
+        id.display()
+    )
+}
+
+/// Price a unit's edges, taking a prefix of the ranked ones and naming every one that does not
+/// fit.
+///
+/// The same stopping rule as the declaration fill, and for the same reason. `ordered` is ranked
+/// with the undecided edges first (`edge_rank`), so skipping a priced-out edge to fit a cheaper one
+/// further down would spend the budget on the edges a reader most needs to discount last — the
+/// exact inversion of why they are ranked first. The tail is named rather than dropped, so what the
+/// answer left out is visible in full.
 fn price_edges(
     counter: TokenCounter,
     options: &crate::query::QueryOptions,
@@ -793,17 +857,14 @@ fn price_edges(
     let mut omitted: Vec<Omission> = Vec::new();
     let mut running = spent;
 
-    for edge in &ordered {
-        let text = render_edge(edge, &entity.id, options.list_ambiguity_candidates);
-        let price = Cost::of(&text, counter);
+    for (rank, edge) in ordered.iter().enumerate() {
+        let price = edge_cost(counter, options, edge, &entity.id);
         if !fits(running, price.tokens, available) {
-            omitted.push(Omission {
-                subject: edge_label(edge),
-                what: Omitted::Edge,
-                reason: OmissionReason::BudgetExhausted,
-                cost: price,
-            });
-            continue;
+            // The first refusal ends the fill here too, and everything behind it is accounted for.
+            for rest in &ordered[rank..] {
+                omitted.push(edge_omission(rest, edge_cost(counter, options, rest, &entity.id)));
+            }
+            break;
         }
         running = running.saturating_add(price.tokens);
         cost = cost.sum(price);
@@ -813,6 +874,34 @@ fn price_edges(
         });
     }
     (packed, cost, omitted)
+}
+
+/// What one edge costs in its unit's block, as the exact string that is printed.
+fn edge_cost(
+    counter: TokenCounter,
+    options: &crate::query::QueryOptions,
+    edge: &Relation,
+    unit: &EntityId,
+) -> Cost {
+    Cost::of(
+        &render_edge(edge, unit, options.list_ambiguity_candidates),
+        counter,
+    )
+}
+
+/// The omission for an edge that did not fit beside the rest of its unit's block.
+///
+/// Always [`OmissionReason::BudgetExhausted`], including for an edge that costs more than the
+/// whole content budget. The engine does not draw that distinction for edges today — it never has,
+/// which is why `OmissionReason::ExceedsBudget`'s edge clause has never been printed. Introducing
+/// it here would change every report carrying an edge omission, which is a separate decision.
+fn edge_omission(edge: &Relation, cost: Cost) -> Omission {
+    Omission {
+        subject: edge_label(edge),
+        what: Omitted::Edge,
+        reason: OmissionReason::BudgetExhausted,
+        cost,
+    }
 }
 
 /// How an edge is named in an omission, falling back to the name as written when it has no

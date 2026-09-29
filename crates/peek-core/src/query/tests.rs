@@ -36,8 +36,8 @@ use crate::model::path::RepoPath;
 use crate::model::relation::{Evidence, Relation, RelationKind, ResolutionState, UnresolvedReason};
 use crate::model::span::Span;
 use crate::query::{
-    BudgetStatus, ContextPack, Cost, Direction, EdgeSide, InclusionReason, Matched, OmissionReason,
-    Omitted, Query, QueryError, QueryOptions, Walk, WalkRequest,
+    BudgetStatus, ContextEdge, ContextPack, Cost, Direction, EdgeSide, InclusionReason, Matched,
+    Omission, OmissionReason, Omitted, Query, QueryError, QueryOptions, Walk, WalkRequest,
 };
 use crate::store::{IndexUpdate, RepoId, Store};
 
@@ -363,6 +363,52 @@ fn exactly_the_target(query: &Query<'_>, roomy: &ContextPack) -> u64 {
 /// `&&EntityId`, and every spelling of that in a test is a distraction from the claim.
 fn includes(pack: &ContextPack, id: &EntityId) -> bool {
     pack.units.iter().any(|unit| &unit.entity.id == id)
+}
+
+/// The qualified names of a pack's units, in the order the pack ranked them.
+///
+/// Readable in a failure message where a vector of identities is not: a sweep reports which budget
+/// broke the claim, and the name is what a reader can look up in the fixture.
+fn ranked_names(pack: &ContextPack) -> Vec<&str> {
+    pack.units
+        .iter()
+        .map(|unit| unit.entity.id.qualified_name())
+        .collect()
+}
+
+/// Compile the fixture's target at one budget, which every caller here knows is at or above the
+/// floor. One spelling so the sweeps below read as claims rather than as error handling.
+fn pack_at(query: &Query<'_>, budget: u64) -> ContextPack {
+    query
+        .peek("process", budget)
+        .unwrap_or_else(|error| panic!("a budget of {budget} is at or above the floor: {error}"))
+}
+
+/// Every budget from the floor up to, but not including, the first that completes the pack.
+///
+/// **A sweep and not a sample, because the window is small.** The budgets at which a pack can hold
+/// a hole are the ones that fall between two declaration prices — a handful of integers inside a
+/// window of several hundred — so a test that picks one by hand is asserting a number nobody
+/// derived. The defect this exists to catch lived in six of them. The floor is where a pack is
+/// first accepted and [`generous`] is where it certainly completes, so the loop terminates whatever
+/// the fixture's prices turn out to be.
+fn every_reducing_budget(query: &Query<'_>) -> Vec<u64> {
+    let ceiling = generous(query);
+    let mut budgets = Vec::new();
+    let mut budget = query.minimum_budget();
+    while budget <= ceiling {
+        let pack = pack_at(query, budget);
+        if pack.budget.status == BudgetStatus::Complete {
+            break;
+        }
+        budgets.push(budget);
+        budget += 1;
+    }
+    assert!(
+        budgets.len() > 2,
+        "the fixture has to have budgets that reduce it, or the sweep asserts nothing"
+    );
+    budgets
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,6 +1186,142 @@ fn a_smaller_budget_produces_a_coherent_subset_rather_than_a_truncated_one() {
         "a small pack is short of declarations, not of edges: {omitted:?}",
         omitted = tight.omitted
     );
+}
+
+#[test]
+fn a_smaller_budget_never_puts_a_hole_in_the_ranking() {
+    // The contract, checked at *every* budget the compiler accepts below the one that completes the
+    // pack. A declaration is never partially included and the fill never skips a higher-ranked one
+    // to make room for a lower-ranked one, so what a smaller budget removes is the end of the
+    // ranking and never its middle.
+    //
+    // The budget it was previously checked at could not have caught the defect it was written for. A
+    // budget that fits the target's own block and nothing else yields exactly one unit, and one
+    // unit is a prefix of any ranking — the assertion passed against a fill that skipped a refused
+    // declaration and admitted a cheaper one behind it. The window where that can happen is a
+    // handful of budgets between two prices, so it is swept rather than sampled.
+    let (store, _dir) = fixture();
+    let query = query(&store);
+    let roomy = query
+        .peek("process", generous(&query))
+        .expect("compile generously");
+    let ranking = ranked_names(&roomy);
+    assert!(
+        ranking.len() > 2,
+        "the fixture's target has a neighbourhood, not just itself: {ranking:?}"
+    );
+
+    for budget in every_reducing_budget(&query) {
+        let pack = pack_at(&query, budget);
+        let held = ranked_names(&pack);
+        assert!(
+            held.len() <= ranking.len() && held[..] == ranking[..held.len()],
+            "at a budget of {budget} the pack holds {held:?}, and a prefix of {ranking:?} is the \
+             only reduced answer: a declaration ranked behind one that was kept is a hole in the \
+             middle of the pack, and the report says it did not fit"
+        );
+    }
+}
+
+#[test]
+fn every_declaration_the_fill_stopped_short_of_is_named_rather_than_dropped() {
+    // Why the refusal accounts for the tail instead of breaking out of the loop. A bare `break`
+    // satisfies the prefix property above and is still wrong: the caller is told one declaration
+    // did not fit and is given no way to learn what else the budget was not spent on. Silently
+    // dropping is the same defect as admitting a later item — a caller told less than the truth.
+    let (store, _dir) = fixture();
+    let query = query(&store);
+    let roomy = query
+        .peek("process", generous(&query))
+        .expect("compile generously");
+    let candidates = roomy.budget.candidates_considered;
+
+    for budget in every_reducing_budget(&query) {
+        let pack = pack_at(&query, budget);
+        assert_eq!(
+            pack.budget.candidates_considered,
+            candidates,
+            "the neighbourhood does not depend on the budget, so the same candidates were \
+             examined at every one of them"
+        );
+        let dropped: Vec<&Omission> = pack
+            .omitted
+            .iter()
+            .filter(|entry| entry.what == Omitted::Unit)
+            .collect();
+        assert_eq!(
+            pack.units.len() + dropped.len(),
+            candidates as usize,
+            "at a budget of {budget} every declaration is either in the pack or named in \
+             `omitted`: {} held, {} named, of {candidates} examined; the omissions are \
+             {omitted:?}",
+            pack.units.len(),
+            dropped.len(),
+            omitted = pack.omitted,
+        );
+        for entry in &dropped {
+            assert!(
+                entry.cost.tokens > 0,
+                "an omission says what it would have cost, so 'it did not fit' is \
+                 checkable: {entry:?}"
+            );
+            assert!(
+                matches!(
+                    entry.reason,
+                    OmissionReason::BudgetExhausted | OmissionReason::ExceedsBudget
+                ),
+                "a declaration the budget refused says which of the two reasons applies: {entry:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_edge_that_does_not_fit_ends_the_targets_block_rather_than_skipping_one() {
+    // The same hole in a second population. `price_edges` ranks the undecided edges first — that is
+    // the whole point of `edge_rank` — so skipping a priced-out edge to fit a cheaper one further
+    // down spends what is left of the budget on the edges a reader most needs to discount *last*.
+    // Nothing tested this: the fill above it was tested for the prefix property and `price_edges`
+    // was left to the same assertion by inheritance, which it did not have.
+    let (store, _dir) = fixture();
+    let query = query(&store);
+    let roomy = query
+        .peek("process", generous(&query))
+        .expect("compile generously");
+    let target = roomy.units[0].entity.id.clone();
+    let rendered = |edge: &ContextEdge| edge.render(&target, true);
+    let ranking: Vec<String> = roomy.units[0].edges.iter().map(&rendered).collect();
+    assert!(
+        ranking.len() > 2,
+        "the fixture's target has several edges, or there is no ordering to break: {ranking:?}"
+    );
+
+    for budget in every_reducing_budget(&query) {
+        let pack = pack_at(&query, budget);
+        // A refusal holds no block at all, and a neighbour's block holds no edges by design.
+        let Some(block) = pack.units.iter().find(|unit| unit.entity.id == target) else {
+            continue;
+        };
+        let held: Vec<String> = block.edges.iter().map(&rendered).collect();
+        assert!(
+            held.len() <= ranking.len() && held[..] == ranking[..held.len()],
+            "at a budget of {budget} the target's block holds {held:?}, and a prefix of \
+             {ranking:?} is the only reduced block: an edge ranked behind one that was kept is a \
+             hole in it"
+        );
+        let dropped = pack
+            .omitted
+            .iter()
+            .filter(|entry| entry.what == Omitted::Edge)
+            .count();
+        assert_eq!(
+            held.len() + dropped,
+            ranking.len(),
+            "at a budget of {budget} every edge is either in the target's block or named in \
+             `omitted`: {held:?} held, {dropped} named, of {} ranked",
+            ranking.len()
+        );
+    }
 }
 
 #[test]
