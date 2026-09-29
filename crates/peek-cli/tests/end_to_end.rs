@@ -51,7 +51,7 @@ fn status_prints_the_counts_the_store_measured() {
     assert_eq!(built.output.exit_code, 0, "{:?}", built.output.refusal);
 
     let printed = run(&repository, &["status"]);
-    let store = open_store(repository);
+    let store = open_store(&repository);
     let measured = store.stats().expect("the store's own counts");
     drop(store);
 
@@ -115,7 +115,7 @@ fn status_json_carries_the_same_counts_it_prints() {
     // rather than by comparing strings. A JSON mode nobody parses is not tested.
     let repository = Repository::small("e2e-status-json");
     run(&repository, &["index", repository.root_str()]);
-    let store = open_store(repository);
+    let store = open_store(&repository);
     let measured = store.stats().expect("the store's own counts");
     drop(store);
 
@@ -154,7 +154,7 @@ fn the_index_report_adds_up_to_what_the_store_holds_afterwards() {
         Answer::Index(answer) => answer.clone(),
         other => panic!("expected an index answer, got {other:?}"),
     };
-    let store = open_store(repository);
+    let store = open_store(&repository);
     let measured = store.stats().expect("the store's own counts");
     drop(store);
 
@@ -190,7 +190,7 @@ fn a_refresh_of_one_changed_file_updates_that_file_and_nothing_else() {
     let repository = Repository::small("e2e-incremental");
     run(&repository, &["index", repository.root_str()]);
     let before = {
-        let store = open_store(repository);
+        let store = open_store(&repository);
         let stats = store.stats().expect("counts");
         drop(store);
         stats
@@ -206,7 +206,7 @@ fn a_refresh_of_one_changed_file_updates_that_file_and_nothing_else() {
     );
     let refreshed = run(&repository, &["index", repository.root_str()]);
     let after = {
-        let store = open_store(repository);
+        let store = open_store(&repository);
         let stats = store.stats().expect("counts");
         drop(store);
         stats
@@ -254,7 +254,7 @@ fn rm_removes_exactly_the_rows_of_the_path_it_names() {
     let repository = Repository::small("e2e-rm");
     run(&repository, &["index", repository.root_str()]);
     let before = {
-        let store = open_store(repository);
+        let store = open_store(&repository);
         let stats = store.stats().expect("counts");
         drop(store);
         stats
@@ -265,7 +265,7 @@ fn rm_removes_exactly_the_rows_of_the_path_it_names() {
         &["rm", "src/ui", "--root", repository.root_str()],
     );
     let after = {
-        let store = open_store(repository);
+        let store = open_store(&repository);
         let stats = store.stats().expect("counts");
         drop(store);
         stats
@@ -315,7 +315,7 @@ fn doctor_and_status_agree_about_every_count() {
     // number one of them invented.
     let repository = Repository::small("e2e-doctor-status");
     run(&repository, &["index", repository.root_str()]);
-    let store = open_store(repository);
+    let store = open_store(&repository);
     let measured = store.stats().expect("counts");
     drop(store);
 
@@ -596,7 +596,7 @@ fn a_symlinked_root_and_its_target_reach_the_same_index() {
     let repository = Repository::small("e2e-symlink");
     run(&repository, &["index", repository.root_str()]);
     let measured = {
-        let store = open_store(repository);
+        let store = open_store(&repository);
         let stats = store.stats().expect("counts");
         drop(store);
         stats
