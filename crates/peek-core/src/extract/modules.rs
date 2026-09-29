@@ -307,13 +307,14 @@ fn normalise_package_name(directory: &str) -> String {
     directory.replace('-', "_")
 }
 
-/// A structural fingerprint of a module's body: FNV-1a over the source text, hex-encoded.
+/// A structural fingerprint of a module: FNV-1a over its source text, hex-encoded.
 ///
 /// Deliberately not a cryptographic hash. This is a reconciliation aid — "these two entities
 /// have the same body" — and it is checked against the algorithm's published test vectors, which
-/// is what makes it verifiable without a dependency. A file module hashes the whole file, and an
-/// inline `mod x { .. }` hashes its own node text; a `mod x;` with no body has no body to hash,
-/// so its fingerprint is left unset rather than filled with the six characters `mod x;`.
+/// is what makes it verifiable without a dependency. A file module hashes the whole file and an
+/// inline `mod x { .. }` hashes its own node text; a `mod x;` hashes those six characters, which
+/// is not a body but is stable under every edit that does not touch the declaration, and is
+/// better than a fingerprint that silently means "this entity was never examined".
 pub fn fingerprint(text: &str) -> String {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
