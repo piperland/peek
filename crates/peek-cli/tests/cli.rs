@@ -271,10 +271,18 @@ fn the_help_and_version_flags_are_answers_and_are_read_wherever_they_appear() {
     // them; `Command::root` answering `None` is what says that, and it is asserted here rather
     // than left to the fixture's own behaviour.
     assert!(
-        args::parse(["--version"]).expect("parse").command.root().is_none()
+        args::parse(["--version"])
+            .expect("parse")
+            .command
+            .root()
+            .is_none()
     );
     assert!(
-        args::parse(["--help"]).expect("parse").command.root().is_none()
+        args::parse(["--help"])
+            .expect("parse")
+            .command
+            .root()
+            .is_none()
     );
 }
 

@@ -173,7 +173,10 @@ impl Reentrant {
     /// Take the lock and point the engine at `root` until the returned guard is dropped.
     fn override_root(&'static self, root: &Path) -> Guard {
         let owner = std::thread::current().id();
-        let mut slot = self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut slot = self
+            .held
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         loop {
             let mine = matches!(slot.as_ref(), Some(held) if held.owner == owner);
             if slot.is_none() || mine {
@@ -200,7 +203,10 @@ impl Reentrant {
 
     /// Hand the override back one level, and release the lock at the outermost one.
     fn release(&self) {
-        let mut slot = self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut slot = self
+            .held
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(held) = slot.as_mut() else {
             return;
         };
@@ -450,7 +456,9 @@ fn names_a_root(argv: &[std::ffi::OsString], command: &args::Command) -> bool {
         Naming::Flag => names_a_root_flag(argv),
         // The parser has already decided which token was the path, so it is asked rather than
         // counted here. `.` is the default, and a line that left it alone named nothing.
-        Naming::Positional => command.root().is_some_and(|root| root != &PathBuf::from(".")),
+        Naming::Positional => command
+            .root()
+            .is_some_and(|root| root != &PathBuf::from(".")),
     }
 }
 
@@ -496,11 +504,13 @@ fn assert_named_root(named: Option<&PathBuf>, repository: &Repository, argv: &[&
     let Some(named) = named else {
         return;
     };
-    let expected = repository.root().canonicalize().expect("the fixture exists");
+    let expected = repository
+        .root()
+        .canonicalize()
+        .expect("the fixture exists");
     let actual = named.canonicalize().unwrap_or_else(|_| named.clone());
     assert_eq!(
-        actual,
-        expected,
+        actual, expected,
         "the fixture did not point this command at its own repository, so it answered about \
          {named:?} — which is not a fixture. A new command shape, or a command line that names \
          a root the harness did not recognise, is the likely cause. {argv:?}"
