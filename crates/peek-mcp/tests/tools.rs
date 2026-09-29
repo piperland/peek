@@ -784,9 +784,8 @@ fn doctor_on_a_repository_with_no_index_reports_an_empty_index() {
         Some(0),
         "an empty index is not a broken one, and the counts say so: {diagnosis}"
     );
-    assert_eq!(
+    assert!(
         diagnosis["counts"]["pass"].as_u64().is_some_and(|n| n > 0),
-        true,
         "and the checks that ran report that they ran: {diagnosis}"
     );
 }
@@ -1804,9 +1803,8 @@ fn every_edge_in_a_pack_carries_its_resolution_state_and_its_candidates() {
         }
     }
     assert!(edges > 0, "the fixture's target has edges to carry: {pack}");
-    assert_eq!(
+    assert!(
         ambiguous > 0,
-        true,
         "and one of them is the planted ambiguity: {pack}"
     );
     assert!(
