@@ -332,6 +332,7 @@ pub fn open_store(location: &Location, command: &'static str) -> Result<Store, F
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use super::{Relative, relative_to, resolve_root};
     use crate::args::{self, Command};
     use crate::exit::{EXIT_USAGE, kind};

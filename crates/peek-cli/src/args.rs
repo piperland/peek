@@ -492,15 +492,19 @@ impl UsageError {
     pub fn command(&self) -> Option<&'static str> {
         match self {
             UsageError::FlagNotValidHere { command, .. }
-            | UsageError::NotANumber { command, .. }
-            | UsageError::MissingValue { command, .. }
             | UsageError::MissingArgument { command, .. }
             | UsageError::TooManyArguments { command, .. }
             | UsageError::NotUtf8 { command, .. } => Some(*command),
+            // `NotANumber` and `MissingValue` carry no command, and deliberately so: they can be
+            // raised before a command has been identified. They answer `None` here, which means
+            // the caller is shown the whole usage table — and that is the useful response for a
+            // mistyped value, because the accepted range is in the flag's help text.
             UsageError::UnknownFlag { .. }
             | UsageError::RepeatedFlag { .. }
             | UsageError::UnexpectedValue { .. }
-            | UsageError::UnknownCommand { .. } => None,
+            | UsageError::UnknownCommand { .. }
+            | UsageError::NotANumber { .. }
+            | UsageError::MissingValue { .. } => None,
         }
     }
 
