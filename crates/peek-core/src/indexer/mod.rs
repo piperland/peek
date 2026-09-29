@@ -22,6 +22,7 @@
 //! Removals precede upserts inside one transaction, so a path that is removed and re-added in the
 //! same batch ends up present. That is what lets a refresh replace a whole directory in one commit.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -29,8 +30,17 @@ use crate::discover::{
     DiscoveredFile, DiscoveryOptions, DiscoveryStats, FileDiscovery, WalkIssue, WalkIssueReason,
 };
 use crate::extract::ExtractedFile;
-use crate::model::{Language, RepoPath, ResolutionState};
+use crate::model::{Language, Relation, RelationKey, RepoPath, ResolutionState};
+use crate::resolve::{self, ResolutionOptions, ResolutionReport};
 use crate::store::{IndexUpdate, RepoId, Store, StoreError, UpdateStats, paths};
+
+/// How many entities of one file are read when collecting the edges a refresh is about to
+/// displace, and how many edges each of them may contribute.
+///
+/// A bound, because a file with a thousand callers would otherwise make one refresh read a
+/// thousand rows without limit. It is generous enough that the cap is not reached by ordinary
+/// code, and it is a named constant rather than a literal so that raising it is a visible act.
+const DISPLACED_EDGE_SCAN_LIMIT: usize = 2048;
 
 /// Everything an indexing run produced, including what it could not do.
 ///
@@ -56,7 +66,11 @@ pub struct IndexReport {
     /// Entity rows deleted, which is the store's `entities_removed` measured directly.
     pub entities_removed: u64,
     pub relations_written: u64,
-    /// Relations the extractor left `Pending`, awaiting the resolver. **Work remaining.**
+    /// Relations the extractor left `Pending`, before the resolution pass ran.
+    ///
+    /// The extractor never decides anything, so this is the *input* to resolution rather than a
+    /// result, and the result is [`Self::resolution`]. Reporting the input without the result
+    /// would be a report that says only what work is outstanding.
     pub relations_pending: u64,
     /// Relations the extractor could not resolve at all, with a stated reason.
     pub relations_unresolved: u64,
@@ -75,6 +89,14 @@ pub struct IndexReport {
     /// run rather than assumed to be zero: a checkpoint refused by a concurrent reader leaves a
     /// real number here, and a number is something `doctor` can act on.
     pub wal_bytes: u64,
+    /// What the second pass did: the decisions taken on the relations this run wrote, plus the
+    /// ones that already existed and pointed into the files that changed.
+    ///
+    /// `None` only if the resolution pass was not run, which no current caller does. It is an
+    /// `Option` because "a report without a resolution pass" and "a report whose resolution pass
+    /// decided nothing" are different facts, and collapsing them would be the same conflation
+    /// that made fourteen languages report as supported while extracting nothing.
+    pub resolution: Option<ResolutionReport>,
     /// Wall-clock time for the run.
     pub elapsed: Duration,
 }
@@ -82,10 +104,13 @@ pub struct IndexReport {
 impl IndexReport {
     /// A one-line summary for `peek status` and the MCP `index_status` primitive.
     pub fn summary(&self) -> String {
+        // The two passes are separate commits with separate failures, so their results are
+        // reported as separate clauses rather than interleaved. A reader who sees them mixed
+        // cannot tell which stage made a decision.
         format!(
             "generation {}: {} files indexed ({} skipped, {} unsupported, {} degraded), \
              {} removed, {} entities, {} relations ({} resolved, {} pending, {} ambiguous, \
-             {} unresolved, {} inferred), {} tests, wal {} bytes, {:?}",
+             {} unresolved, {} inferred), {} tests, wal {} bytes{}{}, {:?}",
             self.generation,
             self.files_indexed,
             self.files_skipped,
@@ -101,8 +126,16 @@ impl IndexReport {
             self.relations_inferred,
             self.tests_found,
             self.wal_bytes,
+            self.resolution.as_ref().map_or(String::new(), |r| format!("; {}", r.summary())),
             self.elapsed
-        )
+        );
+        match &self.resolution {
+            // The resolution clause is appended rather than folded into the counts above, because
+            // the two passes are separate commits with separate failures. A reader who sees them
+            // interleaved cannot tell which stage made a decision.
+            Some(resolution) => format!("{base}; {}", resolution.summary()),
+            None => base,
+        }
     }
 
     /// The five resolution states, added up.
@@ -209,8 +242,14 @@ pub fn open_store(root: &Path) -> Result<Store, IndexError> {
 
 /// Build a complete index of `root`.
 ///
-/// One discovery walk, one transaction. A failure anywhere leaves the previous generation intact
-/// and readable, which is the crash-safety requirement.
+/// Two transactions and one discovery walk. The first commits the extractor's output, the second
+/// commits the resolver's decisions about it. A failure in either leaves the previous generation
+/// intact and readable, which is the crash-safety requirement; a crash *between* them leaves a
+/// complete index whose relations are honestly `Pending`, which a later pass can finish.
+///
+/// The split is the resolver's decision, argued in [`resolve`]. In short: resolution is a
+/// function of the whole committed index, and it must be able to run over edges whose source file
+/// did not change.
 pub fn build_full(
     store: &mut Store,
     root: &Path,
@@ -236,15 +275,22 @@ pub fn build_full(
     let stats = store.apply_update(update)?;
     absorb(&mut outcome.report, &stats);
     outcome.report.generation = store.generation();
-    // Checkpoint after a bulk build. Measured on `rust-lang/regex`: 227 files left a write-ahead
-    // log of 30,479,792 bytes against a 30,199,808-byte database — a second full copy of the
-    // index, on disk, until something replayed or truncated it. Nothing was calling
+    // A full build leaves every one of its own relations `Pending`, and the second pass decides
+    // all of them. `resolve_all` is used rather than a path-scoped pass because a full build has
+    // no "changed" subset: everything is new, so there is nothing to scope to.
+    let resolution = resolve::resolve_all(store, ResolutionOptions::default())?;
+    outcome.report.generation = store.generation();
+    outcome.report.resolution = Some(resolution);
+
+    // Checkpoint **after** resolution, not before. Measured on `rust-lang/regex`: 227 files left a
+    // write-ahead log of 30,479,792 bytes against a 30,199,808-byte database — a second full copy
+    // of the index, on disk, until something replayed or truncated it. Nothing was calling
     // `checkpoint()`, so a user who indexed a repository and quit simply paid for it twice.
     //
     // A refused checkpoint is **not** a build failure: it means a reader holds a snapshot, the
-    // committed data is still correct, and the next run will get it. So the outcome is recorded
-    // as a measured WAL size rather than as an error, and `.ok()`-swallowed. The difference
-    // matters: the number is now visible, where before there was no signal at all.
+    // committed data is still correct, and the next run will fold the log in. So the outcome is
+    // recorded as a measured WAL size rather than as an error, and `.ok()`-swallowed. The
+    // difference matters: the number is now visible, where before there was no signal at all.
     let _ = store.checkpoint();
     outcome.report.wal_bytes = store.stats().map(|stats| stats.wal_size_bytes).unwrap_or(0);
     outcome.report.elapsed = started.elapsed();
@@ -256,6 +302,10 @@ pub fn build_full(
 /// Cost is proportional to the number of changed files, not to the size of the repository. A
 /// path that no longer exists is removed; one that does is re-extracted. That is the entirety of
 /// incremental indexing, and the reason a branch switch no longer costs a full rebuild.
+/// The resolution pass afterwards is scoped to the same paths **and to the relations that point
+/// into them**, which is the only way a refresh stays correct when a definition moves: the callers
+/// of a function that changed file did not change, so re-extracting the changed files alone would
+/// leave every one of their edges pointing at a target that is no longer there.
 pub fn refresh(
     store: &mut Store,
     root: &Path,
@@ -265,6 +315,10 @@ pub fn refresh(
     let started = Instant::now();
     let mut outcome = IndexOutcome::default();
     let mut update = IndexUpdate::empty();
+    let mut touched: Vec<RepoPath> = Vec::new();
+    // The edges that are about to point at nothing. Read *before* the write, because the write
+    // demotes them to a null target and they stop being findable by target afterwards.
+    let mut displaced: Vec<Relation> = Vec::new();
 
     for path in paths {
         let Some(relative) = RepoPath::from_path(path.strip_prefix(root).unwrap_or(path)) else {
@@ -275,6 +329,13 @@ pub fn refresh(
             });
             continue;
         };
+
+        // Every relation arriving at an entity of this file is about to have its target nulled:
+        // a refresh *always* removes a file's rows before re-inserting them, because an upsert
+        // alone would leave rows for symbols that no longer exist. Capturing those edges here is
+        // what lets the resolver decide them again afterwards, instead of every caller of a
+        // symbol in this file being left pointing at nothing the moment it is edited.
+        collect_incoming(store, &relative, &mut displaced)?;
 
         if !path.is_file() {
             update = update.removing_file(relative.clone());
@@ -334,6 +395,7 @@ pub fn refresh(
         };
 
         let extracted = crate::extract::extract_with(spec, relative.clone(), &text);
+        touched.push(relative);
         update = absorb_file(extracted, update, &mut outcome);
     }
 
@@ -342,12 +404,44 @@ pub fn refresh(
         absorb(&mut outcome.report, &stats);
     }
     outcome.report.generation = store.generation();
-    // A refresh is incremental and the write-ahead log is truncated on a timer anyway, so the
-    // cost of a checkpoint per keystroke is not worth paying. The size is still reported, so a
-    // watcher that is somehow not checkpointing shows up as a number rather than as silence.
+    // Scoped to the files that were re-extracted, plus the edges the removal above displaced.
+    // Both halves are needed: the first decides the new edges, the second repairs the old ones
+    // whose targets no longer exist. Neither is a full re-resolve, so a refresh stays
+    // proportional to what changed.
+    let resolution =
+        resolve::resolve_paths(store, &touched, &displaced, ResolutionOptions::default())?;
+    outcome.report.generation = store.generation();
+    outcome.report.resolution = Some(resolution);
+
+    // No checkpoint here. A refresh runs per keystroke under `watch`, and the write-ahead log is
+    // truncated on a timer regardless; paying a full checkpoint for every save would be the
+    // dominant cost of watching. The size is still reported, so a watcher that is somehow not
+    // checkpointing shows up as a number rather than as silence.
     outcome.report.wal_bytes = store.stats().map(|stats| stats.wal_size_bytes).unwrap_or(0);
     outcome.report.elapsed = started.elapsed();
     Ok(outcome)
+}
+
+/// Read every relation that arrives at an entity declared in `path`.
+///
+/// Read before the removal that would null their targets. The store's demotion step is what
+/// makes the removal safe — a nulled target would otherwise leave a row claiming `resolved`
+/// with nothing behind it — and it is also what makes these edges unreachable afterwards:
+/// [`Store::incoming`] matches on `target_path`, and a demoted edge has none.
+fn collect_incoming(
+    store: &Store,
+    path: &RepoPath,
+    into: &mut Vec<Relation>,
+) -> Result<(), StoreError> {
+    let mut seen: BTreeSet<RelationKey> = BTreeSet::new();
+    for entity in store.entities_in_file(path, DISPLACED_EDGE_SCAN_LIMIT)? {
+        for relation in store.incoming(&entity.id, None, DISPLACED_EDGE_SCAN_LIMIT)? {
+            if seen.insert(relation.natural_key()) {
+                into.push(relation);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Read and extract one discovered file, folding it into `update`.

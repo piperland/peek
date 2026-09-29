@@ -323,6 +323,14 @@ fn resolution_from_sql(
         ("resolved", ResolutionState::Resolved { by }) => {
             ResolutionState::Resolved { by: by.clone() }
         }
+        // The state the resolver's *input* arrives in. The write path could already store it —
+        // the `resolution_state` CHECK lists `pending` — but the reader had no arm for it, so
+        // every `pending` row decoded as `Corrupt` and no query could ever return one. A state
+        // that cannot be read back is a state the second pass cannot consume.
+        ("pending", ResolutionState::Pending { evidence, basis }) => ResolutionState::Pending {
+            evidence: evidence.clone(),
+            basis: basis.clone(),
+        },
         ("unresolved", ResolutionState::Unresolved { reason }) => ResolutionState::Unresolved {
             reason: reason.clone(),
         },

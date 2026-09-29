@@ -17,6 +17,7 @@ pub mod discover;
 pub mod extract;
 pub mod indexer;
 pub mod model;
+pub mod resolve;
 pub mod store;
 
 #[cfg(test)]
