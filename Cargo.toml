@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/peek-core", "crates/peek-cli"]
+members = ["crates/peek-core", "crates/peek-cli", "crates/peek-mcp"]
 resolver = "3"
 
 [workspace.package]
