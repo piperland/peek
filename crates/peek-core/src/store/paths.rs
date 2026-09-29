@@ -313,7 +313,8 @@ mod tests {
         // service manager often passes. Treating it as a path would put the index in the process's
         // working directory, which is the bug this module exists to prevent.
         with_index_dir_value(Some(std::ffi::OsStr::new("")), || {
-            let resolved = root().expect("an empty override must fall back to the platform default");
+            let resolved =
+                root().expect("an empty override must fall back to the platform default");
             assert!(
                 !resolved.as_os_str().is_empty(),
                 "the index root must never be the empty path"
