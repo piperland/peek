@@ -1135,8 +1135,11 @@ fn rm_on_a_path_the_index_never_held_reports_a_measured_zero() {
     assert_eq!(outcome.output.exit_code, 0);
     match &outcome.output.answer {
         Answer::Remove(answer) => {
-            assert_eq!(answer.indexed_paths_removed, 0);
-            assert_eq!(answer.entities_removed, 0);
+            // Both assertions carry the whole answer, so a failure says which field was wrong
+            // *and* what the removal actually scoped, did and claimed — which is the difference
+            // between a number that is off and a number that means something has gone wrong.
+            assert_eq!(answer.indexed_paths_removed, 0, "{answer:?}");
+            assert_eq!(answer.entities_removed, 0, "{answer:?}");
             assert!(
                 answer.notes.iter().any(|note| note.contains("measurement")),
                 "the zero must be labelled a measurement: {:?}",
