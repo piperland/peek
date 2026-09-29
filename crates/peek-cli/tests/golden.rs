@@ -381,29 +381,38 @@ fn a_broken_install_renders_exactly_as_committed() {
     assert_golden("doctor-broken", DOCTOR_BROKEN, &actual);
 }
 
+// Not a golden: the numbers depend on the fixture's size and would make the file brittle.
+// Asserted on the statements instead, which is the point — the refusal names the minimum, and the
+// answer says so rather than being a help document.
+//
+// # Two of the assertions this test used to make were not true, and why
+//
+// It was ignored because it failed, and its body asserted that the answer of a refused
+// `peek context --budget 70` is an `Answer::Context` with `refused` set, an empty pack, and a
+// rendering containing `status: insufficient` and `at least`. None of that is what this budget
+// produces:
+//
+// * **There is no pack.** 70 is below the engine's report reserve, so `context` refuses before
+//   calling the engine at all — that is the `budget_too_small` refusal this test still asserts, by
+//   name. A `ContextAnswer` would have to describe a pack that was never compiled, and a
+//   `ContextAnswer` with an empty pack is the *other* refusal: a budget large enough to hold the
+//   report and too small for the target, which the engine does answer, with units, omissions and a
+//   floor. `ContextAnswer::refused` is the flag for that one and it is set there.
+// * **`status: insufficient` and `at least` come from `ContextPack::render`**, so they exist only
+//   when a pack was compiled. The floor for *this* refusal is rendered by `Refusal::render`, which
+//   says `the smallest budget that would have been accepted is N token(s)`, and that is what is
+//   asserted below.
+//
+// So the test now asserts what this command actually produces, which is the thing the whole finding
+// was about: the answer is the refusal, and it says why exactly once.
 #[test]
-// **Ignored against R-014**, and the body of this test is the reproduction.
-//
-// `peek context --budget 70` on a fixture with a 178-token floor sets `Status::Refused` and exit
-// code 3 — both correct — and then carries `Answer::Help` as its answer. So the refusal message is
-// printed (the renderer appends it after the answer) while the answer itself is the command list.
-// Anything reading the answer: a script, an agent, the JSON mode, sees a help document where a
-// refusal belongs.
-//
-// The assertion below is left in place and left failing rather than deleted. A test removed the
-// moment it finds something cannot be trusted to find it again; the `#[ignore]` and this comment
-// are what make the finding survive instead.
-#[ignore = "R-014: a refused answer carries the help text instead of the refusal"]
 fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
-    // Not a golden: the numbers depend on the fixture's size and would make the file brittle.
-    // Asserted on the statements instead, which is the point — the refusal names the minimum, and
-    // the answer says the pack is empty.
     let repository = Repository::small("golden-context-refused");
     render(&repository, &["index", repository.root_str()]);
     // Through `fixture::run`, not `run_any`: a refusal comes back from the library as an
-    // `Err(Failure)`, and only the binary's entry point unifies that into an `Output` with a
-    // status. This is the one place the test needs the unified form, because it is asserting on the
-    // refusal the *caller* sees.
+    // `Err(Failure)`, and only the place the two representations meet turns that into an `Output`
+    // with a status. This is the one place the test needs the unified form, because it is
+    // asserting on what the *caller* receives.
     let output = fixture::run(
         &repository,
         &[
@@ -417,61 +426,69 @@ fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
     )
     .output;
 
-    // **Ignored against R-014**, and this is the whole body of the test that would have caught it.
-    //
-    // The status and the exit code are right — 3, `Refused` — and the *answer* is the help text.
-    // So `peek context --budget 70` on a fixture with a 178-token floor tells the user their budget
-    // is too small, sets the exit code that says so, and then prints the command list instead of
-    // the refusal. The refusal message is still present, because `Output::render` appends it after
-    // the answer; but the answer itself is `Help`, and anything reading the answer — a script, an
-    // agent, the JSON mode — sees a help document where a refusal belongs.
-    //
-    // Left as a live assertion rather than removed, and left failing, because a test that is
-    // deleted the moment it finds something is a test that cannot be trusted to find it again.
-    if let Answer::Context(answer) = &output.answer {
-        assert!(
-            answer.refused,
-            "the answer must say it was refused: {answer:?}"
-        );
-        assert!(
-            answer.pack.units.is_empty(),
-            "a refused pack contains nothing, and saying so is the answer: {answer:?}"
-        );
-    } else {
-        panic!(
-            "R-014: a refused context answer must carry the refusal, not the help text; got {:?}",
-            output.answer
-        );
-    }
-
-    let _ = &output;
-    assert_eq!(
-        output.exit_code, 3,
-        "a pack with no target in it is a refusal"
-    );
     assert_eq!(output.status, Status::Refused);
-    // Borrowed, not taken: `output` is rendered below, and moving the refusal out of it would
-    // partially move the value the render borrows.
-    let refusal = output.refusal.as_ref().expect("a refusal must be carried");
+    assert_eq!(output.exit_code, 3, "a budget below the report floor is a refusal");
+
+    // The answer is the refusal. A budget of 70 cannot hold the report that would say what was
+    // left out, so the engine never compiled a pack and there is nothing for a `ContextAnswer` to
+    // describe — the whole result is the reason, and that is what the answer field now carries.
+    let answer = match &output.answer {
+        Answer::Declined(answer) => answer,
+        other => panic!(
+            "a refused context must carry the refusal as its answer, not the command list; got {other:?}"
+        ),
+    };
     assert_eq!(
-        refusal.kind.as_str(),
+        answer.status, Status::Refused,
+        "the answer states the status the envelope does, so the two cannot disagree"
+    );
+    assert_eq!(answer.command, "context", "the answer names what declined");
+    assert_eq!(
+        answer.refusal.kind.as_str(),
         // The engine's own word, not the CLI's JSON tag. `Query::peek` refuses with
         // `BudgetTooSmall`, and a refusal that renames the reason it is reporting is a refusal
         // that has to be translated twice.
         peek_cli::exit::kind::BUDGET_TOO_SMALL
     );
+    let minimum = answer
+        .refusal
+        .minimum_tokens
+        .expect("a refused budget must state the floor that would have worked");
     assert!(
-        refusal.minimum_tokens.is_some(),
-        "a refused budget must state the floor that would have worked: {refusal:?}"
+        minimum > 70,
+        "the floor must exceed the budget that was refused: {minimum}"
+    );
+    assert!(
+        !answer.did_not.is_empty(),
+        "a command that did not answer states what it did not do, or a failure reads as an \
+         answer that happened to be short: {answer:?}"
+    );
+
+    // One reason, carried once. The envelope and the answer hold the same refusal because they
+    // are the same refusal, and the human rendering states it a single time — a reader who finds
+    // the same paragraph twice has to work out which of the two was the answer.
+    let envelope = output.refusal.as_ref().expect("a refusal must be carried");
+    assert_eq!(
+        envelope, &answer.refusal,
+        "the envelope and the answer must not be able to disagree about why"
     );
     let text = output.render();
-    assert!(
-        text.contains("status: insufficient"),
-        "the pack must say it could not fit: {text}"
+    assert_eq!(
+        text.matches(answer.refusal.message.as_str()).count(),
+        1,
+        "the reason must be stated once, not printed after the answer as well: {text}"
     );
     assert!(
-        text.contains("at least"),
+        text.contains("smallest budget") && text.contains(&minimum.to_string()),
         "the floor must be printed: {text}"
+    );
+    assert!(
+        text.contains("could not:"),
+        "what the command did not do must be printed too: {text}"
+    );
+    assert!(
+        !text.contains("commands:") && !text.contains("exit codes:"),
+        "a refusal must not render as the command list: {text}"
     );
 }
 
