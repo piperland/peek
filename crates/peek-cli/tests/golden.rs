@@ -9,8 +9,9 @@
 //! one of which is the defect class this project exists to remove.
 //!
 //! So these tests compare the **whole** rendering, byte for byte, against a committed file. The
-//! goldens are force-added (`git add -f`) because the repository ignores `*.txt`, and that ignore
-//! rule is right for scratch files and wrong for a file a test fails on.
+//! goldens are tracked like any other test fixture, and the file they live in is where a test
+//! failure points — a golden that is not committed is a golden nobody is checking, and the
+//! regeneration command below is the only way one gets written.
 //!
 //! # Regenerating a golden
 //!
@@ -25,13 +26,25 @@
 //!
 //! # What is compared, and what is not
 //!
-//! Byte for byte, with two substitutions, and both are named in [`normalise`]:
+//! Byte for byte, with three substitutions, and all three are named in [`normalise`] and pinned by
+//! a test of their own:
 //!
-//! * the repository's own path, which differs per run, and
-//! * the index file's path, likewise.
+//! * the repository's own path, which is a fresh temporary directory on every run,
+//! * the index file's path, which sits inside a per-run cache directory, and
+//! * the repository's identity, a hash of that same path, which `doctor` prints in its
+//!   `repository_identity` finding.
 //!
 //! Everything else — the wording, the order, the numbers, the arithmetic — is compared exactly. A
 //! formatter that starts inventing a number, dropping a line, or reordering the budget fails here.
+//!
+//! # A golden that only holds once is not a golden
+//!
+//! Two of the three values above are functions of *where the fixture was created*, so a golden
+//! written on one machine could not be verified on the next one. That failure reads as a wording
+//! change, which is the reading that teaches everyone to regenerate until it goes green. So the
+//! suite carries two tests that catch that class of defect with no golden involved: one renders the
+//! same command twice against one repository, the other renders it against two different ones, and
+//! both require the text to come out identical.
 
 // `expect` and `panic` are denied workspace-wide; an integration test is a separate crate and does
 // not inherit the library's exemption. See `real_repository.rs` for the same justification.
@@ -49,6 +62,20 @@ use peek_core::query::BudgetStatus;
 
 /// The marker an ungenerated golden carries, so it fails loudly rather than comparing equal.
 const UNGENERATED: &str = "PEEK_UPDATE_GOLDENS";
+
+/// Every golden, by name.
+///
+/// One list, because the calls that write them and the test that checks them are the two halves of
+/// one claim, and a hand-kept second list is a list that can fall behind. A golden that exists and
+/// is never written is a file nobody reads; one that is written and never checked is a file nobody
+/// maintains. The name is a filename, so a golden cannot be written under one name and read under
+/// another.
+const GOLDENS: [&str; 4] = [
+    "context-complete",
+    "context-reduced",
+    "doctor-healthy",
+    "doctor-broken",
+];
 
 /// Whether the caller asked for the goldens to be rewritten.
 fn updating() -> bool {
@@ -93,23 +120,50 @@ fn read_golden(name: &str) -> String {
     })
 }
 
+/// The three rules a golden has to satisfy, whichever side of the write it arrived on.
+///
+/// **Applied to the text a run writes as well as the text a run reads**, which is what lets the
+/// presence test below leave them to this function while the goldens are being generated. A golden
+/// that is empty or a placeholder fails the byte comparison for the wrong reason, and a golden that
+/// is one run's *raw* output fails every run after it while reading exactly like a wording change —
+/// so the rules are checked where the text exists, not only where it is committed.
+fn assert_substance(name: &str, text: &str) {
+    assert!(
+        !text.contains(UNGENERATED),
+        "the golden for {name} has never been generated; run \
+         `PEEK_UPDATE_GOLDENS=1 cargo test --test golden` and commit the result. A golden that \
+         is missing must fail, not pass"
+    );
+    assert!(
+        text.lines().count() > 3,
+        "the golden for {name} is too short to be a real rendering: {text:?}"
+    );
+    // A raw copy of one run carries the path of the machine that produced it, and the fixture is
+    // built in a fresh temporary directory every time, so that path is new on every run. The
+    // substitution in `normalise` is what makes the file portable; this is the check that the
+    // substitution actually happened, and it is the one that fails if a golden is pasted in from a
+    // terminal instead of written by a run.
+    let machine = std::env::temp_dir().display().to_string();
+    assert!(
+        !text.contains(&machine),
+        "the {name} golden names {machine}, a directory on the machine that wrote it, so it is \
+         one run's raw output rather than a normalised rendering: {text:?}"
+    );
+}
+
 /// Compare a rendering against a golden, or write it when asked to.
 ///
 /// The write path is the only way a golden changes, and it is behind an environment variable so
 /// that regenerating one is a deliberate act rather than something a test run does by accident.
 fn assert_golden(name: &str, actual: &str) {
     if updating() {
-        std::fs::write(golden_path(name), format!("{actual}\n")).expect("write the golden");
+        let written = format!("{actual}\n");
+        assert_substance(name, &written);
+        std::fs::write(golden_path(name), &written).expect("write the golden");
         return;
     }
     let expected = read_golden(name);
-    if expected.contains(UNGENERATED) {
-        panic!(
-            "the golden for {name} has never been generated; run \
-             `PEEK_UPDATE_GOLDENS=1 cargo test --test golden` and commit the result. A golden that \
-             is missing must fail, not pass"
-        );
-    }
+    assert_substance(name, &expected);
     assert_eq!(
         actual.trim_end(),
         expected.trim_end(),
@@ -150,15 +204,110 @@ fn run_any(repository: &Repository, argv: &[&str]) -> peek_cli::Output {
     outcome.expect("the command must produce an output")
 }
 
-/// Replace the two machine-dependent substrings with fixed placeholders.
+/// Replace the three machine-dependent values with fixed placeholders.
 ///
-/// **Exactly two**, and named in the failure message so a reader can see what was elided. Anything
-/// else that varies per run is a defect in the output rather than an artefact of the test — an
-/// elapsed time, a generation, a token count. Those are all deterministic for a fixed fixture,
-/// which is why the fixture is committed rather than generated.
+/// **Exactly three, and each one is a fact about the run rather than about the answer.** A golden
+/// that pinned any of them could not be verified twice, which is not a property a golden is allowed
+/// to have. Each has a test of its own below that says what the value is and that the substitution
+/// is no wider than that value:
+///
+/// * the repository's own path,
+/// * the index file's path, and
+/// * the repository's identity, a 128-bit hash of the canonical root and the git common directory.
+///
+/// The third was missing for a while and the cost was a `doctor` golden that failed against a file
+/// written minutes earlier, with a diff full of a hash and no other difference — so it has a test
+/// that fails if the substitution is ever removed again.
+///
+/// Anything else that varies per run is a defect in the output rather than an artefact of the test:
+/// an elapsed time, a timestamp, a count that a previous run in this binary advanced. Those are all
+/// deterministic for a fixed fixture, which is why the fixture is committed rather than generated,
+/// and which is what the two tests that render the same command twice are there to say.
 fn normalise(text: &str, repository: &Repository) -> String {
     text.replace(repository.root_str(), "<root>")
         .replace(&repository.index_path().display().to_string(), "<index>")
+        .replace(&repository.identity(), "<repo-id>")
+}
+
+/// The repository's path is replaced, and the words around it are not.
+///
+/// **Why the value cannot be in a golden.** The fixture is built in a fresh temporary directory on
+/// every run, so the path any command prints is new every time. **Why replacing it is right:** the
+/// value is an artefact of where the test ran, and the golden is about the sentence — this asserts
+/// the substitution is that narrow, so a `<root>` that swallowed a neighbouring word, or a command
+/// that printed a second path with a different shape, both fail here rather than in a diff.
+#[test]
+fn the_repository_path_is_the_only_thing_normalise_replaces_in_it() {
+    let repository = Repository::small("golden-normalise-root");
+    let root = repository.root_str();
+    let text = format!("indexed at {root}, sources under {root}/src");
+    let actual = normalise(&text, &repository);
+    assert_eq!(
+        actual,
+        "indexed at <root>, sources under <root>/src",
+        "the repository's path is the whole of what is replaced: {actual}"
+    );
+}
+
+/// The index file's path is replaced, and the words around it are not.
+///
+/// **Why the value cannot be in a golden.** It sits inside the per-run cache directory, so it
+/// changes with the run. **Why replacing it is right:** `doctor` prints that exact path twice — in
+/// `index_openable` and again in `index_location` — and a golden that pins it pins two different
+/// directories on two different machines while missing the thing a reader would notice, which is
+/// that the two lines named the same file. The assertion holds the two occurrences together, so
+/// that stays checked.
+#[test]
+fn the_index_path_is_the_only_thing_normalise_replaces_in_it() {
+    let repository = Repository::small("golden-normalise-index");
+    let index = repository.index_path().display().to_string();
+    let text = format!(
+        "the index at {index} opened\n        the index lives at {index}"
+    );
+    let actual = normalise(&text, &repository);
+    assert_eq!(
+        actual,
+        "the index at <index> opened\n        the index lives at <index>",
+        "the index's path is the whole of what is replaced, in both places it appears: {actual}"
+    );
+}
+
+/// The repository's identity is replaced, and two directories really do disagree about it.
+///
+/// **Why the value cannot be in a golden.** `RepoId::discover` hashes the canonical root and the
+/// git common directory, and the fixture's root is a fresh temporary directory, so the identity is
+/// a new value on every run. `doctor` prints it twice inside its `repository_identity` finding, and
+/// once it is unsubstituted it is the whole of the diff. **Why replacing it is right:** an identity
+/// is a cache key. It is useful to a user holding two checkouts and useless to a reader of a
+/// committed file, and pinning one in a golden would make the file valid on exactly one machine.
+///
+/// Asserted in three parts because each rules out a different way of getting it wrong: the two
+/// fixtures really do have different identities, so the substitution is doing work; the sentence
+/// around the hash survives intact; and no part of the hash is left behind, which is what a
+/// substitution that matched a prefix rather than the whole value would leave.
+#[test]
+fn the_repository_identity_is_replaced_and_two_fixtures_disagree_about_it() {
+    let first = Repository::small("golden-normalise-identity-a");
+    let second = Repository::small("golden-normalise-identity-b");
+    assert_ne!(
+        first.identity(),
+        second.identity(),
+        "two fixtures are two directories, and the identity is what tells them apart — if these \
+         were equal there would be nothing here to substitute"
+    );
+    let identity = first.identity();
+    let text = format!("the index belongs to this checkout ({identity})");
+    let actual = normalise(&text, &first);
+    assert_eq!(
+        actual,
+        "the index belongs to this checkout (<repo-id>)",
+        "the sentence must survive with only the hash replaced: {actual}"
+    );
+    assert!(
+        !actual.contains(identity.as_str()),
+        "the identity is a 64-character hash and nothing else, so one substitution removes all of \
+         it: {actual}"
+    );
 }
 
 #[test]
@@ -278,28 +427,41 @@ fn render_any(repository: &Repository, argv: &[&str]) -> String {
     }
 }
 
-#[test]
-fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped() {
-    // The case the whole rule about budgets exists for. A smaller budget must produce a smaller
-    // answer that *says* it is smaller, and the golden pins both halves: the `dropped:` block and
-    // the `status: reduced` line.
-    let repository = Repository::small("golden-context-reduced");
-    render(&repository, &["index", repository.root_str()]);
+/// A pack big enough to hold the whole neighbourhood, which is the case that is neither refused
+/// nor reduced.
+fn complete_context(repository: &Repository) -> String {
+    render(
+        repository,
+        &[
+            "context",
+            "wallet_charge",
+            "--budget",
+            "20000",
+            "--root",
+            repository.root_str(),
+        ],
+    )
+}
 
-    // The budget is **found**, not written down. An earlier version of this test hardcoded 80,
-    // which is below the engine's report reserve — so the command was refused rather than reduced
-    // and the test was asserting on a refusal while claiming to test a reduced pack. A budget that
-    // is below the floor is not a small budget, it is a rejected one, and the two are different
-    // outputs with different meanings.
-    //
-    // So: start from a budget that certainly fits, and halve until the engine reports the pack as
-    // reduced rather than complete. That is a sweep rather than a constant, so the golden keeps
-    // testing what it names when the floor, the reserve or the neighbourhood changes.
+/// The budget at which this repository's pack is reduced rather than complete, found by halving.
+///
+/// **Found, never written down, and shared by both tests that need one.** A hardcoded budget breaks
+/// the moment the report reserve, the neighbourhood or the fixture changes, and it breaks
+/// silently: a constant that lands above the floor and below the neighbourhood tests `complete`
+/// under a name that says `reduced`. A budget below the floor is worse still, because that is a
+/// *refusal* — exit 3, an error string, and no pack at all — so a test asserting on a refused
+/// rendering while claiming to test a reduced one passes for the wrong reason.
+///
+/// **The condition is the one that was once inverted here and in the test beside it**, which is
+/// what the finding that parked this golden was built on: a sweep that takes the first budget whose
+/// pack is *not* reduced stops at the largest one, renders a `complete` pack, and then fails an
+/// assertion that the rendering says `reduced`. A test that finds its input by the negative of the
+/// property it is testing is not testing the property.
+fn sweep_for_a_reduced_budget(repository: &Repository) -> u64 {
     let mut budget = 100_000u64;
-    let mut reduced_at = None;
     for _ in 0..24 {
         let answer = run_any(
-            &repository,
+            repository,
             &[
                 "context",
                 "wallet_charge",
@@ -311,14 +473,98 @@ fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped
         );
         if matches!(answer.answer, Answer::Context(ref a) if a.pack.budget.status == BudgetStatus::Reduced)
         {
-            reduced_at = Some(budget);
-            break;
+            return budget;
         }
         budget /= 2;
     }
-    let Some(reduced_at) = reduced_at else {
-        panic!("no budget in the sweep produced a reduced pack; the fixture is too small to omit");
-    };
+    panic!(
+        "no budget in the sweep produced a reduced pack; the fixture is too small to omit"
+    );
+}
+
+/// The same command, twice against one repository, has to produce the same text.
+///
+/// **This is the "two runs" test, and it covers the half of instability a single run cannot
+/// see.** Rendering a command once and comparing it with a golden says the rendering matches a
+/// file. It says nothing about whether the rendering is a *function of the command*, so anything a
+/// first run leaves behind for a second one to inherit — a counter the process advances, a cache
+/// the first run warmed, a name derived from a sequence number — is invisible to the comparison
+/// and visible here.
+///
+/// It is the test the `doctor-healthy` failure ought to have been caught by, and it is a test
+/// rather than a note because a note is not run.
+#[test]
+fn a_rendering_is_the_same_text_when_the_same_command_is_run_twice() {
+    let repository = Repository::small("golden-stable-twice");
+    render(&repository, &["index", repository.root_str()]);
+    let doctor = ["doctor", "--root", repository.root_str()];
+    let first_doctor = normalise(&render(&repository, &doctor), &repository);
+    let second_doctor = normalise(&render(&repository, &doctor), &repository);
+    assert_eq!(
+        second_doctor,
+        first_doctor,
+        "doctor produced two different texts for one unchanged index, so something in the \
+         rendering is a function of the run rather than of the repository"
+    );
+    let first_context = normalise(&complete_context(&repository), &repository);
+    let second_context = normalise(&complete_context(&repository), &repository);
+    assert_eq!(
+        second_context,
+        first_context,
+        "context produced two different texts for one unchanged index, so something in the \
+         rendering is a function of the run rather than of the repository"
+    );
+}
+
+/// Two fixtures, in two temporary directories, have to render as the same text.
+///
+/// **The stronger half, and the one that catches a value derived from the path.** Two runs of the
+/// same process share a process id and not a fixture directory; two fixtures in one process share a
+/// process id and not a directory. Either way a value that is a function of where the fixture was
+/// created is a new value, which is the shape of the defect that made `doctor-healthy` fail against
+/// a golden written minutes earlier: `doctor` prints the repository's identity, a hash of the
+/// canonical root, and the fixture's root is a fresh temporary directory every time.
+///
+/// The un-normalised pair is compared too, and only for `doctor`, because a test that passes for
+/// the wrong reason is worse than no test: if the two directories produced the same text before
+/// normalisation, this would be asserting that two equal strings are equal and the substitutions
+/// would be untested. The `context` rendering names no path at all, so its two texts are already
+/// identical here and there is nothing to assert before normalisation.
+#[test]
+fn a_rendering_is_the_same_text_from_two_different_temporary_directories() {
+    let first = Repository::small("golden-stable-where-a");
+    let second = Repository::small("golden-stable-where-b");
+    render(&first, &["index", first.root_str()]);
+    render(&second, &["index", second.root_str()]);
+
+    let first_doctor = render(&first, &["doctor", "--root", first.root_str()]);
+    let second_doctor = render(&second, &["doctor", "--root", second.root_str()]);
+    assert_ne!(
+        first_doctor,
+        second_doctor,
+        "two fixtures must render differently before normalisation, or this test would be \
+         comparing a string with itself and would pass whatever the substitutions did"
+    );
+    assert_eq!(
+        normalise(&second_doctor, &second),
+        normalise(&first_doctor, &first),
+        "the same diagnosis in two directories is the same answer and must be the same text"
+    );
+    assert_eq!(
+        normalise(&complete_context(&second), &second),
+        normalise(&complete_context(&first), &first),
+        "the same pack in two directories is the same answer and must be the same text"
+    );
+}
+
+#[test]
+fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped() {
+    // The case the whole rule about budgets exists for. A smaller budget must produce a smaller
+    // answer that *says* it is smaller, and the golden pins both halves: the `dropped:` block and
+    // the `status: reduced` line.
+    let repository = Repository::small("golden-context-reduced");
+    render(&repository, &["index", repository.root_str()]);
+    let reduced_at = sweep_for_a_reduced_budget(&repository);
 
     let text = render_any(
         &repository,
@@ -333,14 +579,8 @@ fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped
     );
     let actual = normalise(&text, &repository);
 
-    // The **data** carries the claim, and that is what is asserted here.
-    //
-    // The human rendering of a `Reduced` pack is currently wrong: it prints the title and then
-    // nothing, where the engine's own `ContextPack::render` prints the budget line, every unit and
-    // every edge. Recorded as R-013 with the evidence. Asserting on the rendered text here would
-    // either fail on every run or have to be relaxed into meaninglessness, and a weakened
-    // assertion is worse than none — so the claim is checked where it is actually true, and the
-    // broken rendering is a separate, named defect rather than a silently accepted one.
+    // The **data** carries the claim, and that is what is asserted here: a reduced pack must say
+    // what it left out, with a reason, before anything is said about how it is worded.
     let output = fixture::run(
         &repository,
         &[
@@ -374,49 +614,35 @@ fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped
         other => panic!("expected a context answer, got {other:?}"),
     }
 
-    // The rendering assertions live in `a_reduced_pack_renders_its_units_and_edges` and are
-    // `#[ignore]`d against R-013, which is where the broken rendering is recorded. Splitting them
-    // out is deliberate: this test's job is the *claim* (a reduced pack names what it dropped) and
-    // the ignored test's job is the *wording*. When R-013 is fixed, one `#[ignore]` comes off and
-    // a golden is filled in, and neither change can quietly alter what the other asserts.
-    let _ = actual;
+    // The wording, pinned whole. Whether the prose actually carries the units and edges it claims
+    // to is `a_reduced_pack_renders_its_units_and_edges`, which asserts it against the data and so
+    // survives a rewording; this is where the exact text lives, and a reword is a deliberate act
+    // that shows up in a diff.
+    assert_golden("context-reduced", &actual);
 }
 
-/// **Ignored against R-013.** The human rendering of a `Reduced` pack prints its title and then
-/// nothing, where the engine's `ContextPack::render` prints the budget line, every unit and every
-/// edge. The data is correct and is asserted by
-/// `a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped`; this test is
-/// about the *wording*, and it cannot be written until the wording is right.
+/// The prose of a reduced pack, compared against the data it was made from.
+///
+/// **This is the test the finding R-013 was parked against, and R-013 does not describe this
+/// code.** It claimed a `Reduced` pack "renders as its title and nothing else". The path says
+/// otherwise: `ContextAnswer::render` opens with `pack.render(true)`, and `ContextPack::render` is
+/// the report followed by every unit and every edge, with no branch on the status anywhere in it.
+/// The reproduction that seemed to show the loss had an inverted sweep — it took the first budget
+/// whose pack was *not* reduced, rendered that, and asserted the text said `reduced`, which is
+/// precisely what a `complete` pack correctly does not say. Correcting the sweep corrected the
+/// test; the finding and the `#[ignore]` were never revisited, and a golden that nothing wrote
+/// stayed on the list of files the suite required.
+///
+/// So the claim is asserted in the form that would have caught it had it been true, and in a form
+/// that survives a rewording: **every unit and every edge the pack holds is in the text.** A golden
+/// pins the words; this pins the link between the words and the data, which is the seam the finding
+/// was about — the same seam as R-014, and the one a formatter is otherwise never compared across.
 #[test]
-#[ignore = "R-013: a reduced context pack renders as its title and nothing else"]
 fn a_reduced_pack_renders_its_units_and_edges() {
     let repository = Repository::small("golden-context-reduced-render");
     render(&repository, &["index", repository.root_str()]);
-    let mut budget = 100_000u64;
-    let mut reduced_at = None;
-    for _ in 0..24 {
-        let answer = run_any(
-            &repository,
-            &[
-                "context",
-                "wallet_charge",
-                "--budget",
-                &budget.to_string(),
-                "--root",
-                repository.root_str(),
-            ],
-        );
-        if matches!(answer.answer, Answer::Context(ref a) if a.pack.budget.status == BudgetStatus::Reduced)
-        {
-            reduced_at = Some(budget);
-            break;
-        }
-        budget /= 2;
-    }
-    let Some(reduced_at) = reduced_at else {
-        panic!("no budget produced a reduced pack");
-    };
-    let text = render_any(
+    let reduced_at = sweep_for_a_reduced_budget(&repository);
+    let output = fixture::run(
         &repository,
         &[
             "context",
@@ -426,10 +652,52 @@ fn a_reduced_pack_renders_its_units_and_edges() {
             "--root",
             repository.root_str(),
         ],
+    )
+    .output;
+    assert_eq!(
+        output.exit_code,
+        0,
+        "a reduced pack is an answer with limits, not a refusal"
     );
-    let actual = normalise(&text, &repository);
-    assert!(actual.contains("status: reduced"), "{actual}");
-    assert!(actual.contains("dropped:"), "{actual}");
+    let Answer::Context(answer) = &output.answer else {
+        panic!("expected a context answer, got {:?}", output.answer);
+    };
+    assert_eq!(
+        answer.pack.budget.status,
+        BudgetStatus::Reduced,
+        "the sweep found this budget by observing this status: {answer:?}"
+    );
+
+    let text = output.render();
+    assert!(
+        text.contains("status: reduced"),
+        "a pack that dropped something must say so: {text}"
+    );
+    assert!(
+        text.contains("dropped:"),
+        "a pack that dropped something must name what it dropped: {text}"
+    );
+
+    // The linkage, unit by unit and edge by edge. Rendered with the flag the CLI itself passes,
+    // `ContextAnswer::render` calling `pack.render(true)`, so a line missing here is a line the
+    // reader would not have seen rather than a difference in how this test asked for it.
+    assert!(
+        !answer.pack.units.is_empty(),
+        "a reduced pack holding no units is an empty one whatever its status says: {answer:?}"
+    );
+    for unit in &answer.pack.units {
+        let line = unit.render();
+        assert!(
+            text.contains(&line),
+            "the pack holds a unit the rendering never prints: {line}\n{text}"
+        );
+        for edge in unit.render_edges(true) {
+            assert!(
+                text.contains(&edge),
+                "the pack holds an edge the rendering never prints: {edge}\n{text}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -660,34 +928,48 @@ fn a_context_with_no_budget_is_refused_rather_than_given_an_invented_one() {
 #[test]
 fn the_golden_files_are_present_and_non_trivial() {
     // A golden that was accidentally committed empty would make every comparison above pass
-    // vacuously, so its substance is asserted directly. **An ungenerated golden fails here**, and
-    // that is the point of the test rather than an exception to it: this loop used to `continue`
-    // past the marker, which meant a repository where no golden had ever been produced reported
-    // every golden as present and non-trivial. The three comparisons above were already failing
-    // for the same reason — but they failed on a *missing file*, one test at a time, and the test
-    // whose entire job was to notice had skipped them. Regenerate with
+    // vacuously, so its substance is checked here on the committed file. **An ungenerated golden
+    // fails this test**, and that is the point of it rather than an exception to it: this loop used
+    // to `continue` past the marker, which meant a repository where no golden had ever been
+    // produced reported every golden as present and non-trivial. The comparisons above were
+    // already failing for the same reason — but they failed on a *missing file*, one test at a
+    // time, and the test whose entire job was to notice had skipped them. Regenerate with
     // `PEEK_UPDATE_GOLDENS=1 cargo test --test golden` and commit the result; there is no mode in
     // which a placeholder is the right content to commit.
-    for name in [
-        "context-complete",
-        "context-reduced",
-        "doctor-healthy",
-        "doctor-broken",
-    ] {
-        let text = read_golden(name);
-        assert!(
-            !text.contains(UNGENERATED),
-            "the golden for {name} has never been generated; run \
-             `PEEK_UPDATE_GOLDENS=1 cargo test --test golden` and commit the result. A golden that \
-             is missing must fail, not pass"
-        );
-        assert!(
-            text.lines().count() > 3,
-            "the golden for {name} is too short to be a real rendering: {text:?}"
-        );
-        assert!(
-            !text.contains("<root>"),
-            "the {name} golden must not be a copy of the output"
-        );
+    //
+    // The rules themselves live in `assert_substance` and are applied to the text a run *writes* as
+    // well as the text it *reads*, so they hold in the pass that generates the goldens too. That is
+    // why the branch below is not a skip: the same three rules are checked against the rendering
+    // this pass is producing, in `assert_golden`, and what is left for this test while updating is
+    // the one thing it can still know — that a golden is there to be written over.
+    //
+    // The check that used to sit here, that a golden must not contain `<root>`, was the opposite of
+    // what it meant to say and could not be satisfied by any golden this suite produces. The
+    // placeholders are what `normalise` writes, so a rendering holds one by construction; what has
+    // to be caught is a golden holding one run's *raw* output, and that is the machine-path rule
+    // inside `assert_substance`.
+    for name in GOLDENS {
+        let path = golden_path(name);
+        match std::fs::read_to_string(&path) {
+            // Substance, in the pass that verifies. The pass that generates applies the same rules
+            // to the text it writes; reading the file it is in the middle of replacing would report
+            // only the previous generation, and a test whose message says "run the generation
+            // command" while the generation command is running is a test people learn to ignore.
+            Ok(text) => {
+                if !updating() {
+                    assert_substance(name, &text);
+                }
+            }
+            // Presence, in both modes and without a panic: a checkout that has never generated a
+            // golden has to be able to run the pass that generates them. `read_golden` keeps the
+            // panicking read, because a golden a run means to compare against and cannot read is a
+            // failure, and that run is the one that will say so.
+            Err(error) => assert!(
+                !updating(),
+                "the golden for {name} could not be read from {}: {error}. Generate it with \
+                 `PEEK_UPDATE_GOLDENS=1 cargo test --test golden` and commit the result",
+                path.display()
+            ),
+        }
     }
 }

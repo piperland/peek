@@ -323,11 +323,27 @@ impl Repository {
         self.root.to_str().expect("a temporary path is UTF-8")
     }
 
+    /// The repository's own identity, which the engine derives from the canonical root and the
+    /// git common directory.
+    ///
+    /// **It is a hash of where the fixture was created, so it is a different value on every run
+    /// and in every other fixture.** That is what makes it worth naming: a command that prints it
+    /// prints a cache key, which is useful to somebody holding two checkouts and useless in a
+    /// committed file, so a test comparing renderings has to substitute it. `index_path` is built
+    /// from this rather than deriving it again, so the directory a test looks in and the directory
+    /// a command writes cannot disagree.
+    #[must_use]
+    pub fn identity(&self) -> String {
+        peek_core::store::RepoId::discover(&self.root)
+            .expect("derive the identity")
+            .as_str()
+            .to_owned()
+    }
+
     /// Where this repository's index lives, which the engine derives from its identity.
     #[must_use]
     pub fn index_path(&self) -> PathBuf {
-        let repo = peek_core::store::RepoId::discover(&self.root).expect("derive the identity");
-        self.index_root.join(repo.as_str()).join("index.db")
+        self.index_root.join(self.identity()).join("index.db")
     }
 
     /// A path outside this repository but inside its temporary base, for the containment tests.
