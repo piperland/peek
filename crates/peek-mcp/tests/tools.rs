@@ -585,10 +585,28 @@ pub fn decorate() -> u32 {
         json!(true),
         "a refresh must leave the index partitioning: {report}"
     );
+    // `generation` is the generation *this session's handle* was opened at, and `index_status`
+    // reports it beside `handle_is_stale` rather than serving it as current. The number that moves
+    // when a refresh commits is `recorded_generation`, read from the database rather than from the
+    // handle's cache. Asserting the other one would be asserting the staleness the tool now names,
+    // and the refresh *is* in the index either way — which the `dependents` call below is what
+    // actually checks.
     let after = call(&mut fixture.session, "index_status", json!({}));
+    assert_eq!(
+        after["opened_at_generation"],
+        json!(generation),
+        "the handle is still the one the status call above opened, and it still reports what it was \
+         opened at: {after}"
+    );
     assert!(
-        after["generation"].as_u64().expect("a generation") > generation,
-        "a refresh that changed something advanced the generation"
+        after["recorded_generation"].as_u64().expect("a generation") > generation,
+        "and the index records a later one, because a refresh committed beside it: {after}"
+    );
+    assert_eq!(
+        after["handle_is_stale"],
+        json!(true),
+        "so the tool says the handle is behind rather than reporting a cached figure as current: \
+         {after}"
     );
     // The new function is answerable, which is the point of the refresh rather than of the report.
     let found = call(
