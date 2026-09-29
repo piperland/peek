@@ -37,7 +37,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use peek_core::discover::{DiscoveryOptions, FileDiscovery};
-use peek_core::indexer::{self, IndexOutcome};
+use peek_core::indexer;
 use peek_core::model::RepoPath;
 use peek_core::store::IndexUpdate;
 
@@ -93,15 +93,16 @@ pub fn run(
 
     let (mode, outcome) = if cold {
         progress.note("no generation has been committed here; building the index".to_owned());
-        let outcome = indexer::build_full(&mut store, &location.root, options).map_err(|error| {
-            Failure::failed(
-                command,
-                Refusal::new(
-                    kind::ENGINE,
-                    format!("the index could not be built: {error}"),
-                ),
-            )
-        })?;
+        let outcome =
+            indexer::build_full(&mut store, &location.root, options).map_err(|error| {
+                Failure::failed(
+                    command,
+                    Refusal::new(
+                        kind::ENGINE,
+                        format!("the index could not be built: {error}"),
+                    ),
+                )
+            })?;
         ("build", outcome)
     } else {
         let (batch, stale) = refresh_batch(&location.root, &store, command)?;

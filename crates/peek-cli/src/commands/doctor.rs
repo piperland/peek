@@ -32,11 +32,8 @@ pub fn run(location: Option<&Location>, command: &'static str) -> Result<Outcome
     let existed = location.index_existed;
     let diagnosis = peek_core::doctor::diagnose(&location.root);
 
-    let mut findings: Vec<DoctorFinding> = diagnosis
-        .findings
-        .iter()
-        .map(DoctorFinding::from)
-        .collect();
+    let mut findings: Vec<DoctorFinding> =
+        diagnosis.findings.iter().map(DoctorFinding::from).collect();
     // Worst first, stable within a severity, so two runs over an unchanged index print the same
     // report. `sort_by_key` is stable; the input order is the order the checks ran, which is the
     // order the engine's own report preserves within a severity. The ranking table is the one the

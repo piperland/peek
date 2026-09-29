@@ -86,9 +86,12 @@ pub fn run(
         Command::Callees { target, .. } => {
             query::walk(location, "callees", target, WalkRequest::callees())
         }
-        Command::Dependents { target, depth, .. } => {
-            query::walk(location, "dependents", target, WalkRequest::dependents(*depth))
-        }
+        Command::Dependents { target, depth, .. } => query::walk(
+            location,
+            "dependents",
+            target,
+            WalkRequest::dependents(*depth),
+        ),
         Command::Context { target, budget, .. } => {
             context::run(location, "context", target, *budget)
         }

@@ -34,8 +34,8 @@
 use peek_core::query::{BudgetStatus, ContextPack, Query};
 
 use crate::answer::{Answer, ContextAnswer, floor_for_target};
-use crate::commands::query::{open_for_query, refusal_from_query};
 use crate::commands::Outcome;
+use crate::commands::query::{open_for_query, refusal_from_query};
 use crate::exit::{Failure, Refusal, Status, kind};
 
 /// Compile a token-budgeted slice of the repository.

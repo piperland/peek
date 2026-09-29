@@ -267,7 +267,9 @@ impl Applied {
         if !self.skipped.is_empty() {
             let mut reasons: BTreeMap<&str, u64> = BTreeMap::new();
             for reason in &self.skipped {
-                let key = reason.split_once(": ").map_or(reason.as_str(), |(_, rest)| rest);
+                let key = reason
+                    .split_once(": ")
+                    .map_or(reason.as_str(), |(_, rest)| rest);
                 *reasons.entry(key).or_default() += 1;
             }
             let grouped: Vec<String> = reasons
@@ -393,8 +395,7 @@ impl Session {
                         .entry(entry.reason.to_string())
                         .or_default() += 1;
                     if self.skipped.len() < MAX_SAMPLE_ENTRIES {
-                        self.skipped
-                            .push(SkippedFileAnswer::from(entry));
+                        self.skipped.push(SkippedFileAnswer::from(entry));
                     }
                 }
                 if !outcome.skipped.is_empty() {

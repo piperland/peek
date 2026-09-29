@@ -131,14 +131,7 @@ pub const FLAGS: &[Flag] = &[
 ];
 
 /// The flags every command accepts.
-pub const GLOBAL_FLAGS: &[&str] = &[
-    "help",
-    "version",
-    "json",
-    "quiet",
-    "root",
-    "index-dir",
-];
+pub const GLOBAL_FLAGS: &[&str] = &["help", "version", "json", "quiet", "root", "index-dir"];
 
 /// Where a command reads the repository from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -499,8 +492,8 @@ impl UsageError {
     pub fn command(&self) -> Option<&'static str> {
         match self {
             UsageError::FlagNotValidHere { command, .. }
-            | UsageError::NotANumber { .. }
-            | UsageError::MissingValue { .. }
+            | UsageError::NotANumber { command, .. }
+            | UsageError::MissingValue { command, .. }
             | UsageError::MissingArgument { command, .. }
             | UsageError::TooManyArguments { command, .. }
             | UsageError::NotUtf8 { command, .. } => Some(*command),
@@ -550,7 +543,10 @@ impl UsageError {
                     "unknown command `{name}`; did you mean `{near}`? this build accepts {}",
                     list(known)
                 ),
-                None => format!("unknown command `{name}`; this build accepts {}", list(known)),
+                None => format!(
+                    "unknown command `{name}`; this build accepts {}",
+                    list(known)
+                ),
             },
             UsageError::MissingArgument { command, expected } => {
                 format!("`{command}` needs {expected}")
@@ -653,7 +649,7 @@ where
     // sources and no precedence rule, so there is nothing to get wrong.
     let (root, rest): (PathBuf, &[OsString]) = match spec.root {
         RootSource::Positional => match given.first() {
-            Some(given) => (PathBuf::from(given), &given[1..]),
+            Some(given) => (PathBuf::from(given), given.get(1..).unwrap_or_default()),
             None => (PathBuf::from("."), given),
         },
         RootSource::Flag => (
@@ -833,9 +829,10 @@ fn scan(tokens: &[OsString]) -> Result<Scan, UsageError> {
             }
             (Some(_), Some(value)) => Some(OsString::from(value)),
             (Some(_), None) => {
-                let next = tokens.get(index).cloned().ok_or(UsageError::MissingValue {
-                    flag: spec.long,
-                })?;
+                let next = tokens
+                    .get(index)
+                    .cloned()
+                    .ok_or(UsageError::MissingValue { flag: spec.long })?;
                 index += 1;
                 Some(next)
             }
@@ -939,10 +936,7 @@ fn text(
     value
         .to_str()
         .map(str::to_owned)
-        .ok_or(UsageError::NotUtf8 {
-            command,
-            argument,
-        })
+        .ok_or(UsageError::NotUtf8 { command, argument })
 }
 
 /// The closest command name, if one is close enough to be worth suggesting.

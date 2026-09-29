@@ -269,7 +269,6 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
     Ok(canonical_parent.join(name))
 }
 /// Every repository-relative path the index holds at least one row for.
-
 /// # Why the store owns this
 
 /// `peek index` has to notice a file that was **deleted** since the last run, and a deleted file
@@ -417,7 +416,10 @@ mod tests {
         std::fs::write(&file, "fn a() {}\n").expect("write");
         let error = resolve_root(&file, "status").expect_err("a file is refused");
         assert_eq!(error.status.exit_code(), EXIT_USAGE);
-        assert!(error.refusal.message.contains("not a directory"), "{error:?}");
+        assert!(
+            error.refusal.message.contains("not a directory"),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -463,7 +465,10 @@ mod tests {
             error.refusal.message
         );
         assert!(
-            error.refusal.message.contains(&elsewhere.display().to_string()),
+            error
+                .refusal
+                .message
+                .contains(&elsewhere.display().to_string()),
             "the message must name the location it refused to touch: {}",
             error.refusal.message
         );
@@ -483,12 +488,8 @@ mod tests {
         let canonical_repo = repo.canonicalize().expect("canonicalise the repository");
         let file = sibling.join("a.rs");
         std::fs::write(&file, "fn a() {}\n").expect("write");
-        let error = relative_to(
-            &canonical_repo,
-            file.to_str().expect("utf-8"),
-            "rm",
-        )
-        .expect_err("a shared prefix is not containment");
+        let error = relative_to(&canonical_repo, file.to_str().expect("utf-8"), "rm")
+            .expect_err("a shared prefix is not containment");
         assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
     }
 
@@ -507,6 +508,22 @@ mod tests {
         assert_eq!(found.path.as_str(), "src/gone.rs");
     }
 
+    /// Make a symlink, and report whether this process was allowed to.
+    ///
+    /// Two definitions rather than two branches of one `if`: an `if` compiles *both* arms on
+    /// every platform, so whichever platform's module does not exist here is a compile error. That
+    /// is not a style point — the original version of this test failed to build on Linux for
+    /// exactly this reason, having been written to run on both.
+    #[cfg(unix)]
+    fn make_symlink(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+
+    #[cfg(windows)]
+    fn make_symlink(target: &Path, link: &Path) -> bool {
+        std::os::windows::fs::symlink_file(target, link).is_ok()
+    }
+
     #[test]
     fn a_symlink_pointing_outside_the_repository_is_outside_it() {
         // Canonicalisation runs before the containment test, so a link out of the tree is caught.
@@ -519,11 +536,7 @@ mod tests {
         let file = elsewhere.join("a.rs");
         std::fs::write(&file, "fn a() {}\n").expect("write");
         let link = root.join("link.rs");
-        if std::os::unix::fs::symlink(&file, &link).is_ok() {
-            let error =
-                relative_to(&root, link.to_str().expect("utf-8"), "rm").expect_err("refused");
-            assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
-        } else if std::os::windows::fs::symlink_file(&file, &link).is_ok() {
+        if make_symlink(&file, &link) {
             let error =
                 relative_to(&root, link.to_str().expect("utf-8"), "rm").expect_err("refused");
             assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
@@ -570,6 +583,9 @@ mod tests {
             peek_core::store::paths::index_path(&expected).expect("resolve the index path"),
             "the envelope must name the index the engine resolves, not one this crate composed"
         );
-        assert!(!location.index_existed, "a fresh directory has no index yet");
+        assert!(
+            !location.index_existed,
+            "a fresh directory has no index yet"
+        );
     }
 }

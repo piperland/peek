@@ -200,15 +200,13 @@ impl Output {
     #[must_use]
     pub fn render_json(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_else(|error| {
-            let command = serde_json::to_string(&self.command)
-                .unwrap_or_else(|_| "\"unknown\"".to_owned());
+            let command =
+                serde_json::to_string(&self.command).unwrap_or_else(|_| "\"unknown\"".to_owned());
             format!(
                 "{{\"command\":{command},\"status\":\"failed\",\"exit_code\":1,\
                  \"refusal\":{{\"kind\":\"engine\",\"message\":{}}}}}",
-                serde_json::to_string(&format!(
-                    "the answer could not be serialised: {error}"
-                ))
-                .unwrap_or_else(|_| "\"unserialisable\"".to_owned())
+                serde_json::to_string(&format!("the answer could not be serialised: {error}"))
+                    .unwrap_or_else(|_| "\"unserialisable\"".to_owned())
             )
         })
     }
@@ -230,9 +228,7 @@ pub fn run(invocation: &Invocation, progress: &mut dyn Progress) -> Result<Outpu
             false,
         ),
         _ => {
-            let given: &Path = command
-                .root()
-                .map_or(Path::new("."), |root| root.as_path());
+            let given: &Path = command.root().map_or(Path::new("."), |root| root.as_path());
             let location = paths::locate(given, command.name())?;
             let outcome = commands::run(&command, Some(&location), &mut recording)?;
             (

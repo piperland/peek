@@ -514,7 +514,10 @@ impl WatchAnswer {
             text.push_str(&format!("declined:    {}\n", reasons.join(", ")));
         }
         for decision in &self.ignored_sample {
-            text.push_str(&format!("  declined {}: {}\n", decision.path, decision.reason));
+            text.push_str(&format!(
+                "  declined {}: {}\n",
+                decision.path, decision.reason
+            ));
         }
         if self.outside_root > 0 {
             text.push_str(&format!(
@@ -882,7 +885,9 @@ impl Counts {
     /// that once.
     #[must_use]
     pub fn states_partition(&self) -> bool {
-        self.resolved_relations + self.ambiguous_relations + self.unresolved_relations
+        self.resolved_relations
+            + self.ambiguous_relations
+            + self.unresolved_relations
             + self.inferred_relations
             + self.pending_relations
             == self.relation_count
@@ -1015,9 +1020,7 @@ pub fn floor_for_target(pack: &ContextPack) -> Option<u64> {
     let target = pack.target.id().display();
     pack.omitted
         .iter()
-        .find(|entry| {
-            entry.what == peek_core::query::Omitted::Unit && entry.subject == target
-        })
+        .find(|entry| entry.what == peek_core::query::Omitted::Unit && entry.subject == target)
         .map(|entry| pack.budget.spent_tokens.saturating_add(entry.cost.tokens))
 }
 

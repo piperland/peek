@@ -117,7 +117,10 @@ pub fn refusal_from_query(command: &'static str, error: QueryError) -> Failure {
         ),
         QueryError::Store(error) => Failure::failed(
             command,
-            Refusal::new(kind::ENGINE, format!("the index could not be read: {error}")),
+            Refusal::new(
+                kind::ENGINE,
+                format!("the index could not be read: {error}"),
+            ),
         ),
     }
 }
