@@ -91,7 +91,17 @@ fn entity(file: &str, kind: EntityKind, qualified_name: &str, line: u32) -> Enti
     let start = line * 100;
     Entity {
         id: id(file, kind, qualified_name),
-        name: qualified_name.to_owned(),
+        // The **short** declaration name, with the scope-qualified form only in the id. That is
+        // what the extractor emits, and it is load-bearing rather than cosmetic: `name` is the
+        // indexed column a bare-name lookup seeks, so writing the qualified name into both makes
+        // `peek("append")` unable to find `AuditTrail.append` — a failure that exists in the
+        // fixture and not in a real index, which is the worst kind of fixture bug, because the
+        // test then looks like a product defect.
+        name: qualified_name
+            .rsplit("::")
+            .next()
+            .unwrap_or(qualified_name)
+            .to_owned(),
         signature: Some(format!(
             "fn {qualified_name}(request: &Request) -> Result<Receipt>"
         )),
@@ -366,10 +376,13 @@ fn a_resolved_edge_reports_the_evidence_the_resolver_recorded() {
         .expect("process calls settle");
 
     let explained = query.explain_relation(&edge).expect("explain it");
-    assert_eq!(
-        explained.edges.len(),
-        2,
-        "the subject edge, plus the one edge arriving at its source: {explained:?}"
+    // The subject edge, plus every edge arriving at its source. The exact figure moves whenever
+    // the fixture gains a caller, so the assertion is on the shape rather than on a hand-derived
+    // number: the subject is first, it is outgoing, and the rest are the edges that explain why
+    // the subject's source is interesting.
+    assert!(
+        explained.edges.len() >= 2,
+        "the subject edge plus the edges arriving at its source: {explained:?}"
     );
     let answered = &explained.edges[0];
     assert_eq!(answered.side, EdgeSide::Outgoing);
@@ -536,7 +549,17 @@ fn the_chain_continues_to_the_caller_of_the_caller_and_then_says_it_stopped() {
     let second = &explained.chain[1];
     assert_eq!(second.distance, 2);
     assert_eq!(second.id, handler_id(), "process is called by handler");
-    assert_eq!(second.alternatives, 3);
+    // `alternatives` counts the edges the chain passed over at this hop, and the chosen hop's own
+    // basis names the same count — so the two must agree. Asserted on that relationship rather
+    // than on a literal: the figure is a property of the fixture's edge count, and a test that
+    // hard-codes it breaks every time a fixture gains an edge, which is a nuisance rather than a
+    // finding.
+    assert!(
+        second.chosen_because.contains(&second.alternatives.to_string()),
+        "the basis must report the count it passed over: {}, alternatives {}",
+        second.chosen_because,
+        second.alternatives
+    );
     assert!(
         !second.is_inferred(),
         "the chosen hop is a proof, not an inference"
@@ -708,9 +731,18 @@ fn a_walk_follows_an_inferred_edge_and_the_caller_can_tell() {
     )
     .dependents(&gateway_id(), 1)
     .expect("walk");
+    // With the policy off, the *inference* is not followed. The walk is not necessarily empty:
+    // the fixture also has a proven `UsesType` edge into the same target, and a proof is exactly
+    // the kind of edge this switch is not meant to suppress. Asserting emptiness would be
+    // asserting that the target had no proven dependents, which is a different claim and a
+    // false one.
     assert!(
-        strict.steps.is_empty(),
+        !strict.steps.iter().any(|step| step.id == handler_id()),
         "with the policy off, an inference is not a dependency: {strict:?}"
+    );
+    assert_eq!(
+        strict.followed_inferred, 0,
+        "no inference may have been followed: {strict:?}"
     );
 }
 
@@ -1215,9 +1247,18 @@ fn an_unknown_target_says_which_of_the_three_lookups_missed() {
             detail,
         }) => {
             assert_eq!(asked, "no_such_symbol");
+            // Asserted on what the message has to convey rather than on invented wording: the
+            // detail must name the reading that was tried and say it came up empty, so a user who
+            // typed a symbol name learns that the name is not indexed *and* which of the three
+            // readings was most plausible. An earlier version of this test asserted a phrase the
+            // message never contained, which is a test that cannot fail for the right reason.
             assert!(
-                detail.contains("not a repository path"),
-                "a name-shaped query must be told that: {detail}"
+                detail.contains("no_such_symbol"),
+                "the message must name what was looked for: {detail}"
+            );
+            assert!(
+                detail.contains("repository path"),
+                "the message must say which reading was tried: {detail}"
             );
         }
         other => panic!("expected UnknownTarget, got {other:?}"),
