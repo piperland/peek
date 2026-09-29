@@ -205,16 +205,28 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
         .into_iter()
         .find(|relation| relation.target_name == "Gateway")
         .expect("the import of Gateway was extracted");
+    // Asserted on the typed state rather than on the rendered string, so the assertion is about
+    // the answer and not about a formatter's wording.
+    let candidates = match &import.resolution {
+        ResolutionState::Ambiguous { candidates } => candidates.clone(),
+        other => panic!("expected an ambiguity, got {other:?} in {import:?}"),
+    };
     assert_eq!(
-        state_of(&import),
-        "ambiguous (2 candidates)",
+        candidates.len(),
+        2,
         "the module table DID place it — the candidate is `crates/alpha/src/gateway.rs`, a path \
          the guess cannot construct — but the answer is ambiguous, and that is a defect: the two \
          candidates are the `struct Gateway` and a *second* entity also named `Gateway` of kind \
          `Module`, which is the `impl Gateway` block. An impl block is emitted as an entity \
          because the walker's scope stack needs an id to anchor methods to, and that entity then \
          competes for the type's own name in every lookup. Recorded as R-012: an impl block is a \
-         scope, not a declaration, and it must not be findable as one. The relation: {import:?}"
+         scope, not a declaration, and it must not be findable as one. Candidates: {candidates:?}"
+    );
+    assert!(
+        candidates
+            .iter()
+            .any(|id| id.kind() == EntityKind::Module),
+        "the competing candidate is the impl block's own entity: {candidates:?}"
     );
 
     let call = relations_of(&store, RelationKind::Calls)
@@ -261,10 +273,7 @@ fn the_module_table_switch_really_turns_the_table_off() {
     // difference is exactly the capability being measured.
     tree.write("crates/gamma/Cargo.toml", "[package]\nname = \"gamma\"\n");
     tree.write("crates/gamma/src/lib.rs", "pub mod gateway;\n");
-    tree.write(
-        "crates/gamma/src/gateway.rs",
-        "pub struct Gateway;\n",
-    );
+    tree.write("crates/gamma/src/gateway.rs", "pub struct Gateway;\n");
 
     let mut store = tree.index_without_resolving();
 
@@ -319,7 +328,9 @@ fn the_module_table_switch_really_turns_the_table_off() {
         "the table sees only alpha's file: the struct and the phantom impl: {with_table:?}"
     );
     assert!(
-        with_table.iter().all(|path| path.as_str() == "crates/alpha/src/gateway.rs"),
+        with_table
+            .iter()
+            .all(|path| path.as_str() == "crates/alpha/src/gateway.rs"),
         "every candidate is in the package the import named: {with_table:?}"
     );
     assert!(
