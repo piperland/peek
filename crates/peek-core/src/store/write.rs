@@ -388,26 +388,39 @@ fn demote_incoming(
 /// `LIKE` pattern that only the subtree clause uses.
 struct ScopeParams {
     path: String,
-    /// Only bound for a subtree removal.
-    pattern: Option<String>,
+    /// Only bound for a subtree removal: the inclusive start of the descendants' range.
+    lower: Option<String>,
+    /// Only bound for a subtree removal: the exclusive end of the descendants' range.
+    upper: Option<String>,
 }
 
 impl ScopeParams {
     fn new(removal: &Removal) -> Self {
+        let (lower, upper) = match removal.includes_subdirectories() {
+            false => (None, None),
+            true => {
+                // Every descendant of `src` starts with `src/`, and the byte after `/` is `0`.
+                // So `["src/", "src0")` is exactly the subtree — and because `RepoPath` cannot end
+                // in a separator, `lower` always ends in `/` and incrementing it never carries.
+                let path = removal.path().as_str();
+                (
+                    Some(format!("{path}/")),
+                    Some(format!("{path}0")),
+                )
+            }
+        };
         Self {
             path: removal.path().as_str().to_owned(),
-            pattern: match removal.includes_subdirectories() {
-                true => Some(like_pattern(removal.path())),
-                false => None,
-            },
+            lower,
+            upper,
         }
     }
 
     /// How many parameters the scope clause occupies.
     #[cfg(test)]
     fn scope_len(&self) -> usize {
-        match self.pattern {
-            Some(_) => 2,
+        match self.lower {
+            Some(_) => 3,
             None => 1,
         }
     }
@@ -421,8 +434,9 @@ impl ScopeParams {
     /// allocation per update and removes both problems.
     fn scope(&self) -> Vec<Box<dyn rusqlite::ToSql>> {
         let mut bindings: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(self.path.clone())];
-        if let Some(pattern) = &self.pattern {
-            bindings.push(Box::new(pattern.clone()));
+        if let (Some(lower), Some(upper)) = (&self.lower, &self.upper) {
+            bindings.push(Box::new(lower.clone()));
+            bindings.push(Box::new(upper.clone()));
         }
         bindings
     }
@@ -468,8 +482,20 @@ fn count<P: rusqlite::Params>(
 
 /// The `WHERE` fragment selecting a removal's scope.
 ///
-/// `LIKE` needs `ESCAPE` because `_` and `%` are ordinary characters in a filename, and a file
-/// called `src/we_ird.rs` must not be swept up by a removal of `src/we`.
+/// A subtree is a **range**, not a pattern. `path LIKE 'src/%' ESCAPE '\'` looks correct and is
+/// not: SQLite only converts `LIKE` into a range scan when the pattern is case-sensitive or the
+/// index collation matches, and `LIKE` is case-insensitive by default against a `BINARY` index. So
+/// the planner cannot use the primary key for that arm and falls back to
+/// `SCAN entity USING COVERING INDEX entity_by_qualified_name` — which a real-repository run over
+/// `rust-lang/regex` confirmed, making a subtree removal O(table).
+///
+/// `column >= 'src/' AND column < 'src0'` is the same set, served by one index seek. It is also
+/// *case-exact*, which `LIKE` was not, and it deletes the `ESCAPE` handling that had to escape
+/// `_` and `%` correctly for a filename like `we_ird.rs` — a class of bug that only shows up on the
+/// one repository with a directory named that way.
+///
+/// The equality arm is kept so a `removing_subtree` on a file still removes that file: `src` is
+/// below `src/` and so is not in the range.
 ///
 /// `first` is the `?n` number of the scope's first placeholder. SQLite numbers placeholders in
 /// the order they appear in the **statement text**, not in the order the bindings are supplied, so
@@ -480,20 +506,11 @@ fn scope_clause(column: &str, removal: &Removal, first: usize) -> String {
     match removal.includes_subdirectories() {
         false => format!("{column} = ?{first}"),
         true => format!(
-            "({column} = ?{first} OR {column} LIKE ?{} ESCAPE '\\')",
-            first + 1
+            "({column} = ?{first} OR ({column} >= ?{} AND {column} < ?{}))",
+            first + 1,
+            first + 2
         ),
     }
-}
-
-/// A `LIKE` pattern matching everything strictly below `path`, with the metacharacters escaped.
-fn like_pattern(path: &RepoPath) -> String {
-    let escaped = path
-        .as_str()
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    format!("{escaped}/%")
 }
 
 /// Six columns for a span, or six NULLs when there is none.
@@ -596,33 +613,63 @@ mod tests {
         let subtree = Removal::RemoveSubtree(path("src"));
         assert_eq!(
             scope_clause("e.path", &subtree, 2),
-            "(e.path = ?2 OR e.path LIKE ?3 ESCAPE '\\')"
+            "(e.path = ?2 OR (e.path >= ?3 AND e.path < ?4))"
         );
     }
 
     #[test]
-    fn the_subtree_pattern_requires_a_separator_so_a_prefix_collision_does_not_match() {
-        // The defect `RepoPath::is_within` also guards against: removing `src` must not take
-        // `srcgen/main.rs` with it.
-        assert_eq!(like_pattern(&path("src")), "src/%");
+    fn a_subtree_removal_is_a_range_and_not_a_pattern() {
+        // The whole point of the change. `LIKE` cannot be planned as a range against a `BINARY`
+        // index, so the subtree arm was a table scan on a real repository. A range is one seek.
+        let subtree = Removal::RemoveSubtree(path("src"));
+        let clause = scope_clause("path", &subtree, 1);
+        assert!(
+            !clause.contains("LIKE"),
+            "a LIKE arm defeats the index: {clause}"
+        );
+        assert_eq!(ScopeParams::new(&subtree).scope_len(), 3);
     }
 
     #[test]
-    fn like_metacharacters_in_a_real_directory_name_are_escaped() {
-        // `_` matches any single character and `%` matches any run of characters in `LIKE`.
-        // A directory actually named `we_ird` must not be swept up by removing `weXird`, and
-        // `100%` must not act as a wildcard.
-        assert_eq!(like_pattern(&path("we_ird")), "we\\_ird/%");
-        assert_eq!(like_pattern(&path("100%")), "100\\%/%");
+    fn a_subtree_range_excludes_a_prefix_collision_and_includes_a_real_descendant() {
+        // The property, stated as the range that has to satisfy it. Removing `src` must not take
+        // `srcgen/main.rs`, and must take `src/nested/deep.rs`. `_` and `%` in a real directory
+        // name are no longer a hazard at all, which is the second thing the `LIKE` arm got wrong.
+        let params = ScopeParams::new(&Removal::RemoveSubtree(path("src")));
+        let (lower, upper) = (
+            params.lower.clone().expect("a subtree has a lower bound"),
+            params.upper.clone().expect("a subtree has an upper bound"),
+        );
+        assert_eq!(lower, "src/");
+        assert_eq!(upper, "src0");
+
+        let within = |candidate: &str| candidate >= lower && candidate < upper;
+        assert!(within("src/a.rs"), "a direct child is in the range");
+        assert!(within("src/nested/deep.rs"), "a deep descendant is too");
+        assert!(within("src/"), "the directory itself sorts at the bound");
+
+        assert!(!within("srcgen/main.rs"), "a prefix sibling is not in it");
+        assert!(!within("src.rs"), "a file beside the directory is not");
+        assert!(!within("sr"), "a shorter path is not");
+        assert!(!within("src0/x"), "the exclusive upper bound is excluded");
+        assert!(!within("src-old/main.rs"), "a hyphen sibling is not");
+        assert!(!within("other/src/a.rs"), "a same-named path elsewhere is not");
+
+        // And the equality arm covers the directory's own row, which the range does not.
+        assert!(
+            !within("src"),
+            "the directory itself is below the range, which is why the equality arm exists"
+        );
     }
 
     #[test]
-    fn a_path_never_contains_a_backslash_so_the_like_escape_is_never_needed_for_one() {
-        // `RepoPath` normalises `\` to `/` at construction, so a backslash can never reach the
-        // pattern builder. That is why the escape only has to handle `_` and `%`. If a backslash
-        // ever could appear, `LIKE ... ESCAPE '\'` would need to escape it too, and this would be
-        // the test that noticed.
-        assert_eq!(path("a\\b").as_str(), "a/b");
-        assert_eq!(like_pattern(&path("a\\b")), "a/b/%");
+    fn a_file_removal_is_one_parameter_and_one_equality() {
+        let params = ScopeParams::new(&Removal::RemoveFile(path("src/a.rs")));
+        assert_eq!(params.scope_len(), 1);
+        assert!(params.lower.is_none() && params.upper.is_none());
+        assert_eq!(
+            scope_clause("path", &Removal::RemoveFile(path("src/a.rs")), 1),
+            "path = ?1"
+        );
     }
 }

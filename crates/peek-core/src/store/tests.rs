@@ -1082,6 +1082,82 @@ fn a_file_listing_is_served_by_the_primary_key_rather_than_a_redundant_index() {
 }
 
 #[test]
+fn a_subtree_removal_is_served_by_an_index_seek_rather_than_a_table_scan() {
+    // The defect, as it was measured: indexing `rust-lang/regex` and planning a subtree removal
+    // gave `SCAN entity USING COVERING INDEX entity_by_qualified_name`. A `LIKE` arm cannot be
+    // planned as a range against a `BINARY`-collated index, so the `OR` pushed the planner off
+    // the primary key entirely and a `removing_subtree` over a large directory became O(table).
+    //
+    // The store's own test asserted index usage for the *file* case only, which does seek, so
+    // nothing caught it. This asserts the subtree case.
+    let dir = TempDir::new("plan-subtree");
+    let store = open(&dir);
+    let plan = plan_of(
+        &store,
+        "SELECT path FROM entity WHERE (path = ?1 OR (path >= ?2 AND path < ?3))",
+    );
+    assert!(
+        plan.contains("USING INDEX"),
+        "a subtree scope must be served by an index, not a scan: {plan}"
+    );
+    assert!(
+        !plan.contains("SCAN entity USING COVERING INDEX entity_by_qualified_name"),
+        "the old plan shape has come back: {plan}"
+    );
+    assert!(!plan.contains("TEMP B-TREE"), "plan: {plan}");
+}
+
+#[test]
+fn removing_a_subtree_leaves_a_prefix_sibling_untouched() {
+    // The property the range is supposed to have, checked against rows rather than against a
+    // string. `srcgen` and `src-old` are the names that a naive `LIKE 'src%'` would take with it,
+    // and `RepoPath::is_within` has the same rule for the same reason.
+    let dir = TempDir::new("subtree-sibling");
+    let mut store = open(&dir);
+    store
+        .apply_update(
+            IndexUpdate::empty()
+                .with_entity(bare_entity("src/a.rs", EntityKind::Function, "a"))
+                .with_entity(bare_entity("src/nested/b.rs", EntityKind::Function, "b"))
+                .with_entity(bare_entity("srcgen/c.rs", EntityKind::Function, "c"))
+                .with_entity(bare_entity("src-old/d.rs", EntityKind::Function, "d"))
+                .with_entity(bare_entity("src.rs", EntityKind::Function, "e"))
+                .with_entity(bare_entity("other/f.rs", EntityKind::Function, "f")),
+        )
+        .expect("commit");
+
+    store
+        .apply_update(IndexUpdate::empty().removing_subtree(
+            crate::model::path::RepoPath::new("src").expect("valid path"),
+        ))
+        .expect("remove the subtree");
+
+    let surviving = store.entities_named("a", 1);
+    assert!(
+        surviving.expect("query").is_empty(),
+        "src/a.rs is inside the subtree and must be gone"
+    );
+    for (name, why) in [
+        ("c", "srcgen/c.rs"),
+        ("d", "src-old/d.rs"),
+        ("e", "src.rs"),
+        ("f", "other/f.rs"),
+    ] {
+        assert!(
+            !store.entities_named(name, 1).expect("query").is_empty(),
+            "{why} is not below `src` and must survive"
+        );
+    }
+    assert!(
+        store
+            .entities_named("b", 1)
+            .expect("query")
+            .is_empty(),
+        "a deep descendant is inside the subtree and must be gone"
+    );
+}
+
+#[test]
 fn a_single_entity_lookup_seeks_the_primary_key() {
     let dir = TempDir::new("plan-entity-id");
     let store = open(&dir);
