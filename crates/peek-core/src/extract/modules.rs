@@ -292,7 +292,7 @@ pub fn locate(path: &RepoPath, layout: &ModuleLayout) -> ModuleLocation {
         false => below
             .iter()
             .map(|part| (*part).to_owned())
-            .chain(std::iter::once(stem))
+            .chain(std::iter::once(stem.to_owned()))
             .collect(),
     };
 
