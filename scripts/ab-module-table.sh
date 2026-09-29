@@ -98,12 +98,17 @@ for slug in $REPOS; do
   off=$(run_one 0 "$safe" "$dir") || { failures=$((failures + 1)); continue; }
   on=$(run_one 1 "$safe" "$dir") || { failures=$((failures + 1)); continue; }
 
+  # `run_one` prints `slug entities relations resolved inferred ambiguous unresolved`, so the slug
+  # occupies `$1` and the first *figure* is `$2`. Getting this off by one is not a cosmetic slip:
+  # it makes `relations` read back as the entity count, which produces a denominator that is not
+  # the graph and a decide rate near 90% on a repository whose real rate is 44%. The partition
+  # assertion below is what caught it, and it is the reason that assertion is here at all.
   # shellcheck disable=SC2086
   set -- $off
-  o_ent=$1; o_rel=$2; o_res=$3; o_inf=$4; o_amb=$5; o_unr=$6
+  o_ent=$2; o_rel=$3; o_res=$4; o_inf=$5; o_amb=$6; o_unr=$7
   # shellcheck disable=SC2086
   set -- $on
-  n_ent=$1; n_rel=$2; n_res=$3; n_inf=$4; n_amb=$5; n_unr=$6
+  n_ent=$2; n_rel=$3; n_res=$4; n_inf=$5; n_amb=$6; n_unr=$7
 
   # Decided is `resolved + inferred` over the relation count, the same definition the spread uses,
   # and the states must partition. A figure computed over a subset of the states is a share of
