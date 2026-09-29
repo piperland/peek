@@ -544,6 +544,7 @@ fn optional_language_to_sql(
 #[cfg(test)]
 mod tests {
     use super::{INITIAL_GENERATION, ScopeParams, scope_clause};
+    use crate::model::path::RepoPath;
     use crate::store::update::Removal;
 
     fn path(s: &str) -> RepoPath {
