@@ -278,28 +278,25 @@ fn render_any(repository: &Repository, argv: &[&str]) -> String {
     }
 }
 
-#[test]
-fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped() {
-    // The case the whole rule about budgets exists for. A smaller budget must produce a smaller
-    // answer that *says* it is smaller, and the golden pins both halves: the `dropped:` block and
-    // the `status: reduced` line.
-    let repository = Repository::small("golden-context-reduced");
-    render(&repository, &["index", repository.root_str()]);
-
-    // The budget is **found**, not written down. An earlier version of this test hardcoded 80,
-    // which is below the engine's report reserve — so the command was refused rather than reduced
-    // and the test was asserting on a refusal while claiming to test a reduced pack. A budget that
-    // is below the floor is not a small budget, it is a rejected one, and the two are different
-    // outputs with different meanings.
-    //
-    // So: start from a budget that certainly fits, and halve until the engine reports the pack as
-    // reduced rather than complete. That is a sweep rather than a constant, so the golden keeps
-    // testing what it names when the floor, the reserve or the neighbourhood changes.
+/// The budget at which this repository's pack is reduced rather than complete, found by halving.
+///
+/// **Found, never written down, and shared by both tests that need one.** A hardcoded budget breaks
+/// the moment the report reserve, the neighbourhood or the fixture changes, and it breaks
+/// silently: a constant that lands above the floor and below the neighbourhood tests `complete`
+/// under a name that says `reduced`. A budget below the floor is worse still, because that is a
+/// *refusal* — exit 3, an error string, and no pack at all — so a test asserting on a refused
+/// rendering while claiming to test a reduced one passes for the wrong reason.
+///
+/// **The condition is the one that was once inverted here and in the test beside it**, which is
+/// what the finding that parked this golden was built on: a sweep that takes the first budget whose
+/// pack is *not* reduced stops at the largest one, renders a `complete` pack, and then fails an
+/// assertion that the rendering says `reduced`. A test that finds its input by the negative of the
+/// property it is testing is not testing the property.
+fn sweep_for_a_reduced_budget(repository: &Repository) -> u64 {
     let mut budget = 100_000u64;
-    let mut reduced_at = None;
     for _ in 0..24 {
         let answer = run_any(
-            &repository,
+            repository,
             &[
                 "context",
                 "wallet_charge",
@@ -311,14 +308,23 @@ fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped
         );
         if matches!(answer.answer, Answer::Context(ref a) if a.pack.budget.status == BudgetStatus::Reduced)
         {
-            reduced_at = Some(budget);
-            break;
+            return budget;
         }
         budget /= 2;
     }
-    let Some(reduced_at) = reduced_at else {
-        panic!("no budget in the sweep produced a reduced pack; the fixture is too small to omit");
-    };
+    panic!(
+        "no budget in the sweep produced a reduced pack; the fixture is too small to omit"
+    );
+}
+
+#[test]
+fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped() {
+    // The case the whole rule about budgets exists for. A smaller budget must produce a smaller
+    // answer that *says* it is smaller, and the golden pins both halves: the `dropped:` block and
+    // the `status: reduced` line.
+    let repository = Repository::small("golden-context-reduced");
+    render(&repository, &["index", repository.root_str()]);
+    let reduced_at = sweep_for_a_reduced_budget(&repository);
 
     let text = render_any(
         &repository,
@@ -333,14 +339,8 @@ fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped
     );
     let actual = normalise(&text, &repository);
 
-    // The **data** carries the claim, and that is what is asserted here.
-    //
-    // The human rendering of a `Reduced` pack is currently wrong: it prints the title and then
-    // nothing, where the engine's own `ContextPack::render` prints the budget line, every unit and
-    // every edge. Recorded as R-013 with the evidence. Asserting on the rendered text here would
-    // either fail on every run or have to be relaxed into meaninglessness, and a weakened
-    // assertion is worse than none — so the claim is checked where it is actually true, and the
-    // broken rendering is a separate, named defect rather than a silently accepted one.
+    // The **data** carries the claim, and that is what is asserted here: a reduced pack must say
+    // what it left out, with a reason, before anything is said about how it is worded.
     let output = fixture::run(
         &repository,
         &[
@@ -374,49 +374,35 @@ fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped
         other => panic!("expected a context answer, got {other:?}"),
     }
 
-    // The rendering assertions live in `a_reduced_pack_renders_its_units_and_edges` and are
-    // `#[ignore]`d against R-013, which is where the broken rendering is recorded. Splitting them
-    // out is deliberate: this test's job is the *claim* (a reduced pack names what it dropped) and
-    // the ignored test's job is the *wording*. When R-013 is fixed, one `#[ignore]` comes off and
-    // a golden is filled in, and neither change can quietly alter what the other asserts.
-    let _ = actual;
+    // The wording, pinned whole. Whether the prose actually carries the units and edges it claims
+    // to is `a_reduced_pack_renders_its_units_and_edges`, which asserts it against the data and so
+    // survives a rewording; this is where the exact text lives, and a reword is a deliberate act
+    // that shows up in a diff.
+    assert_golden("context-reduced", &actual);
 }
 
-/// **Ignored against R-013.** The human rendering of a `Reduced` pack prints its title and then
-/// nothing, where the engine's `ContextPack::render` prints the budget line, every unit and every
-/// edge. The data is correct and is asserted by
-/// `a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped`; this test is
-/// about the *wording*, and it cannot be written until the wording is right.
+/// The prose of a reduced pack, compared against the data it was made from.
+///
+/// **This is the test the finding R-013 was parked against, and R-013 does not describe this
+/// code.** It claimed a `Reduced` pack "renders as its title and nothing else". The path says
+/// otherwise: `ContextAnswer::render` opens with `pack.render(true)`, and `ContextPack::render` is
+/// the report followed by every unit and every edge, with no branch on the status anywhere in it.
+/// The reproduction that seemed to show the loss had an inverted sweep — it took the first budget
+/// whose pack was *not* reduced, rendered that, and asserted the text said `reduced`, which is
+/// precisely what a `complete` pack correctly does not say. Correcting the sweep corrected the
+/// test; the finding and the `#[ignore]` were never revisited, and a golden that nothing wrote
+/// stayed on the list of files the suite required.
+///
+/// So the claim is asserted in the form that would have caught it had it been true, and in a form
+/// that survives a rewording: **every unit and every edge the pack holds is in the text.** A golden
+/// pins the words; this pins the link between the words and the data, which is the seam the finding
+/// was about — the same seam as R-014, and the one a formatter is otherwise never compared across.
 #[test]
-#[ignore = "R-013: a reduced context pack renders as its title and nothing else"]
 fn a_reduced_pack_renders_its_units_and_edges() {
     let repository = Repository::small("golden-context-reduced-render");
     render(&repository, &["index", repository.root_str()]);
-    let mut budget = 100_000u64;
-    let mut reduced_at = None;
-    for _ in 0..24 {
-        let answer = run_any(
-            &repository,
-            &[
-                "context",
-                "wallet_charge",
-                "--budget",
-                &budget.to_string(),
-                "--root",
-                repository.root_str(),
-            ],
-        );
-        if matches!(answer.answer, Answer::Context(ref a) if a.pack.budget.status == BudgetStatus::Reduced)
-        {
-            reduced_at = Some(budget);
-            break;
-        }
-        budget /= 2;
-    }
-    let Some(reduced_at) = reduced_at else {
-        panic!("no budget produced a reduced pack");
-    };
-    let text = render_any(
+    let reduced_at = sweep_for_a_reduced_budget(&repository);
+    let output = fixture::run(
         &repository,
         &[
             "context",
@@ -426,10 +412,52 @@ fn a_reduced_pack_renders_its_units_and_edges() {
             "--root",
             repository.root_str(),
         ],
+    )
+    .output;
+    assert_eq!(
+        output.exit_code,
+        0,
+        "a reduced pack is an answer with limits, not a refusal"
     );
-    let actual = normalise(&text, &repository);
-    assert!(actual.contains("status: reduced"), "{actual}");
-    assert!(actual.contains("dropped:"), "{actual}");
+    let Answer::Context(answer) = &output.answer else {
+        panic!("expected a context answer, got {:?}", output.answer);
+    };
+    assert_eq!(
+        answer.pack.budget.status,
+        BudgetStatus::Reduced,
+        "the sweep found this budget by observing this status: {answer:?}"
+    );
+
+    let text = output.render();
+    assert!(
+        text.contains("status: reduced"),
+        "a pack that dropped something must say so: {text}"
+    );
+    assert!(
+        text.contains("dropped:"),
+        "a pack that dropped something must name what it dropped: {text}"
+    );
+
+    // The linkage, unit by unit and edge by edge. Rendered with the flag the CLI itself passes,
+    // `ContextAnswer::render` calling `pack.render(true)`, so a line missing here is a line the
+    // reader would not have seen rather than a difference in how this test asked for it.
+    assert!(
+        !answer.pack.units.is_empty(),
+        "a reduced pack holding no units is an empty one whatever its status says: {answer:?}"
+    );
+    for unit in &answer.pack.units {
+        let line = unit.render();
+        assert!(
+            text.contains(&line),
+            "the pack holds a unit the rendering never prints: {line}\n{text}"
+        );
+        for edge in unit.render_edges(true) {
+            assert!(
+                text.contains(&edge),
+                "the pack holds an edge the rendering never prints: {edge}\n{text}"
+            );
+        }
+    }
 }
 
 #[test]
