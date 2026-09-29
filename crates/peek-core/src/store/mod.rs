@@ -384,7 +384,7 @@ impl Durability {
     }
 
     /// The spelling used in error messages and `doctor` output.
-    const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Durability::Full => "FULL",
             Durability::Normal => "NORMAL",

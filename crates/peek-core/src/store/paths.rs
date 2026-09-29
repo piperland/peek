@@ -45,6 +45,34 @@ use crate::store::{RepoId, StoreError};
 /// The environment variable that overrides the index root.
 pub const ENV_INDEX_DIR: &str = "PEEK_INDEX_DIR";
 
+/// A programmatic override, consulted before the environment variable.
+///
+/// This exists for two callers, and both of them are real:
+///
+/// - **An embedding application** that has been told where to put an index, and must not mutate
+///   the process environment to say so. Environment variables are process-global, and a server
+///   serving several repositories cannot use them to say which one it means.
+/// - **Tests**, which need an index location they can delete and must not be able to reach the
+///   developer's real one. A test that broke the real index would be an unpleasant surprise.
+///
+/// Process-wide, like the environment variable it shadows, and therefore `&self`-free by
+/// necessity. Call [`set_root_override`] once at startup rather than per request.
+static ROOT_OVERRIDE: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// Point Peek at a specific index root, overriding both the default and the environment.
+///
+/// `None` restores the normal resolution order. The value is used **verbatim**: not resolved
+/// relative to anything, and not required to exist yet.
+pub fn set_root_override(root: Option<PathBuf>) {
+    match ROOT_OVERRIDE.write() {
+        Ok(mut slot) => *slot = root,
+        // A poisoned lock means some other thread panicked while holding it. The value it holds
+        // is still a `PathBuf` and still perfectly usable, so poisoning is not a reason to fail a
+        // call that only writes a path.
+        Err(poisoned) => *poisoned.into_inner() = root,
+    }
+}
+
 /// The file name of the index inside its directory.
 const INDEX_FILE: &str = "index.db";
 
@@ -65,6 +93,13 @@ pub fn index_path(repo: &RepoId) -> Result<PathBuf, StoreError> {
 /// anything other than an absolute location is how an override ends up quietly writing into a
 /// working directory.
 pub fn root() -> Result<PathBuf, StoreError> {
+    let override_slot = ROOT_OVERRIDE
+        .read()
+        .map(|slot| slot.clone())
+        .unwrap_or(None);
+    if let Some(configured) = override_slot {
+        return Ok(configured);
+    }
     if let Some(configured) = std::env::var_os(ENV_INDEX_DIR)
         && !configured.is_empty()
     {

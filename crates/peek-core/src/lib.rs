@@ -14,6 +14,7 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod discover;
+pub mod doctor;
 pub mod extract;
 pub mod indexer;
 pub mod model;
