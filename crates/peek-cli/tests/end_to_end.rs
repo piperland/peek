@@ -28,7 +28,7 @@ use std::path::Path;
 
 use fixture::{Repository, run};
 
-use peek_cli::answer::{Answer, Counts, RemoveAnswer, StatusAnswer};
+use peek_cli::answer::{Answer, RemoveAnswer, StatusAnswer};
 use peek_cli::args::{self, Invocation};
 use peek_cli::commands::query;
 use peek_cli::exit::{Status, kind};
