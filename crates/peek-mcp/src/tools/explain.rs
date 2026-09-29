@@ -51,8 +51,8 @@ pub fn explain(session: &mut Session, arguments: Option<&Value>) -> Result<ToolA
     let resolved = {
         let store = session.reader()?;
         let query = Query::with_options(store, options);
-        let identity =
-            target::resolve(store, options, &target).map_err(|error| resolve_error(store, &error))?;
+        let identity = target::resolve(store, options, &target)
+            .map_err(|error| resolve_error(store, &error))?;
         query
             .explain(&identity)
             .map_err(|error| resolve_error(store, &error))?

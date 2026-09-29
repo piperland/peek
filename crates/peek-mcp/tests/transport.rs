@@ -435,8 +435,8 @@ fn the_stdout_scan_reads_code_and_cannot_be_satisfied_by_prose() {
         );
     }
 
-    // And the other direction: a real call is found wherever it is written, not only at the start of
-    // a line. Each of these really does put bytes on the protocol channel.
+    // And the other direction: a real call is found wherever it is written, not only at the start
+    // of a line. Each of these really does put bytes on the protocol channel.
     for (label, source) in [
         ("a bare call", "    println!(\"ready\");\n"),
         ("a discarded call", "    let _ = println!(\"ready\");\n"),

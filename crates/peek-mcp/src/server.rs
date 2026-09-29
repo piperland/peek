@@ -187,9 +187,9 @@ fn keep(buffer: &mut Vec<u8>, bytes: &[u8]) -> bool {
 ///   that is still open.
 ///
 /// The value itself is read with a real JSON parser, so an unterminated number or string yields
-/// `None` rather than half of one. `None` is an answer and not a failure: it means the id was not in
-/// the bytes that were read, and the caller says so on the diagnostic stream before the null-id
-/// refusal goes out.
+/// `None` rather than half of one. `None` is an answer and not a failure: it means the id was not
+/// in the bytes that were read, and the caller says so on the diagnostic stream before the
+/// null-id refusal goes out.
 fn id_in_prefix(bytes: &[u8]) -> Option<Value> {
     if bytes.first() != Some(&b'{') {
         return None;

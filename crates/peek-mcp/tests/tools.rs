@@ -422,12 +422,13 @@ fn index_status_says_an_unchanged_handle_is_current() {
     let second = call(&mut fixture.session, "index_status", json!({}));
     assert_eq!(
         first["opened_at_generation"], first["generation"],
-        "the handle is opened before the figure is read, so the first call already knows it: {first}"
+        "the handle is opened before the figure is read, so the first call already knows it: \
+         {first}"
     );
     assert_eq!(first["handle_is_stale"], json!(false));
     assert_eq!(
         first["recorded_generation"], first["opened_at_generation"],
-        "and the index records what the handle was opened at, because nothing has committed: {first}"
+        "and the index records what the handle was opened at, because nothing has: {first}"
     );
     assert_eq!(second, first, "and nothing changed between the two: {second}");
 }

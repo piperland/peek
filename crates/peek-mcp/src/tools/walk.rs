@@ -110,8 +110,8 @@ fn walk_tool(
     let walk = {
         let store = session.reader()?;
         let query = Query::with_options(store, options);
-        let identity =
-            target::resolve(store, options, &target).map_err(|error| fill_candidates(store, &error))?;
+        let identity = target::resolve(store, options, &target)
+            .map_err(|error| fill_candidates(store, &error))?;
         let request = WalkRequest {
             direction,
             depth: depth.unwrap_or(1),
