@@ -193,7 +193,11 @@ impl Evidence {
     ///
     /// Ordered strongest first. Used only to *rank* competing candidates for presentation; it
     /// never silently promotes an edge to resolved.
-    pub fn strength(self) -> u8 {
+    ///
+    /// Takes `&self` because ranking is a read. `Evidence` carries owned strings and so cannot be
+    /// `Copy`, and a by-value signature here means every comparison of two candidates has to
+    /// clone both of them — or, worse, be written to move and then be unusable.
+    pub fn strength(&self) -> u8 {
         match self {
             Evidence::Containment => 100,
             Evidence::ImportBinding { .. } => 90,

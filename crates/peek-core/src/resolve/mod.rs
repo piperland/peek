@@ -824,14 +824,17 @@ impl<'s> Resolver<'s> {
             }));
         }
         let only = found.remove(0);
+        // The basis names where the single candidate is, so `peek explain` can be checked against
+        // the file rather than taken on trust. Built before the move, for the obvious reason.
+        let basis = format!(
+            "exactly one entity named `{name}` is indexed, at {}; a name that happens to be \
+             unique in this repository is a claim about the index, not about the code",
+            only.id
+        );
         Ok(Some(Decision::Inferred {
             target: only.id,
             by: Evidence::UniqueName,
-            basis: format!(
-                "exactly one entity named `{name}` is indexed, at {}; a name that happens to be \
-                 unique in this repository is a claim about the index, not about the code",
-                only.id
-            ),
+            basis,
         }))
     }
 
