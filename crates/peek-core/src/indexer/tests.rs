@@ -615,7 +615,8 @@ fn a_full_build_leaves_a_write_ahead_log_smaller_than_the_database() {
         stats.file_size_bytes
     );
     assert_eq!(
-        outcome.report().wal_bytes, stats.wal_size_bytes,
+        outcome.report().wal_bytes,
+        stats.wal_size_bytes,
         "the reported size is the measured one, not an estimate"
     );
 }
