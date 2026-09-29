@@ -84,7 +84,11 @@ impl TokenCounter {
     pub fn count_bytes(self, bytes: u64) -> u64 {
         match self.chars_per_token {
             0 => bytes,
-            unit => bytes.div_ceil(unit),
+            // Widened explicitly rather than relying on inference: `div_ceil` needs both operands
+            // to be the same type, and the constant is a `u32` because it is a literal in a
+            // `const`. Widening here keeps the constant readable without making every caller carry
+            // a cast.
+            unit => bytes.div_ceil(u64::from(unit)),
         }
     }
 }

@@ -1157,13 +1157,11 @@ fn neighbourhood(
         if &other == &id {
             continue;
         }
-        offer(
-            &mut found,
-            other,
-            store.entity(&other)?,
-            reason,
-            Some(edge.clone()),
-        );
+        // Borrowed for the lookup, then moved into the offer. The order matters: the row is read
+        // before the id is handed over, because a `store.entity` call needs the id it is given and
+        // `other` is the one being consumed.
+        let row = store.entity(&other)?;
+        offer(&mut found, other, row, reason, Some(edge.clone()));
     }
 
     // The target's block shows *its* edges — every edge at it, in both directions — rather than

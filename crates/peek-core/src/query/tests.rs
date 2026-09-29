@@ -36,8 +36,8 @@ use crate::model::path::RepoPath;
 use crate::model::relation::{Evidence, Relation, RelationKind, ResolutionState, UnresolvedReason};
 use crate::model::span::Span;
 use crate::query::{
-    BudgetStatus, ContextPack, Cost, Direction, InclusionReason, Matched, OmissionReason, Omitted,
-    Query, QueryError, QueryOptions, Walk, WalkRequest,
+    BudgetStatus, ContextPack, Cost, Direction, EdgeSide, InclusionReason, Matched, OmissionReason,
+    Omitted, Query, QueryError, QueryOptions, Walk, WalkRequest,
 };
 use crate::store::{IndexUpdate, RepoId, Store};
 
