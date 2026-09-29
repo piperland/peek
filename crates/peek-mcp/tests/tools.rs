@@ -258,8 +258,8 @@ fn entity_in(store: &Store, file: &str, kind: EntityKind, qualified_name: &str) 
     // into `into_iter` would take away the evidence for the panic it is meant to explain.
     declared
         .iter()
-        .copied()
         .find(|entity| entity.kind() == kind && entity.id.qualified_name() == qualified_name)
+        .cloned()
         .unwrap_or_else(|| {
             panic!(
                 "the fixture has no {kind} `{qualified_name}` in {file}; the indexed entities \
