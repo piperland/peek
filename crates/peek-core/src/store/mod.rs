@@ -192,6 +192,43 @@ impl Store {
         })
     }
 
+    /// Every path the index holds an entity for.
+    ///
+    /// Exists for one caller and one reason: `peek index` has to notice a file that was **deleted**
+    /// since the last run, and a deleted file is not in the discovery walk, so nothing else in the
+    /// engine can see it. The index's own path list is the only record that it was there.
+    ///
+    /// It is here rather than in the CLI because the alternative was a caller preparing its own
+    /// `SELECT DISTINCT path FROM entity` through [`Store::conn`], and `conn` documents itself as
+    /// "not general-purpose". A caller that reaches past the query layer to read is a caller that
+    /// will eventually reach past the write path to write.
+    ///
+    /// `SELECT DISTINCT` over the `entity` table, served by the primary key's leading `path`
+    /// column, so it is a scan of the index rather than of the table — but it is still linear in the
+    /// number of files, which is why `limit` is a parameter and not a constant. **A truncated
+    /// result is not a set of missing files**: a caller given fewer paths than exist must not
+    /// conclude that the others were deleted, which is the failure this function makes possible in
+    /// the first place.
+    pub fn indexed_paths(&self, limit: usize) -> Result<Vec<RepoPath>, StoreError> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT DISTINCT path FROM entity LIMIT ?1")?;
+        let mut rows = statement.query([i64::try_from(limit).unwrap_or(i64::MAX)])?;
+        let mut paths = Vec::new();
+        while let Some(row) = rows.next()? {
+            let raw: String = row.get(0)?;
+            // A stored path that will not validate is not skipped quietly. It means the store holds
+            // something the model would refuse to construct, which is a defect and not a detail,
+            // and a caller that dropped it would report a live file as absent — a deletion that
+            // did not happen.
+            let path = RepoPath::new(raw).map_err(|error| {
+                StoreError::Query(format!("the index holds an unusable path: {error}"))
+            })?;
+            paths.push(path);
+        }
+        Ok(paths)
+    }
+
     /// The file this store reads and writes.
     pub fn path(&self) -> &Path {
         &self.path

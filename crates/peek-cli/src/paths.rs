@@ -268,67 +268,40 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
         .map_err(|error| format!("cannot resolve {}: {error}", parent.display()))?;
     Ok(canonical_parent.join(name))
 }
-
 /// Every repository-relative path the index holds at least one row for.
-///
-/// # This is a stopgap, and here is what it is a stopgap for
-///
+
+/// # Why the store owns this
+
 /// `peek index` has to notice a file that was **deleted** since the last run, and a deleted file
-/// is not in the discovery walk, so nothing else can see it. `peek_core::store::Store` offers no
-/// query that enumerates indexed paths — `entities_in_file` needs a path to start from — and this
-/// is therefore a direct read of the `entity` table through [`Store::conn`].
-///
-/// The read cannot corrupt anything, and `conn()` is public. But its own documentation says it
-/// exists "for the diagnostics and pragmas that are part of this type's contract" and is "not
-/// general-purpose", and it is right: a caller reaching past the query layer is a caller that will
-/// eventually reach past the write path too. **The correct fix is a `pub fn indexed_paths(&self,
-/// limit: usize) -> Result<Vec<RepoPath>, StoreError>` on `Store`.** Until that exists, this is
-/// the one query the CLI reaches for, and it is named so that deleting it is a one-line change.
-///
-/// No limit, and that is deliberate: a limit here would mean a repository large enough to reach it
-/// silently keeps its deleted files, which is the exact failure this function exists to prevent.
-/// The cost is one `PathBuf` per indexed file, which is a few tens of bytes each and is bounded by
-/// the number of files the user just indexed.
+/// is not in the discovery walk, so nothing else in the engine can see it. The index's own path
+/// list is the only record that it was there.
+
+/// An earlier version of this function prepared its own `SELECT DISTINCT path FROM entity` through
+/// `Store::conn`, with a comment saying the right fix was a store method. That is what it is now:
+/// `Store::indexed_paths` exists, and this is a thin translation of its error into the CLI's
+/// `Failure`. `conn` documents itself as "not general-purpose", and a caller that reaches past the
+/// query layer to *read* is a caller that will eventually reach past the write path to *write*.
+
+/// No limit is requested, and that is deliberate: a limit here would mean a repository large
+/// enough to reach it silently keeps its deleted files, which is the exact failure this function
+/// exists to prevent. `Store::indexed_paths` takes a limit because a store does not know its
+/// caller's intent; this call site does, and its intent is completeness.
 pub fn indexed_paths(store: &Store, command: &'static str) -> Result<Vec<RepoPath>, Failure> {
-    // One closure for every failure, because these are four spellings of one thing: the query
-    // failed. The command is a parameter so a failure raised while `rm` is running says `rm`; a
-    // name written into the body would attribute every failure to whichever command happened to be
-    // written first.
-    let fail = |detail: &str| {
+    // A ceiling rather than a budget: it exists so a pathological store cannot make this
+    // allocate without end, and it sits far above the number of files in any repository a person
+    // has indexed. A limit sized to the caller would be a measurement, and nobody has measured
+    // one.
+    const CEILING: usize = 1 << 24;
+
+    store.indexed_paths(CEILING).map_err(|error| {
         Failure::failed(
             command,
             Refusal::new(
                 exit::kind::ENGINE,
-                format!("cannot list the indexed paths: {detail}"),
+                format!("cannot list the indexed paths: {error}"),
             ),
         )
-    };
-    let mut statement = store
-        .conn()
-        .prepare("SELECT DISTINCT path FROM entity")
-        .map_err(|error| fail(&error.to_string()))?;
-    let mut rows = statement.query([]).map_err(|error| fail(&error.to_string()))?;
-    let mut paths = Vec::new();
-    loop {
-        let next = rows.next().map_err(|error| fail(&error.to_string()))?;
-        let Some(row) = next else { break };
-        let raw: String = row
-            .get(0)
-            .map_err(|error| fail(&format!("a path could not be decoded: {error}")))?;
-        // A row that no longer validates is not something to skip quietly: it means the store holds
-        // a path the model would refuse to construct, which is a real defect and not a detail.
-        let Some(path) = RepoPath::new(raw) else {
-            return Err(Failure::failed(
-                command,
-                Refusal::new(
-                    exit::kind::ENGINE,
-                    format!("the index holds the path {raw:?}, which is not repository-relative"),
-                ),
-            ));
-        };
-        paths.push(path);
-    }
-    Ok(paths)
+    })
 }
 
 /// The indexed paths, as a set, for a membership test.
