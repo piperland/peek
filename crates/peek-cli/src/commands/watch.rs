@@ -76,7 +76,7 @@ pub const SIGNALS_NOT_CAUGHT: &str = "this build has no signal handler, so Ctrl-
 /// period rather than chosen, so one number governs both and there is no second knob to argue
 /// about. Clamped at both ends so a very small or very large quiet period still yields a loop that
 /// neither spins nor sleeps through a batch.
-fn tick(quiet_for: Duration) -> Duration {
+pub fn tick(quiet_for: Duration) -> Duration {
     let derived = quiet_for / 8;
     derived.clamp(Duration::from_millis(1), Duration::from_millis(25))
 }

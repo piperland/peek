@@ -129,7 +129,7 @@ impl Repository {
     /// A fixture with the standard sources.
     #[must_use]
     pub fn small(label: &str) -> Self {
-        let mut repository = Self::bare(label);
+        let repository = Self::bare(label);
         repository.write("src/ledger.rs", LEDGER);
         repository.write("src/wallet.rs", WALLET);
         repository.write("src/ui/a.rs", SHARED);
@@ -256,7 +256,7 @@ pub struct Ran {
 /// A usage error becomes a [`Output`] with `Status::Usage` rather than a panic, so a test can
 /// assert on the exit code of a bad command line without a separate code path. This is the only
 /// place the two representations are unified, and it is the boundary the binary's `main` mirrors.
-pub fn run(repository: &Repository, argv: &[&str]) -> Ran {
+pub fn run(_repository: &Repository, argv: &[&str]) -> Ran {
     let owned: Vec<std::ffi::OsString> = argv
         .iter()
         .map(|argument| std::ffi::OsString::from(*argument))
@@ -274,9 +274,9 @@ pub fn run(repository: &Repository, argv: &[&str]) -> Ran {
     // the sink is all a test needs to supply.
     let mut silent = Silent;
     match run_invocation(&invocation, &mut silent) {
-        Ok(output) => Ran {
-            output,
-            narration: output.progress.clone(),
+        Ok(output) => {
+            let narration = output.progress.clone();
+            Ran { output, narration }
         },
         Err(failure) => Ran {
             output: failure_output(&invocation.command, &failure),
