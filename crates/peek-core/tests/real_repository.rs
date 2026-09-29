@@ -200,7 +200,7 @@ fn report_a_real_symbol(store: &peek_core::store::Store, root: &std::path::Path)
     let Ok(relative) = path.strip_prefix(root) else {
         return;
     };
-    let Ok(repo_path) = RepoPath::new(relative.to_string_lossy().as_ref()) else {
+    let Some(repo_path) = RepoPath::new(relative.to_string_lossy().as_ref()) else {
         return;
     };
 
@@ -231,7 +231,7 @@ fn report_a_real_symbol(store: &peek_core::store::Store, root: &std::path::Path)
     };
     println!(
         "\n  fn {} at {}:{}",
-        function.qualified_name(),
+        function.id().qualified_name(),
         function.path().as_str(),
         // A `File` entity has no span of its own, so this is optional rather than assumed.
         function
@@ -271,16 +271,16 @@ fn report_a_real_symbol(store: &peek_core::store::Store, root: &std::path::Path)
 
     // A name that appears in more than one file is where ambiguity either shows up or does not.
     let same_name = store
-        .entities_named(function.name(), 50)
+        .entities_named(function.id().name(), 50)
         .expect("entities by name");
     if same_name.len() > 1 {
         println!(
             "\n  `{}` is declared in {} files, so a bare reference to it is genuinely ambiguous:",
-            function.name(),
+            function.id().name(),
             same_name.len()
         );
         for entity in same_name.iter().take(5) {
-            println!("    {} {}", entity.path().as_str(), entity.qualified_name());
+            println!("    {} {}", entity.path().as_str(), entity.id().qualified_name());
         }
         let ambiguous = store
             .relations_in_state(
