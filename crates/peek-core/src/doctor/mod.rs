@@ -215,7 +215,11 @@ impl Diagnosis {
         ordered.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
         let mut out = String::new();
         for finding in ordered {
-            out.push_str(&format!("[{}] {}\n", finding.severity.as_str(), finding.summary));
+            out.push_str(&format!(
+                "[{}] {}\n",
+                finding.severity.as_str(),
+                finding.summary
+            ));
             out.push_str(&format!("        {}\n", finding.detail));
             if let Some(action) = &finding.action {
                 out.push_str(&format!("        try: {action}\n"));
@@ -381,7 +385,10 @@ fn check_repository_identity(store: &Store, repo: &crate::store::RepoId, root: &
     if matches {
         Finding::pass(
             Check::RepositoryIdentity,
-            format!("the index belongs to this checkout ({})", store.repo().as_str()),
+            format!(
+                "the index belongs to this checkout ({})",
+                store.repo().as_str()
+            ),
             detail,
         )
     } else {
@@ -474,7 +481,10 @@ fn check_generation(stats: &StoreStats) -> Finding {
     }
     Finding::pass(
         Check::Generation,
-        format!("generation {} covers {} relations", stats.generation, stats.relation_count),
+        format!(
+            "generation {} covers {} relations",
+            stats.generation, stats.relation_count
+        ),
         format!(
             "{} entities and {} relations, and the generation is non-zero, so the write path \
              produced them",
@@ -488,7 +498,10 @@ fn check_orphan_edges(stats: &StoreStats) -> Finding {
         return Finding::problem(
             Check::OrphanEdges,
             Severity::Fail,
-            format!("{} relations point at something not in the index", stats.orphan_relations),
+            format!(
+                "{} relations point at something not in the index",
+                stats.orphan_relations
+            ),
             "a relation whose target is missing is a confident answer to a question about code \
              that is not there. Foreign keys make this structurally impossible, so a non-zero \
                  count means something wrote to the database without going through Peek"
@@ -508,7 +521,10 @@ fn check_pending_work(stats: &StoreStats) -> Finding {
         return Finding::problem(
             Check::PendingWork,
             Severity::Notice,
-            format!("{} relations have not been decided", stats.pending_relations),
+            format!(
+                "{} relations have not been decided",
+                stats.pending_relations
+            ),
             format!(
                 "{} of {} relations — these are extracted references the resolver has not placed \
                  yet. They are stored and countable rather than dropped, which is the point, but \
@@ -622,10 +638,7 @@ fn check_unsupported_files(root: &Path) -> Finding {
         return Finding::pass(
             Check::UnsupportedFiles,
             "every file in the repository was indexable",
-            format!(
-                "{} files yielded, none refused",
-                stats.files_yielded
-            ),
+            format!("{} files yielded, none refused", stats.files_yielded),
         );
     }
 
@@ -642,7 +655,10 @@ fn check_unsupported_files(root: &Path) -> Finding {
                 .to_owned(),
         )
     } else {
-        Some("a file that cannot be decoded is skipped on purpose, never partially indexed".to_owned())
+        Some(
+            "a file that cannot be decoded is skipped on purpose, never partially indexed"
+                .to_owned(),
+        )
     };
 
     Finding::problem(

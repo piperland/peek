@@ -18,8 +18,8 @@ use super::{Check, Diagnosis, Severity, diagnose, refusal_reasons};
 use crate::discover::DiscoveryOptions;
 use crate::indexer;
 use crate::model::{Entity, EntityId, EntityKind, Relation, RelationKind, RepoPath, Span};
-use crate::store::{IndexUpdate, paths};
 use crate::store::{Durability, RepoId, Store};
+use crate::store::{IndexUpdate, paths};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -167,10 +167,17 @@ fn an_index_that_cannot_be_opened_is_a_failure_that_names_what_to_do() {
     let repo = RepoId::discover(install.path()).expect("derive a repository id");
     let database = install.database();
     fs::create_dir_all(database.parent().expect("the index has a parent")).expect("make the dir");
-    fs::write(&database, b"this is not a sqlite database, it is a sentence").expect("write it");
+    fs::write(
+        &database,
+        b"this is not a sqlite database, it is a sentence",
+    )
+    .expect("write it");
 
     let diagnosis = install.settled_diagnosis();
-    assert!(!diagnosis.is_healthy(), "an unopenable index is not healthy");
+    assert!(
+        !diagnosis.is_healthy(),
+        "an unopenable index is not healthy"
+    );
     let openable = findings_of(&diagnosis, Check::IndexOpenable);
     assert_eq!(openable.len(), 1, "{openable:?}");
     assert_eq!(openable[0].severity, Severity::Fail);
@@ -211,7 +218,9 @@ fn an_untouched_but_empty_index_is_a_notice_not_a_failure() {
     assert_eq!(generation[0].severity, Severity::Notice);
     assert!(generation[0].action.is_some());
     assert!(
-        diagnosis.worst().is_some_and(|worst| worst < Severity::Fail),
+        diagnosis
+            .worst()
+            .is_some_and(|worst| worst < Severity::Fail),
         "an empty index is a state to fix, not a broken one: {:?}",
         diagnosis.report()
     );
@@ -363,9 +372,7 @@ fn an_index_holding_rows_with_no_generation_is_reported_as_impossible() {
     // Insert a row behind the store's back, with foreign keys and checks off, then leave the
     // generation where it is.
     connection
-        .execute_batch(
-            "PRAGMA foreign_keys = OFF; PRAGMA ignore_check_constraints = ON;",
-        )
+        .execute_batch("PRAGMA foreign_keys = OFF; PRAGMA ignore_check_constraints = ON;")
         .expect("relax the guards");
     connection
         .execute(
@@ -415,9 +422,7 @@ fn a_dangling_edge_is_caught_even_with_the_guards_disabled() {
     // Now break it behind the store's back: the target row goes, the edge stays.
     let connection = rusqlite::Connection::open(install.database()).expect("open");
     connection
-        .execute_batch(
-            "PRAGMA foreign_keys = OFF; PRAGMA ignore_check_constraints = ON;",
-        )
+        .execute_batch("PRAGMA foreign_keys = OFF; PRAGMA ignore_check_constraints = ON;")
         .expect("relax the guards");
     connection
         .execute("DELETE FROM entity WHERE path = 'src/gone.rs'", [])
@@ -474,26 +479,6 @@ fn ambiguity_is_reported_as_a_fact_about_the_code_and_not_as_a_defect() {
     // tells them where the graph is thin.
     let install = Install::empty("ambiguous");
     let mut store = install.store();
-    let source = id("src/a.rs", EntityKind::Function, "a");
-    let one = id("src/one.rs", EntityKind::Function, "shared");
-    let two = id("src/two.rs", EntityKind::Function, "shared");
-    store
-        .apply_update(
-            IndexUpdate::empty()
-                .with_entity(function("src/a.rs", "a"))
-                .with_entity(function("src/one.rs", "shared"))
-                .with_entity(function("src/two.rs", "shared"))
-                .with_relation(Relation::ambiguous(
-                    RelationKind::Calls,
-                    source,
-                    "shared",
-                    span(),
-                    vec![one, two],
-                )),
-        )
-        .expect("commit");
-    drop(store);
-
     // Four ambiguous edges and four resolved ones, so the share is a realistic minority rather
     // than the 100% a single-relation fixture produces — which the next test covers separately.
     let mut update = IndexUpdate::empty()
@@ -599,12 +584,8 @@ fn an_index_inside_the_repository_is_a_warning_with_a_way_out() {
     let inside = install.path().join(".peek");
     fs::create_dir_all(&inside).expect("create the in-repository index directory");
     let mut store = Store::open(&inside.join("index.db"), &repo).expect("open the in-repo store");
-    indexer::build_full(
-        &mut store,
-        install.path(),
-        DiscoveryOptions::default(),
-    )
-    .expect("index into the repository");
+    indexer::build_full(&mut store, install.path(), DiscoveryOptions::default())
+        .expect("index into the repository");
     drop(store);
 
     paths::set_root_override(Some(inside.clone()));
@@ -629,12 +610,8 @@ fn a_weaker_durability_is_reported_as_a_warning() {
     // given rather than assuming the default.
     let install = Install::empty("weak-durability");
     let repo = RepoId::discover(install.path()).expect("derive a repository id");
-    let mut store = Store::open_with(
-        &install.database(),
-        &repo,
-        Durability::Normal,
-    )
-    .expect("open with a weaker guarantee");
+    let mut store = Store::open_with(&install.database(), &repo, Durability::Normal)
+        .expect("open with a weaker guarantee");
 
     paths::set_root_override(Some(install.index.clone()));
     let diagnosis = super::diagnose_open(&store, install.path(), &repo);
