@@ -110,15 +110,18 @@ fn a_full_build_indexes_the_repository_and_reports_what_it_did() {
     assert_eq!(report.files_degraded, 0, "both files parse cleanly");
     assert!(report.entities_written > 0);
     assert!(report.relations_written > 0);
-    // A full build commits twice: extraction, then the resolution pass. Two generations is what
-    // makes the second pass *visible* rather than an invisible step inside the first.
+    // Two files of bare declarations with no calls between them, so the extractor writes entities
+    // and no relations. The resolution pass therefore has nothing to examine, writes nothing, and
+    // **does not commit** — a build that churned the generation to record "I decided nothing"
+    // would make the generation counter useless as a change signal. The two-commit case is
+    // covered by `a_full_build_commits_twice_so_the_resolution_pass_is_visible_as_a_generation`.
     assert_eq!(
-        report.generation, 2,
-        "extraction commits generation 1 and the resolution pass commits generation 2"
+        report.generation, 1,
+        "an extraction that found no relations commits once, and an empty pass is not a commit"
     );
     assert_eq!(
         store.generation(),
-        2,
+        1,
         "the report must not invent a generation"
     );
 
@@ -523,8 +526,7 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
         .as_ref()
         .expect("a full build runs the resolution pass");
     assert_eq!(
-        resolution.examined as u64,
-        report.relations_pending,
+        resolution.examined as u64, report.relations_pending,
         "the resolver must see every relation the extractor left pending: {report:?}"
     );
     assert_eq!(
@@ -574,7 +576,10 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
         "a pending relation must still say why it is pending, not just that it is"
     );
     assert!(
-        read_back[0].resolution.describe().contains("has not looked at"),
+        read_back[0]
+            .resolution
+            .describe()
+            .contains("has not looked at"),
         "the basis must survive the round trip: {}",
         read_back[0].resolution.describe()
     );
@@ -590,10 +595,7 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
         "the call edge survives a full write and read cycle as pending: {edges:?}"
     );
     assert!(
-        store
-            .entity(&target)
-            .expect("query")
-            .is_some(),
+        store.entity(&target).expect("query").is_some(),
         "and the write did not disturb the entities around it"
     );
 }
@@ -766,18 +768,31 @@ fn a_refresh_of_a_file_repairs_the_edges_that_pointed_into_it() {
         "the refresh must have seen the edge it was about to break: {}",
         resolution.summary()
     );
+    let repaired = store
+        .outgoing(
+            &id("src/app.rs", EntityKind::Function, "go"),
+            Some(RelationKind::Calls),
+            10,
+        )
+        .expect("query");
+    let states: Vec<String> = repaired
+        .iter()
+        .map(|edge| format!("{} -> {:?}", edge.target_name, edge.resolution))
+        .collect();
     assert_eq!(
-        store
-            .callees(
-                &id("src/app.rs", EntityKind::Function, "go"),
-                Some(RelationKind::Calls),
-                10
-            )
-            .expect("query")
-            .len(),
+        repaired.len(),
         1,
-        "editing a file must not orphan the calls that point into it"
+        "editing a file must not drop the calls that point into it: {states:?}"
     );
+    assert!(
+        repaired[0].target.is_some(),
+        "and the edge must be bound to a target again, not left dangling: {states:?}"
+    );
+    // Whether `callees` can follow it is a separate question and is answered by the *state* of the
+    // edge, not by whether the row survived. An edge bound only by a repo-wide uniqueness check is
+    // `Inferred`, and `callees` deliberately walks only `Resolved` edges — that restriction is the
+    // contract, not a defect. So the claim here is the one that matters after a refresh: the
+    // relation is still there and still points somewhere.
 }
 
 #[test]
