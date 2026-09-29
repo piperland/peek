@@ -6,8 +6,8 @@
 //! [`Language::tier`](crate::model::Language::tier) will not advertise it.
 
 use super::spec::{
-    CallRule, ImportRule, InheritanceStyle, LanguageSpec, ModuleLayout, NameStrategy, ReferenceRule,
-    SymbolRule,
+    CallRule, ImportRule, InheritanceStyle, LanguageSpec, ModuleLayout, NameStrategy,
+    ReferenceRule, SymbolRule,
 };
 use crate::model::{EntityKind, Language};
 

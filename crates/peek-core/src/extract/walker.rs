@@ -743,7 +743,9 @@ impl<'a> Walker<'a> {
 
     /// Emit `imports` relations from a `use` declaration, preserving aliases.
     fn emit_import(&mut self, source: EntityId, node: Node<'_>, rule: &ImportRule) {
-        let Some(argument) = rule.path_field.and_then(|field| node.child_by_field_name(field))
+        let Some(argument) = rule
+            .path_field
+            .and_then(|field| node.child_by_field_name(field))
         else {
             return;
         };
@@ -1792,7 +1794,10 @@ mod tests {
     fn a_file_is_the_module_its_path_names() {
         // The claim R-007 rests on. `use regex_automata::util::look::Matcher;` can only be a
         // lookup if the index holds a module spelled `regex_automata::util::look`.
-        let file = rust_at("crates/regex-automata/src/util/look.rs", "pub struct Matcher;");
+        let file = rust_at(
+            "crates/regex-automata/src/util/look.rs",
+            "pub struct Matcher;",
+        );
         assert_eq!(
             module_names(&file),
             vec!["module regex_automata::util::look".to_owned()]
@@ -1821,10 +1826,7 @@ mod tests {
         let member = rust_at("crates/regex/src/automata/mod.rs", "pub struct Util;");
         assert_eq!(
             module_names(&root),
-            vec![
-                "module regex".to_owned(),
-                "package regex".to_owned(),
-            ],
+            vec!["module regex".to_owned(), "package regex".to_owned(),],
             "the crate root is the one file that declares the package"
         );
         assert_eq!(
@@ -1840,7 +1842,10 @@ mod tests {
         // the file that is the module `foo::app`. Prefixing it would change the qualified name —
         // and therefore the `EntityId` — of every symbol inside it, so a refactor that moved
         // nothing would re-key every method in the repository.
-        let file = rust_at("crates/foo/src/app.rs", "pub mod inner { pub fn helper() {} }");
+        let file = rust_at(
+            "crates/foo/src/app.rs",
+            "pub mod inner { pub fn helper() {} }",
+        );
         let names = qualified_names(&file);
         assert!(
             names.contains(&"inner".to_owned()),
@@ -2097,7 +2102,9 @@ mod tests {
         for relation in declaring.relations.iter().chain(calling.relations.iter()) {
             update = update.with_relation(relation.clone());
         }
-        store.apply_update(update).expect("the extraction is storable");
+        store
+            .apply_update(update)
+            .expect("the extraction is storable");
         let options = crate::resolve::ResolutionOptions::default();
         let report = crate::resolve::resolve_all(&mut store, options).expect("the pass runs");
         assert!(!report.pending_remaining, "{report:?}");
@@ -2171,11 +2178,15 @@ mod tests {
         // to carry the whole path and not a pre-judgement about which it is.
         let file = rust_at("crates/foo/src/app.rs", "use crate::a::b::C;");
         assert_eq!(import_modules(&file), vec!["crate::a::b::C".to_owned()]);
-        let import = file            .relations
+        let import = file
+            .relations
             .iter()
             .find(|relation| relation.kind == RelationKind::Imports)
             .expect("the import survived");
-        assert_eq!(import.target_name, "C", "the local name is the last segment");
+        assert_eq!(
+            import.target_name, "C",
+            "the local name is the last segment"
+        );
     }
 
     #[test]
@@ -2218,7 +2229,11 @@ mod tests {
             .filter(|relation| relation.kind == RelationKind::Imports)
             .map(|relation| relation.target_name.as_str())
             .collect();
-        assert_eq!(locals, vec!["*", "*", "e"], "a star is a binding, not a name");
+        assert_eq!(
+            locals,
+            vec!["*", "*", "e"],
+            "a star is a binding, not a name"
+        );
         assert_eq!(
             import_modules(&file),
             vec![
@@ -2310,7 +2325,10 @@ mod tests {
                 evidence: crate::model::Evidence::ImportBinding { module, alias },
                 basis,
             } => {
-                assert_eq!(module, "crate::inner::Thing", "the path is not lost to the alias");
+                assert_eq!(
+                    module, "crate::inner::Thing",
+                    "the path is not lost to the alias"
+                );
                 assert_eq!(alias.as_deref(), Some("Renamed"));
                 assert!(basis.contains("re-export"), "{basis:?}");
             }

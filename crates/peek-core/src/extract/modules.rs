@@ -258,9 +258,7 @@ pub fn locate(path: &RepoPath, layout: &ModuleLayout) -> ModuleLocation {
     // `source_root` is either a valid index or `directories.len()`, and in both cases
     // `directories[source_root..]` is a legal slice; the `min` keeps that a property of the code
     // rather than of the comment.
-    let after_root = source_root
-        .saturating_add(1)
-        .min(directories.len());
+    let after_root = source_root.saturating_add(1).min(directories.len());
     let above = &directories[..source_root.min(directories.len())];
     let below = &directories[after_root..];
 
@@ -285,13 +283,17 @@ pub fn locate(path: &RepoPath, layout: &ModuleLayout) -> ModuleLocation {
     // nothing to take a name from, and treating it as the package root module would give it the
     // same name as `src/lib.rs` and put two different files in one namespace.
     let names_its_directory = layout.directory_modules.contains(&stem) && !below.is_empty();
-    let segments = match is_package_root || names_its_directory {
-        true => below.to_vec(),
-        false => {
-            let mut segments = below.to_vec();
-            segments.push(stem.to_owned());
-            segments
-        }
+    // `below` borrows from the path's components and `stem` is owned, so the segments are
+    // collected into `String`s in both branches. Mixing the two would make the field's type depend
+    // on which branch ran, which is the kind of thing that compiles in one configuration and not
+    // another.
+    let segments: Vec<String> = match is_package_root || names_its_directory {
+        true => below.iter().map(|part| (*part).to_owned()).collect(),
+        false => below
+            .iter()
+            .map(|part| (*part).to_owned())
+            .chain(std::iter::once(stem))
+            .collect(),
     };
 
     ModuleLocation {
@@ -385,7 +387,10 @@ mod tests {
             .copied()
             .filter(|relative| fixture_source(relative).is_empty())
             .collect();
-        assert!(empty.is_empty(), "fixtures that are committed but empty: {empty:?}");
+        assert!(
+            empty.is_empty(),
+            "fixtures that are committed but empty: {empty:?}"
+        );
     }
 
     fn path(s: &str) -> crate::model::RepoPath {
@@ -640,7 +645,9 @@ mod tests {
             .and_then(|entity| entity.structural_fingerprint.clone());
         assert_eq!(before, after);
         assert!(
-            before.as_deref().is_some_and(|value| value.starts_with("fnv1a64:")),
+            before
+                .as_deref()
+                .is_some_and(|value| value.starts_with("fnv1a64:")),
             "a module body can be hashed, so the fingerprint is filled in: {before:?}"
         );
     }
