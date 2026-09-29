@@ -141,11 +141,16 @@ pub fn status(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAn
         return Err(ToolError::not_indexed(session.root()));
     }
 
-    let opened_at = session.opened_at_generation();
+    // The reader is opened *before* the generation is read, because opening one is what sets the
+    // generation it was opened at. Reading it first would report `0` on the first call of a
+    // session and the right number on every call after — a figure that varies run to run for a
+    // reason that has nothing to do with the index.
     let stats = session
         .reader()?
         .stats()
         .map_err(|error| ToolError::failed(format!("the index could not be measured: {error}")))?;
+    let durability = session.reader()?.durability().as_str().to_owned();
+    let opened_at = session.opened_at_generation();
     let states = ResolutionStates::of(&stats);
     let accounted = states.total();
     let partition = accounted == stats.relation_count;
@@ -170,7 +175,7 @@ pub fn status(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAn
         "generation": stats.generation,
         "opened_at_generation": opened_at,
         "handle_is_stale": stats.generation != opened_at,
-        "durability": session.reader()?.durability().as_str(),
+        "durability": durability,
         "states_partition": partition,
         "resolution_states": states,
         "stats": stats,
