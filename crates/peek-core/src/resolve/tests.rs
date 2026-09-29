@@ -199,7 +199,7 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
         use_module_table: true,
         ..ResolutionOptions::default()
     };
-    resolve_all(&store, &options).expect("XXXMARKERXXX");
+    resolve_all(&mut store, options).expect("resolve with the module table on");
 
     let import = relations_of(&store, RelationKind::Imports)
         .into_iter()
@@ -250,7 +250,7 @@ fn the_module_table_switch_really_turns_the_table_off() {
         use_module_table: false,
         ..ResolutionOptions::default()
     };
-    resolve_all(&mut store, &options).expect("resolve with the module table off");
+    resolve_all(&mut store, options).expect("resolve with the module table off");
 
     let import = relations_of(&store, RelationKind::Imports)
         .into_iter()
@@ -346,7 +346,7 @@ fn an_import_that_names_a_module_rather_than_an_item_binds_to_that_modules_file(
         "use payments::service as svc;\nfn boot() {}\n",
     );
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let imports: Vec<_> = relations_of(&store, RelationKind::Imports)
@@ -393,7 +393,7 @@ fn a_call_to_a_function_in_the_same_file_resolves() {
     let tree = TempTree::new("same-file");
     tree.write("src/lib.rs", "fn helper() {}\nfn main() { helper(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "helper");
@@ -426,7 +426,7 @@ fn a_call_bound_by_an_import_in_another_file_resolves_across_files() {
         "use payments::charge;\nfn boot() { charge(1); }\n",
     );
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "charge");
@@ -480,7 +480,7 @@ fn two_symbols_with_the_same_name_in_different_files_are_ambiguous_and_neither_i
     tree.write("src/two.rs", "pub fn charge() {}\n");
     tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "charge");
@@ -633,7 +633,7 @@ fn a_receiver_never_binds_to_an_unrelated_function_with_the_same_name() {
     );
     tree.write("src/app.rs", "fn boot() { let s = Service; s.charge(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "charge");
@@ -677,7 +677,7 @@ fn a_receiver_that_names_a_type_in_its_own_file_resolves_to_that_type_only() {
          fn retry(&self) {} }\n",
     );
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "retry");
@@ -712,7 +712,7 @@ fn a_receiver_matched_while_ignoring_letter_case_is_a_claim_and_is_labelled_as_o
          fn run() { let service = Service; service.retry(); }\n",
     );
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "retry");
@@ -751,7 +751,7 @@ fn a_name_matched_only_by_a_repository_wide_uniqueness_check_is_inferred_not_res
     tree.write("src/payments.rs", "pub fn charge() {}\n");
     tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "charge");
@@ -1142,7 +1142,7 @@ fn a_multi_segment_path_resolves_through_the_module_it_names() {
         "fn go() { crate::payments::Service::charge(); }\n",
     );
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "charge");
@@ -1286,7 +1286,7 @@ fn an_ambiguity_widened_by_a_new_file_is_not_re_decided_until_a_full_pass_runs()
     tree.write("src/two.rs", "pub fn charge() {}\n");
     tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
     let first = the_call(&store, "charge");
     let before = match &first.resolution {
