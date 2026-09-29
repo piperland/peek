@@ -1391,10 +1391,11 @@ fn a_relations_cost_is_recorded_where_it_can_be_checked() {
         !pack.units[0].entity.doc.as_deref().unwrap_or("").is_empty(),
         "the fixture's declarations carry a doc comment, so the price covers more than a name"
     );
-    // A declaration in the fixture has a span, so the rendered line has a position. `matches!`
-    // takes the expression and the pattern and nothing else, so the reason for the assertion is a
-    // comment rather than a third argument.
-    assert!(matches!(pack.units[0].entity.span, Some(_)));
+    // A declaration in the fixture has a span, so the rendered line has a position to point at.
+    assert!(
+        pack.units[0].entity.span.is_some(),
+        "a line with no span renders as a bare name, so the reader cannot find it"
+    );
 }
 
 #[test]
