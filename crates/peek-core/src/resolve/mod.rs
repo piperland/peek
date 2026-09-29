@@ -814,7 +814,9 @@ impl<'s> Resolver<'s> {
         if found.is_empty() {
             return Ok(None);
         }
-        found.sort_by(|a, b| a.id.cmp(&b.id));
+        // No sort needed: `Store::entities_named` orders by `path, kind, qualified_name,
+        // entity_ordinal`, which is exactly `EntityId`'s own ordering, so the candidates arrive
+        // in the order they will be written in.
         if found.len() > 1 {
             return Ok(Some(Decision::Ambiguous {
                 candidates: self.cap(found.into_iter().map(|f| f.id).collect()),
@@ -835,15 +837,20 @@ impl<'s> Resolver<'s> {
     /// Turn one rung's candidate set into a decision.
     ///
     /// Candidates are ordered by evidence strength and then by identity, so the stored list is
-    /// deterministic and reproducible across runs. That ordering is a **presentation** order.
-    /// Nothing in this file ever takes the first candidate, and the first candidate in a stored
-    /// `Ambiguous` is not a recommendation — it is only the one that sorts first.
+    /// deterministic and reproducible across runs. Within one rung the strength is equal by
+    /// construction, so in practice the identity tiebreak is what decides the order — and that is
+    /// exactly why the order is documented as a *presentation* order. Nothing in this file ever
+    /// takes the first candidate, and the first candidate in a stored `Ambiguous` is not a
+    /// recommendation; it is only the one that sorts first.
     ///
     /// `guess_note` is the basis written when the candidate was only reached through a
     /// case-folded match. A `Resolved` decision writes no basis, because `ResolutionState` has no
     /// basis field for it; the rule is readable from the evidence class alone, which is what
     /// [`rule_name`] returns.
     fn from_candidates(&mut self, mut found: Vec<Found>, guess_note: &str) -> Decision {
+        // Sorted by hand rather than with `sort_by_key`, because the key is a tuple containing a
+        // `Reverse` and a `String`-bearing identity, and the point of the comparison is to be
+        // readable: strongest evidence first, then a stable identity order.
         found.sort_by(|a, b| {
             b.by
                 .strength()
@@ -877,6 +884,18 @@ impl<'s> Resolver<'s> {
         }
         candidates
     }
+}
+
+/// Whether the ladder should decide this relation at all.
+///
+/// Structural relations are excluded, and the reason is that re-deciding one can only lose
+/// information. `Defines`, `Contains` and `Owns` are settled by grammar — the enclosing node *is*
+/// the target — and the walker already wrote them as `Resolved { by: Containment }`. That is not
+/// "pending, awaiting a decision"; it is a decision, and the strongest one the model has. Running
+/// the ladder over one would replace `containment` with `same_file`, which is a downgrade the
+/// report would then present as an improvement.
+fn is_resolvable(relation: &Relation) -> bool {
+    !relation.kind.is_structural()
 }
 
 /// Whether an entity kind can be the target of a name reference.
@@ -1112,13 +1131,15 @@ pub fn resolve_paths(
     let mut in_scope = RelationSet::new();
     let mut displaced_keys: BTreeSet<RelationKey> = BTreeSet::new();
     for relation in displaced {
-        in_scope.insert(relation.clone());
-        displaced_keys.insert(relation.natural_key());
+        if is_resolvable(relation) {
+            in_scope.insert(relation.clone());
+            displaced_keys.insert(relation.natural_key());
+        }
     }
 
     for path in paths {
-        // A file is read through three doors, and the count of what it contributes is reported so
-        // a caller can tell a scoped pass from a whole-index one.
+        // A file is read through two doors: its own outgoing edges, and the edges arriving at the
+        // entities it declares. The second is the "a definition moved" half.
         let entities = store.entities_in_file(path, options.entities_per_file)?;
         for entity in &entities {
             let outgoing_limit = options.outgoing_per_source;
@@ -1130,7 +1151,9 @@ pub fn resolve_paths(
             if options.reconsider_decided {
                 let incoming_limit = options.incoming_per_entity;
                 for relation in store.incoming(&entity.id, None, incoming_limit)? {
-                    in_scope.insert(relation);
+                    if is_resolvable(&relation) {
+                        in_scope.insert(relation);
+                    }
                 }
             }
         }
