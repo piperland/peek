@@ -211,6 +211,12 @@ pub struct ResolutionOptions {
     pub outgoing_per_source: usize,
     /// Relations read into one target before the read is abandoned.
     pub incoming_per_entity: usize,
+    /// Modules read for one qualified-name lookup before the read is abandoned.
+    ///
+    /// Separate from `entities_by_name` because it is a different index with a different
+    /// selectivity: a qualified name names one module, so the answer is normally zero or one, and
+    /// a limit sized for a name lookup would be two orders of magnitude too generous here.
+    pub modules_per_lookup: usize,
     /// Candidates written into one `Ambiguous` before the rest are dropped.
     pub max_candidates: usize,
     /// Re-decide relations that were already decided because their target is in scope.
@@ -229,6 +235,7 @@ impl Default for ResolutionOptions {
             entities_by_name: 512,
             outgoing_per_source: 512,
             incoming_per_entity: 512,
+            modules_per_lookup: 8,
             max_candidates: 32,
             reconsider_decided: true,
         }
@@ -659,7 +666,7 @@ impl<'s> Resolver<'s> {
         }
         let aliased = binding.alias.is_some();
         let mut found: Vec<EntityId> = Vec::new();
-        for file in files_for_module(&binding.module, importer, !aliased) {
+        for file in self.module_files(&binding.module, importer, !aliased)? {
             for entity in self.entities_in_file(&file)? {
                 let wanted = match &binding.alias {
                     Some(_) => entity.kind() == EntityKind::File,
@@ -671,6 +678,118 @@ impl<'s> Resolver<'s> {
             }
         }
         Ok(found)
+    }
+
+    /// The files a module path could name, asked of the module table first.
+    ///
+    /// The extractor now writes a `Module` entity for every file it reads, with a qualified name
+    /// that is the path from the package's source root. That turns "which file does `alpha::gateway`
+    /// name" from a question answered by guessing at paths — a handful of primary-key seeks per
+    /// anchor, per reading, with no way to cross a package boundary — into **one indexed seek** on
+    /// `entities_with_qualified_name`.
+    ///
+    /// The guess is kept as a fallback, not deleted. A module table only covers files this build
+    /// extracted, so a repository that is partly indexed, or a language whose layout the extractor
+    /// does not yet know, still needs the old path. Order matters: the table is asked first
+    /// because it is exact, and a hit from it is a `Resolved` answer rather than a guess.
+    ///
+    /// `super::` is the one shape the table answers better than the guess did, because a relative
+    /// climb is defined in terms of the *importer's own module*, which the table knows and the
+    /// guess had to infer from the directory name.
+    fn module_files(
+        &mut self,
+        module: &str,
+        importer: &RepoPath,
+        strip_last: bool,
+    ) -> Result<Vec<RepoPath>, StoreError> {
+        let mut via_table = Vec::new();
+        for qualified in self.module_qualified_names(module, importer, strip_last) {
+            for entity in self.store.entities_with_qualified_name(&qualified, self.options.modules_per_lookup)? {
+                if entity.kind() == EntityKind::Module {
+                    let path = entity.path().clone();
+                    if !via_table.contains(&path) {
+                        via_table.push(path);
+                    }
+                }
+            }
+        }
+        if !via_table.is_empty() {
+            return Ok(via_table);
+        }
+        Ok(files_for_module(module, importer, strip_last))
+    }
+
+    /// The qualified names a module path could have, in the order they should be tried.
+    ///
+    /// A path is tried as written and, when the last segment may be an item rather than a module,
+    /// with the last segment dropped. `crate` and `self` are stripped because the module table is
+    /// named from the package root, so `crate::a::b` is `package::a::b` and the leading `crate`
+    /// has no counterpart. `super` is a climb, which only the path guess can express, so a path
+    /// that contains one is left to the guess entirely rather than being half-answered.
+    fn module_qualified_names(
+        &self,
+        module: &str,
+        importer: &RepoPath,
+        strip_last: bool,
+    ) -> Vec<String> {
+        if module.split("::").any(|part| part == "super") {
+            return Vec::new();
+        }
+        let segments: Vec<&str> = module
+            .split("::")
+            .filter(|part| !matches!(*part, "" | "crate" | "self"))
+            .collect();
+        if segments.is_empty() || segments.len() > MAX_MODULE_SEGMENTS {
+            return Vec::new();
+        }
+
+        // The importer's own package, so `crate::a::b` becomes `package::a::b`. Taken from the
+        // module entity for the importing file, which is the only place the package name is
+        // recorded — a directory name would be a guess, and a guess here is what produced
+        // `no_candidate` for 343 of 344 edges on a real cross-crate repository.
+        let package = self.package_of(importer);
+
+        let mut readings: Vec<Vec<&str>> = vec![segments.clone()];
+        if strip_last && segments.len() > 1 {
+            readings.push(segments[..segments.len() - 1].to_vec());
+        }
+
+        let mut qualified = Vec::new();
+        for reading in readings {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(package) = &package {
+                parts.push(package.clone());
+            }
+            parts.extend(reading.iter().map(|part| (*part).to_owned()));
+            let candidate = parts.join("::");
+            if !qualified.contains(&candidate) {
+                qualified.push(candidate);
+            }
+        }
+        qualified
+    }
+
+    /// The package a file belongs to, from the module entity that declares it.
+    ///
+    /// `None` when the file is not in the index or has no module, in which case the qualified name
+    /// is tried without a package prefix — which is exactly how a non-workspace repository spells
+    /// it, so this is a fallback that is right rather than a degraded mode.
+    fn package_of(&self, importer: &RepoPath) -> Option<String> {
+        let entity = self
+            .store
+            .entities_in_file(importer, self.options.modules_per_lookup)
+            .ok()?
+            .into_iter()
+            .find(|entity| matches!(entity.kind(), EntityKind::Module | EntityKind::Package))?;
+        // `alpha::gateway` is the module; the package is its first segment. Read from the entity
+        // rather than from the path, so a package whose name differs from its directory is still
+        // spelled the way the source spells it.
+        entity
+            .id()
+            .qualified_name()
+            .split("::")
+            .next()
+            .map(|first| first.to_owned())
     }
 
     /// R2: the receiver names an owner, and the target is declared inside that owner.
