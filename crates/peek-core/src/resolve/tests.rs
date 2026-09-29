@@ -223,9 +223,7 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
          scope, not a declaration, and it must not be findable as one. Candidates: {candidates:?}"
     );
     assert!(
-        candidates
-            .iter()
-            .any(|id| id.kind() == EntityKind::Module),
+        candidates.iter().any(|id| id.kind() == EntityKind::Module),
         "the competing candidate is the impl block's own entity: {candidates:?}"
     );
 
