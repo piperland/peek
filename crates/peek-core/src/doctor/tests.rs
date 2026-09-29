@@ -471,7 +471,7 @@ fn a_weaker_durability_is_reported_as_a_warning() {
     // given rather than assuming the default.
     let install = Install::empty("weak-durability");
     let repo = RepoId::discover(install.path()).expect("derive a repository id");
-    let store = Store::open_with(
+    let mut store = Store::open_with(
         &install.index.join("index.db"),
         &repo,
         Durability::Normal,
@@ -520,7 +520,7 @@ fn files_the_walk_refuses_are_named_by_reason_rather_than_only_counted() {
     let install = Install::empty("refusals");
     install.write("src/lib.rs", "fn a() {}\n");
     install.write("notes.rst", "Title\n=====\n");
-    install.write("src/binary.rs", b"fn b() { \xff\xfe }");
+    install.write_bytes("src/binary.rs", b"fn b() { \xff\xfe }");
     install.write("README.md", "# hi\n");
 
     let reasons = refusal_reasons(install.path());
