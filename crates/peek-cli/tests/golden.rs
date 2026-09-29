@@ -48,10 +48,6 @@ use peek_cli::{args, run as run_invocation};
 use peek_core::query::BudgetStatus;
 
 /// The committed goldens.
-const CONTEXT_COMPLETE: &str = include_str!("golden/context-complete.txt");
-const CONTEXT_REDUCED: &str = include_str!("golden/context-reduced.txt");
-const DOCTOR_HEALTHY: &str = include_str!("golden/doctor-healthy.txt");
-const DOCTOR_BROKEN: &str = include_str!("golden/doctor-broken.txt");
 
 /// The marker an ungenerated golden carries, so it fails loudly rather than comparing equal.
 const UNGENERATED: &str = "PEEK_UPDATE_GOLDENS";
@@ -80,15 +76,35 @@ fn golden_path(name: &str) -> std::path::PathBuf {
         .join(format!("{name}.txt"))
 }
 
+/// Read a golden from disk.
+///
+/// **At run time, not with `include_str!`.** The goldens were embedded at compile time, so
+/// `PEEK_UPDATE_GOLDENS=1 cargo test` wrote the file and then compared against the value baked into
+/// the binary that was already running — the placeholder. Generating a golden therefore took two
+/// passes, and the first one looked like it had worked. Reading at run time makes the file on disk
+/// the only copy, so one pass writes it and the next one verifies it, which is what the flag's
+/// documentation already claimed.
+fn read_golden(name: &str) -> String {
+    let path = golden_path(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "the golden for {name} could not be read from {}: {error}\n\
+             generate it with `PEEK_UPDATE_GOLDENS=1 cargo test --test golden`",
+            path.display()
+        )
+    })
+}
+
 /// Compare a rendering against a golden, or write it when asked to.
 ///
 /// The write path is the only way a golden changes, and it is behind an environment variable so
 /// that regenerating one is a deliberate act rather than something a test run does by accident.
-fn assert_golden(name: &str, expected: &str, actual: &str) {
+fn assert_golden(name: &str, actual: &str) {
     if updating() {
         std::fs::write(golden_path(name), format!("{actual}\n")).expect("write the golden");
         return;
     }
+    let expected = read_golden(name);
     if expected.contains(UNGENERATED) {
         panic!(
             "the golden for {name} has never been generated; run \
@@ -248,7 +264,7 @@ fn a_complete_context_pack_renders_exactly_as_committed() {
         actual.contains("counted as: ceil(utf8 bytes / 3)"),
         "the counting rule must be printed so the arithmetic can be reproduced: {actual}"
     );
-    assert_golden("context-complete", CONTEXT_COMPLETE, &actual);
+    assert_golden("context-complete", &actual);
 }
 
 /// Render a command that is *expected* to fail, without asserting that it did not.
@@ -434,7 +450,7 @@ fn a_healthy_doctor_report_renders_exactly_as_committed() {
         actual.contains("worst:"),
         "the report must end with the one line a reader takes away: {actual}"
     );
-    assert_golden("doctor-healthy", DOCTOR_HEALTHY, &actual);
+    assert_golden("doctor-healthy", &actual);
 }
 
 #[test]
@@ -454,7 +470,7 @@ fn a_broken_install_renders_exactly_as_committed() {
         actual.contains("[fail]"),
         "a broken index must be reported as failing: {actual}"
     );
-    assert_golden("doctor-broken", DOCTOR_BROKEN, &actual);
+    assert_golden("doctor-broken", &actual);
 }
 
 // Not a golden: the numbers depend on the fixture's size and would make the file brittle.
@@ -654,12 +670,13 @@ fn the_golden_files_are_present_and_non_trivial() {
     // whose entire job was to notice had skipped them. Regenerate with
     // `PEEK_UPDATE_GOLDENS=1 cargo test --test golden` and commit the result; there is no mode in
     // which a placeholder is the right content to commit.
-    for (name, text) in [
-        ("context-complete", CONTEXT_COMPLETE),
-        ("context-reduced", CONTEXT_REDUCED),
-        ("doctor-healthy", DOCTOR_HEALTHY),
-        ("doctor-broken", DOCTOR_BROKEN),
+    for name in [
+        "context-complete",
+        "context-reduced",
+        "doctor-healthy",
+        "doctor-broken",
     ] {
+        let text = read_golden(name);
         assert!(
             !text.contains(UNGENERATED),
             "the golden for {name} has never been generated; run \
