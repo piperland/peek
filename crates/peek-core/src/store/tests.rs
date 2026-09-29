@@ -1693,7 +1693,10 @@ fn the_durability_setting_actually_reaches_the_connection() {
         .conn()
         .query_row("PRAGMA synchronous", [], |row| row.get(0))
         .expect("read synchronous back");
-    assert_eq!(raw, 1, "NORMAL is 1 and FULL is 2; the pragma must have taken");
+    assert_eq!(
+        raw, 1,
+        "NORMAL is 1 and FULL is 2; the pragma must have taken"
+    );
 }
 
 #[test]

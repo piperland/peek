@@ -402,9 +402,11 @@ fn set_durability(conn: &Connection, durability: Durability) -> Result<(), Store
     // Assigned via `query_row` on a statement that *returns* a row, so the value that took effect
     // is the value that was read, not the value that was asked for.
     let applied: i64 = conn
-        .query_row(&format!("PRAGMA synchronous = {}", durability.pragma_value()), [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            &format!("PRAGMA synchronous = {}", durability.pragma_value()),
+            [],
+            |row| row.get(0),
+        )
         .map_err(|e| StoreError::Query(format!("cannot set synchronous: {e}")))?;
     if applied != durability.pragma_value() {
         return Err(StoreError::Query(format!(

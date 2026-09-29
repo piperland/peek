@@ -89,7 +89,11 @@ fn platform_root() -> Result<PathBuf, StoreError> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| missing("HOME"))?;
-    Ok(home.join("Library").join("Caches").join("piper").join("peek"))
+    Ok(home
+        .join("Library")
+        .join("Caches")
+        .join("piper")
+        .join("peek"))
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -268,7 +272,8 @@ mod tests {
         let index = Temp::new("stable-index");
         with_index_dir(index.path(), || {
             let first = index_path(&RepoId::discover(tree.path()).expect("first")).expect("first");
-            let second = index_path(&RepoId::discover(tree.path()).expect("second")).expect("second");
+            let second =
+                index_path(&RepoId::discover(tree.path()).expect("second")).expect("second");
             assert_eq!(
                 first, second,
                 "a path that changes between runs makes the index unfindable"
