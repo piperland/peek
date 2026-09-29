@@ -160,7 +160,16 @@ pub fn status(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAn
             "the index's recorded generation could not be read: {error}"
         ))
     })?;
-    let states = ResolutionStates::of(&stats);
+    // The store's own measurement, not a build report's. There is no run in this call, so an
+    // `IndexReport` does not exist here, and the two are not the same number under a different
+    // name: `IndexReport::relations_pending` is what the extractor *left* undecided before the
+    // resolution pass ran, and `StoreStats::pending_relations` is what is still undecided in the
+    // index at this moment. Quoting the first on a surface that claims to describe the index's
+    // contents would be a build's input reported as the index's state. The check below is still a
+    // real check, because all five counts come from one `GROUP BY resolution_state` over the whole
+    // relation table: a state tag this build does not know leaves the sum short of
+    // `relation_count` rather than dropping out of it.
+    let states = ResolutionStates::of_stats(&stats);
     let accounted = states.total();
     let partition = accounted == stats.relation_count;
     let watch = session.watch_state();
