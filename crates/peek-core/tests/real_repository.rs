@@ -19,6 +19,14 @@
 //! project exists to remove. And it only uses the **public** API, so it doubles as a check that
 //! the public surface is sufficient to index a real tree without reaching into internals.
 
+// `expect` and `panic` are denied workspace-wide, on the grounds that in production code they hide
+// a real failure behind a panic. The unit tests are exempted through `lib.rs`'s `cfg_attr(test,
+// allow(..))`. An integration test is a separate crate and does not inherit that, so it is
+// exempted here instead — and the justification is the same one: a failure inside this file means
+// the report below is *wrong*, and printing a wrong report is worse than stopping. Swallowing an
+// error and continuing would defeat the entire purpose of the probe.
+#![allow(clippy::expect_used, clippy::panic)]
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -280,7 +288,11 @@ fn report_a_real_symbol(store: &peek_core::store::Store, root: &std::path::Path)
             same_name.len()
         );
         for entity in same_name.iter().take(5) {
-            println!("    {} {}", entity.path().as_str(), entity.id().qualified_name());
+            println!(
+                "    {} {}",
+                entity.path().as_str(),
+                entity.id().qualified_name()
+            );
         }
         let ambiguous = store
             .relations_in_state(
