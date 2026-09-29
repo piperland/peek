@@ -402,8 +402,11 @@ fn set_durability(conn: &Connection, durability: Durability) -> Result<(), Store
     // A pragma that *assigns* returns no rows, so it cannot be set with `query_row` — that fails on
     // the empty result rather than on the setting. It is applied through `execute_batch` and then
     // read back with a separate `PRAGMA synchronous`, which does return the value in force.
-    conn.execute_batch(&format!("PRAGMA synchronous = {};", durability.pragma_value()))
-        .map_err(|e| StoreError::Query(format!("cannot set synchronous: {e}")))?;
+    conn.execute_batch(&format!(
+        "PRAGMA synchronous = {};",
+        durability.pragma_value()
+    ))
+    .map_err(|e| StoreError::Query(format!("cannot set synchronous: {e}")))?;
 
     let applied: i64 = conn
         .query_row("PRAGMA synchronous", [], |row| row.get(0))
