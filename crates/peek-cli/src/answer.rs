@@ -21,6 +21,21 @@
 //!   it did not read. Printing that list is the difference between a tool and a rumour.
 //!
 //! The human renderer prints both. The JSON mode carries both, always, under those names.
+//!
+//! # A command that did not answer carries the refusal as its answer
+//!
+//! [`Answer::Declined`] is the variant for a usage error, a refusal and an engine failure, and it
+//! exists because none of the three has an answer and every one of them has a *reason*.
+//!
+//! The defect it fixes was this: those three cases were reported with the usage text in the
+//! `answer` field, unconditionally, so the status and the exit code were right and a person at a
+//! terminal saw the reason — while `--json`, a script and an agent, all of which read the answer,
+//! got the command list. The reason existed in the output and nowhere a machine would look.
+//!
+//! So a refusal is information, and it is the answer when there is no answer. The alternative —
+//! leaving the field to mean "the question was not answered, and the envelope's `refusal` says
+//! why" — is what the type was doing, and it is the thing this crate has argued against from its
+//! first audit: a value whose meaning depends on a field somewhere else.
 
 use std::collections::BTreeMap;
 
@@ -32,7 +47,7 @@ use peek_core::query::{ContextPack, Explanation, Walk};
 use peek_core::resolve::ResolutionReport;
 use peek_core::store::StoreStats;
 
-use crate::exit::Status;
+use crate::exit::{Failure, Refusal, Status};
 
 /// What a command produced.
 ///
@@ -62,6 +77,12 @@ pub enum Answer {
     Status(StatusAnswer),
     /// What a removal took out.
     Remove(RemoveAnswer),
+    /// A command that did not answer, and why.
+    ///
+    /// Its own variant rather than a stand-in, because a usage error, a refusal and an engine
+    /// failure have no answer and the only thing they do have is the reason. See the module
+    /// documentation.
+    Declined(DeclinedAnswer),
 }
 
 impl Answer {
@@ -84,6 +105,7 @@ impl Answer {
             Answer::Doctor(_) => "doctor",
             Answer::Status(_) => "status",
             Answer::Remove(_) => "rm",
+            Answer::Declined(_) => "declined",
         }
     }
 
@@ -101,13 +123,16 @@ impl Answer {
             Answer::Doctor(answer) => answer.render(),
             Answer::Status(answer) => answer.render(),
             Answer::Remove(answer) => answer.render(),
+            Answer::Declined(answer) => answer.render(),
         }
     }
 
     /// Everything this command could not do.
     ///
     /// Empty only for `help` and `version`, which read nothing and so have nothing to have failed
-    /// at. Every other command's list is non-empty by construction, and a test asserts it.
+    /// at. Every other command's list is non-empty by construction, and a test asserts it — which
+    /// includes a command that declined, because a failure that carried an empty list would read as
+    /// a complete answer that happened to be short.
     #[must_use]
     pub fn did_not(&self) -> &[String] {
         match self {
@@ -120,10 +145,14 @@ impl Answer {
             Answer::Doctor(answer) => &answer.did_not,
             Answer::Status(answer) => &answer.did_not,
             Answer::Remove(answer) => &answer.did_not,
+            Answer::Declined(answer) => &answer.did_not,
         }
     }
 
     /// Everything the answer owes its reader.
+    ///
+    /// Empty for a declined answer, whose only obligation is the reason and which carries it on
+    /// [`DeclinedAnswer::refusal`]. A statement that repeated it here would be printed twice.
     #[must_use]
     pub fn notes(&self) -> &[String] {
         match self {
@@ -131,9 +160,25 @@ impl Answer {
             Answer::Watch(answer) => &answer.notes,
             Answer::Context(answer) => &answer.notes,
             Answer::Remove(answer) => &answer.notes,
-            Answer::Explain(_) | Answer::Walk(_) | Answer::Doctor(_) | Answer::Status(_) => &[],
+            Answer::Explain(_)
+            | Answer::Walk(_)
+            | Answer::Doctor(_)
+            | Answer::Status(_)
+            | Answer::Declined(_) => &[],
             Answer::Help(_) | Answer::Version(_) => &[],
         }
+    }
+
+    /// Whether this answer's own rendering already states the refusal.
+    ///
+    /// The envelope prints a refusal after the answer, because a `doctor` that found a failing
+    /// check and a `context` pack that could not fit its target are answers *and* have something to
+    /// say about their limits, and both are wanted. A declined answer is the refusal, so printing
+    /// it again would state the same paragraph twice — and the reader would have to work out which
+    /// of the two was the answer.
+    #[must_use]
+    pub fn states_its_refusal(&self) -> bool {
+        matches!(self, Answer::Declined(_))
     }
 }
 
@@ -671,9 +716,15 @@ pub struct ContextAnswer {
     pub minimum_for_target: Option<u64>,
     /// Whether this build chose the budget rather than being given one.
     pub budget_was_chosen: bool,
-    /// Whether the budget was refused outright rather than answered. Never set: a refusal to
-    /// compile at all is a [`crate::exit::Failure`] with no answer, and this field exists so a
-    /// consumer reading the JSON can rely on there being no third shape.
+    /// Whether the budget was refused outright rather than answered. Never set: a budget the
+    /// engine refused outright is a [`crate::exit::Failure`], and it reaches the caller as
+    /// [`Answer::Declined`] rather than as a `ContextAnswer` — there was no pack, so there is
+    /// nothing here to report as empty.
+    ///
+    /// Set for the *other* refusal, the one the engine answers: a budget large enough to compile
+    /// the report and too small for the target, which is a real pack with no units in it. That
+    /// case has a budget, omissions and a floor, and this flag is how a consumer tells it from a
+    /// pack that simply came out full.
     pub refused: bool,
     /// Statements the pack owes its reader, beside the engine's own.
     pub notes: Vec<String>,
@@ -1007,6 +1058,105 @@ impl RemoveAnswer {
         text.push_str(&section("could not:", &self.did_not));
         text
     }
+}
+
+/// A command that did not answer, and the reason it did not.
+///
+/// **The whole of the answer is the reason.** There is no pack, no count and no report behind
+/// this, and the type does not pretend otherwise: a caller that gets one has been told the truth
+/// about a command that ran and declined, rather than handed a document about a different command.
+///
+/// The status is carried as well as on the envelope, and it is the *same* value: the exit code
+/// beside it is derived from the one here, so the code a caller branches on and the reason it reads
+/// cannot come from two decisions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclinedAnswer {
+    /// The command that was asked for, as typed.
+    ///
+    /// Serialised as `command_name` because the enclosing variant's tag is already `command` and
+    /// carries the answer's *kind*; the same split [`WalkAnswer::command`] uses, and for the same
+    /// reason.
+    #[serde(rename = "command_name")]
+    pub command: String,
+    /// The status, and therefore the exit code.
+    pub status: Status,
+    /// What went wrong, and what the caller can do about it. **The answer.**
+    pub refusal: Refusal,
+    /// What this command could not do. **Never empty**, and built from the status rather than
+    /// left as an empty list: see the module documentation for why an empty one would read as a
+    /// complete answer that happened to be short.
+    pub did_not: Vec<String>,
+}
+
+impl From<&Failure> for DeclinedAnswer {
+    fn from(failure: &Failure) -> Self {
+        Self {
+            command: failure.command.clone(),
+            status: failure.status,
+            refusal: failure.refusal.clone(),
+            did_not: did_not_for(failure),
+        }
+    }
+}
+
+impl DeclinedAnswer {
+    /// The human rendering: the status, the refusal, and what was not done.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut text = format!(
+            "peek {command}: could not answer\n\
+             status:     {status}\n\
+             refusal:    {kind}\n\
+             {reason}",
+            command = self.command,
+            status = self.status.as_str(),
+            kind = self.refusal.kind,
+            reason = self.refusal.render()
+        );
+        text.push_str(&section("\ncould not:", &self.did_not));
+        text
+    }
+}
+
+/// What a command that did not answer can honestly say it could not do.
+///
+/// **Never empty, and derived from the status.** An empty list on a failure would be
+/// indistinguishable from a complete answer that happened to be short, which is the confusion the
+/// whole `did_not` convention exists to prevent. Which statement is *true* depends on why the
+/// command declined — a bad command line did not reach the repository, and a refusal did not answer
+/// any part of the question — so it is a match on the status rather than one sentence stretched
+/// over all five.
+///
+/// The `Status::Ok` arm is unreachable through the one function that builds this, which exists
+/// precisely because a command that produced an answer never failed. It is written out rather than
+/// folded into another arm so that a caller who constructs one by hand gets a statement telling
+/// them it is a defect in `peek` rather than a result.
+fn did_not_for(failure: &Failure) -> Vec<String> {
+    let mut did_not = vec![format!(
+        "this command did not answer the question it was asked, and there is no partial answer \
+         behind it: the `{}` refusal above is the whole result",
+        failure.refusal.kind
+    )];
+    did_not.push(match failure.status {
+        Status::Ok => "this carries a successful status with no answer, which is a defect in peek \
+                       rather than a result: there is nothing here to read"
+            .to_owned(),
+        Status::Usage => "the command line was not understood, so nothing was attempted against \
+                          the repository. This exit code is about the invocation, not about the \
+                          index"
+            .to_owned(),
+        Status::Refused => "the question cannot be answered from this index as it stands, and no \
+                            part of it was answered. The same command against the same index is \
+                            refused the same way"
+            .to_owned(),
+        Status::Unhealthy => "the diagnosis found something wrong and did not repair it. This \
+                             command reports; it does not fix"
+            .to_owned(),
+        Status::Failed => "the engine stopped rather than reporting a partial answer, so no number \
+                           here describes a half-finished state"
+            .to_owned(),
+    });
+    did_not
 }
 
 /// The budget arithmetic the engine does not carry: the floor for including the target.
