@@ -881,7 +881,12 @@ fn render_edge(edge: &Relation, unit: &EntityId, list_candidates: bool) -> Strin
 ///
 /// A string that matches nothing is [`QueryError::UnknownTarget`], and the message says which of
 /// the three it was not.
-fn resolve_target(query: &Query<'_>, target: &str) -> Result<Target, QueryError> {
+///
+/// `pub(crate)` rather than private because [`crate::query::Query::resolve`] re-exports it. That
+/// method exists so the CLI and the MCP server can name a target the same way this compiler does
+/// instead of each carrying a second copy of these three lookups, and a copy of a resolution order
+/// is a copy of a chance to get it wrong.
+pub(crate) fn resolve_target(query: &Query<'_>, target: &str) -> Result<Target, QueryError> {
     let store = query.store();
     let limit = query.options().entities_per_file;
 

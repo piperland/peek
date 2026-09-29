@@ -65,7 +65,7 @@ mod tests;
 
 pub use context::{
     BudgetReport, BudgetStatus, ContextEdge, ContextPack, ContextUnit, InclusionReason, Matched,
-    Omission, OmissionReason, Omitted, structural_target,
+    Omission, OmissionReason, Omitted, Target, structural_target,
 };
 pub use error::QueryError;
 pub use explain::{ChainStep, EdgeSide, ExplainedEdge, Explanation, Subject};
@@ -257,6 +257,22 @@ impl<'a> Query<'a> {
     /// say so. See the `context` module documentation for the arithmetic.
     pub fn peek(&self, target: &str, budget_tokens: u64) -> Result<ContextPack, QueryError> {
         context::peek(self, target, budget_tokens)
+    }
+
+    /// Resolve a caller's string to exactly one indexed entity, or say why it could not be done.
+    ///
+    /// The three lookups, in their fixed order, are the ones [`Query::peek`] already performs; see
+    /// the `context` module for why they are in that order and why `File` entities are held back
+    /// from the bare-name lookup. This is that function made public, and it is public because
+    /// **every surface that takes a target as text needs it**: `explain`, `callers`, `callees` and
+    /// `dependents` all accept a name a person or an agent read off the screen, and none of them
+    /// may carry a second resolution path. A second copy of these three lookups is a second way to
+    /// name a target wrongly, which is D-0004 reached from a different direction.
+    ///
+    /// A caller that needs the whole neighbourhood should use [`Query::peek`], which resolves the
+    /// same way and then compiles; this is for a caller that only wants the identity.
+    pub fn resolve(&self, target: &str) -> Result<Target, QueryError> {
+        context::resolve_target(self, target)
     }
 
     /// The smallest budget [`Query::peek`] will accept.
