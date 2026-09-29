@@ -1,0 +1,32 @@
+[package]
+name = "peek-cli"
+description = "The peek command-line interface: a thin adapter over peek-core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "peek_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "peek"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+peek-core = { path = "../peek-core" }
+# Serde is used to derive the answer types, so the JSON surface and the human surface are two
+# renderings of one value rather than two hand-kept descriptions of it (contract C3).
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# The tests parse the JSON back with `serde_json`; a JSON mode that is never read is not tested.
+serde_json = { workspace = true }
