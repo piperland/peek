@@ -93,7 +93,7 @@ fn assert_golden(name: &str, expected: &str, actual: &str) {
 }
 
 /// Run a command line and render it, which is what the binary does.
-fn render(repository: &Repository, argv: &[&str]) -> String {
+fn render(_repository: &Repository, argv: &[&str]) -> String {
     let owned: Vec<std::ffi::OsString> = argv
         .iter()
         .map(|argument| std::ffi::OsString::from(*argument))
@@ -114,7 +114,7 @@ fn render(repository: &Repository, argv: &[&str]) -> String {
 }
 
 /// Run a command line and return the output whatever its status.
-fn run_any(repository: &Repository, argv: &[&str]) -> peek_cli::Output {
+fn run_any(_repository: &Repository, argv: &[&str]) -> peek_cli::Output {
     let owned: Vec<std::ffi::OsString> = argv
         .iter()
         .map(|argument| std::ffi::OsString::from(*argument))

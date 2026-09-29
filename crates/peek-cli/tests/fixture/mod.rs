@@ -277,7 +277,7 @@ pub fn run(_repository: &Repository, argv: &[&str]) -> Ran {
         Ok(output) => {
             let narration = output.progress.clone();
             Ran { output, narration }
-        },
+        }
         Err(failure) => Ran {
             output: failure_output(&invocation.command, &failure),
             narration: Vec::new(),

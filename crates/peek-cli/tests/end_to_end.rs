@@ -28,7 +28,7 @@ use std::path::Path;
 
 use fixture::{Repository, run};
 
-use peek_cli::answer::{Answer, RemoveAnswer, StatusAnswer};
+use peek_cli::answer::{Answer, Counts, RemoveAnswer, StatusAnswer};
 use peek_cli::args::{self, Invocation};
 use peek_cli::commands::query;
 use peek_cli::exit::{Status, kind};
@@ -498,8 +498,9 @@ fn two_runs_of_the_same_query_over_an_unchanged_index_produce_identical_output()
         let mut full = argv.clone();
         full.push("--root".to_owned());
         full.push(root.clone());
-        let first = run(&repository, &full);
-        let second = run(&repository, &full);
+        let borrowed: Vec<&str> = full.iter().map(String::as_str).collect();
+        let first = run(&repository, &borrowed);
+        let second = run(&repository, &borrowed);
         assert_eq!(
             first.output.render(),
             second.output.render(),
