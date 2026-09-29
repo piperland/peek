@@ -97,8 +97,15 @@ fn entity(file: &str, kind: EntityKind, qualified_name: &str, line: u32) -> Enti
         // `peek("append")` unable to find `AuditTrail.append` — a failure that exists in the
         // fixture and not in a real index, which is the worst kind of fixture bug, because the
         // test then looks like a product defect.
+        //
+        // Split on `::` and on `.`, because a method's qualified name is `Type.method` in this
+        // engine while a module's is `package::module`. Splitting on only one of them is how the
+        // first attempt at this fix left the name qualified and the test still failing.
         name: qualified_name
             .rsplit("::")
+            .next()
+            .unwrap_or(qualified_name)
+            .rsplit('.')
             .next()
             .unwrap_or(qualified_name)
             .to_owned(),
@@ -555,7 +562,9 @@ fn the_chain_continues_to_the_caller_of_the_caller_and_then_says_it_stopped() {
     // hard-codes it breaks every time a fixture gains an edge, which is a nuisance rather than a
     // finding.
     assert!(
-        second.chosen_because.contains(&second.alternatives.to_string()),
+        second
+            .chosen_because
+            .contains(&second.alternatives.to_string()),
         "the basis must report the count it passed over: {}, alternatives {}",
         second.chosen_because,
         second.alternatives
