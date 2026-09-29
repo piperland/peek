@@ -427,7 +427,10 @@ fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
     .output;
 
     assert_eq!(output.status, Status::Refused);
-    assert_eq!(output.exit_code, 3, "a budget below the report floor is a refusal");
+    assert_eq!(
+        output.exit_code, 3,
+        "a budget below the report floor is a refusal"
+    );
 
     // The answer is the refusal. A budget of 70 cannot hold the report that would say what was
     // left out, so the engine never compiled a pack and there is nothing for a `ContextAnswer` to
@@ -436,7 +439,11 @@ fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
         Answer::Declined(answer) => answer,
         other => panic!("expected the refusal as the answer, not the list: {other:?}"),
     };
-    assert_eq!(answer.status, Status::Refused, "the answer states the envelope's status");
+    assert_eq!(
+        answer.status,
+        Status::Refused,
+        "the answer states the envelope's status"
+    );
     assert_eq!(answer.command, "context", "the answer names what declined");
     assert_eq!(
         answer.refusal.kind.as_str(),
@@ -449,23 +456,47 @@ fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
         .refusal
         .minimum_tokens
         .expect("a refused budget must state the floor that would have worked");
-    assert!(minimum > 70, "the floor must exceed the budget refused: {minimum}");
-    assert!(!answer.did_not.is_empty(), "a failure states what it did not do: {answer:?}");
+    assert!(
+        minimum > 70,
+        "the floor must exceed the budget refused: {minimum}"
+    );
+    assert!(
+        !answer.did_not.is_empty(),
+        "a failure states what it did not do: {answer:?}"
+    );
 
     // One reason, carried once. The envelope and the answer hold the same refusal because they
     // are the same refusal, and the human rendering states it a single time — a reader who finds
     // the same paragraph twice has to work out which of the two was the answer.
     let envelope = output.refusal.as_ref().expect("a refusal must be carried");
-    assert_eq!(envelope, &answer.refusal, "the envelope and the answer must not disagree");
+    assert_eq!(
+        envelope, &answer.refusal,
+        "the envelope and the answer must not disagree"
+    );
     let text = output.render();
     let once = text.matches(answer.refusal.message.as_str()).count();
     assert_eq!(once, 1, "the reason must be stated exactly once: {text}");
     let floor = minimum.to_string();
-    assert!(text.contains("smallest budget"), "the floor must be printed: {text}");
-    assert!(text.contains(&floor), "the floor's number must be printed: {text}");
-    assert!(text.contains("could not:"), "what it did not do is missing: {text}");
-    assert!(!text.contains("commands:"), "a refusal must not be the list: {text}");
-    assert!(!text.contains("exit codes:"), "a refusal must not be the help: {text}");
+    assert!(
+        text.contains("smallest budget"),
+        "the floor must be printed: {text}"
+    );
+    assert!(
+        text.contains(&floor),
+        "the floor's number must be printed: {text}"
+    );
+    assert!(
+        text.contains("could not:"),
+        "what it did not do is missing: {text}"
+    );
+    assert!(
+        !text.contains("commands:"),
+        "a refusal must not be the list: {text}"
+    );
+    assert!(
+        !text.contains("exit codes:"),
+        "a refusal must not be the help: {text}"
+    );
 }
 
 #[test]

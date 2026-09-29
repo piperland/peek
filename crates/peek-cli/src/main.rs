@@ -59,7 +59,9 @@ fn mode_of(argv: &[std::ffi::OsString]) -> Mode {
                 argv.iter().any(|argument| {
                     let text = argument.to_string_lossy();
                     text == format!("--{}", flag.long)
-                        || flag.short.is_some_and(|letter| text == format!("-{letter}"))
+                        || flag
+                            .short
+                            .is_some_and(|letter| text == format!("-{letter}"))
                 })
             })
     };
