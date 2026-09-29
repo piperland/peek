@@ -254,8 +254,11 @@ fn entity_in(store: &Store, file: &str, kind: EntityKind, qualified_name: &str) 
     let declared = store
         .entities_in_file(&path, 2_000)
         .unwrap_or_else(|error| panic!("reading {file} failed: {error}"));
+    // Borrowed, not consumed: the message below names what *was* in the file, so moving the list
+    // into `into_iter` would take away the evidence for the panic it is meant to explain.
     declared
-        .into_iter()
+        .iter()
+        .copied()
         .find(|entity| entity.kind() == kind && entity.id.qualified_name() == qualified_name)
         .unwrap_or_else(|| {
             panic!(
