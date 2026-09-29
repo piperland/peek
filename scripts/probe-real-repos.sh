@@ -50,9 +50,27 @@ echo
 
 # Pull one labelled number out of a probe log. A top-level function rather than a nested one,
 # because `local` cannot be applied to a function definition.
+#
+# It refuses to return anything that is not a bare integer, and says which line it choked on. A
+# measurement helper that returns `24500 -> 24500` where a number was expected does not fail: it
+# puts a value into arithmetic, and the table prints a `MISMATCH` that looks like a finding about
+# the engine. It is not. It is the helper lying, and a helper that can lie quietly is worse than
+# no helper.
 field() {
-  grep -m1 -E "^$2" "$1" 2>/dev/null | tr -s ' ' | cut -d: -f2- | xargs || true
-  echo
+  local line value
+  line=$(grep -m1 -E "^$2" "$1" 2>/dev/null) || true
+  if [ -z "$line" ]; then
+    echo "MISSING($2)" >&2
+    echo 0
+    return
+  fi
+  value=$(printf '%s' "$line" | tr -s ' ' | cut -d: -f2- | xargs)
+  if ! printf '%s' "$value" | grep -qE '^[0-9]+$'; then
+    echo "NOT-A-NUMBER($2): $line" >&2
+    echo 0
+    return
+  fi
+  echo "$value"
 }
 
 # One repository: clone if needed, then probe it. Never lets a failure abort the run — a
@@ -163,14 +181,15 @@ for slug_dir in "$OUT"/*.log; do
   # rather than as a pass.
   grep -qE "^relations: *[1-9]" "$slug_dir" || { echo "  NO RELATIONS: $slug"; failures=$((failures+1)); }
   # The five resolution states must partition the relation count. If they do not, every rate in the
-  # table above is a share of something that is not the graph, and the run is not trustworthy.
-  if [ -f "$OUT/$(basename "$slug_dir" .log).row" ]; then
-    IFS='|' read -r _ _ relations resolved inferred ambiguous unresolved pending _ _ \
-      <"$OUT/$(basename "$slug_dir" .log).row"
-    if [ "$pending" = "0" ] 2>/dev/null; then
-      :
-    else
-      echo "  PARTITION (pending): $slug"
+  # table above is a share of something that is not the graph, so the run is not trustworthy and is
+  # reported as a failure rather than as a finding about the engine.
+  row="$OUT/$(basename "$slug_dir" .log).row"
+  if [ -f "$row" ]; then
+    IFS='|' read -r _ _ relations resolved inferred ambiguous unresolved pending _ \
+      <"$row"
+    total=$((resolved + inferred + ambiguous + unresolved + pending))
+    if [ "$total" -ne "$relations" ] 2>/dev/null; then
+      echo "  PARTITION: $slug has $relations relations but the states sum to $total"
       failures=$((failures+1))
     fi
   fi

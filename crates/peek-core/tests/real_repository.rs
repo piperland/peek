@@ -398,6 +398,7 @@ fn report_deletion(store: &mut peek_core::store::Store, root: &std::path::Path) 
     // was a tool eating its own input. A measurement that changes its subject is not a
     // measurement.
     let original = std::fs::read(&path).expect("read the file before deleting it");
+    let before = store.stats().expect("stats before the deletion");
     std::fs::remove_file(&path).expect("delete the file");
 
     let outcome = indexer::refresh(
@@ -429,9 +430,15 @@ fn report_deletion(store: &mut peek_core::store::Store, root: &std::path::Path) 
     )
     .expect("re-index the restored file");
     let restored = store.stats().expect("stats");
+    // Compared against the count from *before* the deletion, not after. An earlier version of this
+    // assertion compared against `after` and failed on correct behaviour: the deletion drops the
+    // rows, the restoration brings them back, and the only count the restoration has to match is
+    // the one the deletion started from.
     assert_eq!(
-        restored.entity_count, after.entity_count,
-        "restoring the file must restore the rows its deletion removed"
+        restored.entity_count, before.entity_count,
+        "restoring the file must return the row count to what it was before the deletion: \
+         {} deleted, {} restored, {} before",
+        after.entity_count, restored.entity_count, before.entity_count
     );
 }
 
