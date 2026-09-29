@@ -217,7 +217,8 @@ pub struct ResolutionOptions {
     ///
     /// This is the "a definition moved" case, and it is on by default. Without it a move that
     /// makes a previously unique name ambiguous would leave a confidently-wrong `Inferred` edge
-    /// in place indefinitely.
+    /// in place indefinitely. Honoured by [`resolve_paths`] only; [`resolve_all`] ignores it,
+    /// because a full build has re-emitted every relation as `Pending` already.
     pub reconsider_decided: bool,
 }
 
@@ -1100,12 +1101,23 @@ fn apply_decision(relation: &Relation, decision: Decision) -> Option<Relation> {
 /// wrote into decisions. The whole pending set is read in one query because the store offers no
 /// cursor to page it — and because the indexer already materialises the entire relation set in
 /// memory in order to write it, so this is the same order of footprint rather than a new one.
+///
+/// `reconsider_decided` is **ignored** here, and that is deliberate rather than an oversight. A
+/// full build has just re-extracted every file, so every relation in the index was re-emitted as
+/// `Pending` and nothing is left to reconsider; a refresh is the case that needs it, and that is
+/// [`resolve_paths`]. Re-deciding decided edges on a full build would double the work for no
+/// gain and would re-write every `Contains` edge the extractor had already settled.
 pub fn resolve_all(
     store: &mut Store,
     options: ResolutionOptions,
 ) -> Result<ResolutionReport, StoreError> {
-    let pending = store.relations_in_state(&pending_state(), usize::MAX)?;
-    decide_and_commit(store, pending, options)
+    let mut in_scope = RelationSet::new();
+    for relation in store.relations_in_state(&pending_state(), usize::MAX)? {
+        if is_resolvable(&relation) {
+            in_scope.insert(relation);
+        }
+    }
+    decide_and_commit(store, in_scope.into_vec(), options)
 }
 
 /// Decide the relations belonging to `paths`, the relations that point into them, and the
