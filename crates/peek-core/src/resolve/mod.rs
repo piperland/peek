@@ -1249,7 +1249,24 @@ fn decide_and_commit(
             let forced = force_write.contains(&relation.natural_key());
             let decision = resolver.decide(relation)?;
             report.record(&decision);
-            if let Some(decided) = apply_decision(relation, decision, forced) {
+            if let Some(mut decided) = apply_decision(relation, decision, forced) {
+                // A forced write re-uses the snapshot's target, and the snapshot was taken before
+                // the refresh removed the file that target lived in. Writing it back is a foreign
+                // key violation — and the failure mode is the whole transaction aborting, so one
+                // edge pointing at a deleted file would undo the deletion that produced it.
+                //
+                // So a forced decision's target is *checked* rather than trusted. A target that is
+                // no longer in the index is not a resolution, it is a reference to something that
+                // has left, and that is `Unresolved` with a reason.
+                if forced
+                    && let Some(target) = decided.target.clone()
+                    && !store.entity(&target)?.is_some()
+                {
+                    decided.target = None;
+                    decided.resolution = ResolutionState::Unresolved {
+                        reason: UnresolvedReason::NoCandidate,
+                    };
+                }
                 update = update.with_relation(decided);
             }
         }
