@@ -323,9 +323,13 @@ fn a_final_line_without_a_newline_is_still_answered() {
 
 #[test]
 fn a_message_over_the_line_limit_is_refused_and_the_stream_continues() {
-    // A bound on memory, not on traffic. The line is already read when the bound is checked, so the
-    // stream is still in step and the next request is answered — which is the property that makes
-    // the bound safe to have at all.
+    // A bound on memory, and the point of the test is that it is one *before* the length is looked
+    // at: the line is read in bounded chunks and the rest of it is discarded, so a client cannot
+    // make this process allocate whatever it likes. The stream is still in step afterwards, which
+    // is the property that makes refusing an over-long line safe at all.
+    //
+    // These bytes are not JSON at all, so there is no id to answer on and the reply carries a
+    // null one. That is the honest answer for a line with nothing in it to answer.
     let dir = TempDir::new("line-limit");
     let mut input = vec![b'x'; MAX_LINE_BYTES + 1];
     input.push(b'\n');
@@ -335,6 +339,11 @@ fn a_message_over_the_line_limit_is_refused_and_the_stream_continues() {
     let replies = replies(&drive_raw(dir.path(), input));
     assert_eq!(replies.len(), 2, "the refusal and then the answer: {replies:?}");
     assert_eq!(replies[0]["error"]["code"], -32600);
+    assert_eq!(
+        replies[0]["id"],
+        Value::Null,
+        "there is no id in a line of `x`, so the null id is the only honest one"
+    );
     assert!(
         replies[0]["error"]["message"]
             .as_str()
@@ -342,6 +351,38 @@ fn a_message_over_the_line_limit_is_refused_and_the_stream_continues() {
         "the refusal states the limit it applied: {replies:?}"
     );
     assert_eq!(replies[1]["id"], 1, "the session continued in step");
+}
+
+#[test]
+fn an_over_long_message_is_refused_on_the_id_it_carried() {
+    // The id is where the client says the answer belongs, and an over-long message is still a
+    // message. Two things have to hold for the recovery to be worth anything, and both are here:
+    //
+    // * the id has to be *inside* the bound, or there is nothing to recover — so the bulk of the
+    //   line comes after it, not before;
+    // * a member named `id` inside `params` is the caller's own argument, not the request's
+    //   identity, and a recovery that searched for the word would answer on `"not the request's
+    //   id"`.
+    let dir = TempDir::new("line-limit-id");
+    let mut input = br#"{"jsonrpc":"2.0","method":"tools/call","params":{"id":"not the request's id","name":"index_status","arguments":{"padding":""#.to_vec();
+    input.extend(vec![b'a'; 1024]);
+    input.extend_from_slice(br#""}},"id":99,"note":""#);
+    input.extend(vec![b'b'; MAX_LINE_BYTES]);
+    input.extend_from_slice(br#""}}"#);
+    input.push(b'\n');
+    input.extend_from_slice(&serde_json::to_vec(&request(1, "ping", json!({}))).unwrap());
+    input.push(b'\n');
+
+    let replies = replies(&drive_raw(dir.path(), input));
+    assert_eq!(replies.len(), 2, "the refusal and then the answer: {replies:?}");
+    assert_eq!(replies[0]["error"]["code"], -32600);
+    assert_eq!(
+        replies[0]["id"],
+        json!(99),
+        "the client is owed an answer addressed to 99 and gets one it can match, not the argument \
+         of the same name inside `params`: {replies:?}"
+    );
+    assert_eq!(replies[1]["id"], 1, "and the session is still in step");
 }
 
 #[test]

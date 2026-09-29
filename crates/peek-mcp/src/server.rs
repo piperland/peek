@@ -16,7 +16,8 @@
 //!   for the reply to its *next* request.
 //! * **A line that is not a routable request always produces a reply**, unless it had no id to
 //!   reply to. A client that sent something malformed and got silence has no way to know the
-//!   server is alive.
+//!   server is alive. A line too long to read whole is the one case where the id may be past the
+//!   bound, and it is recovered from what was read rather than dropped.
 //! * **Every reply is flushed before the loop continues.** See [`crate::writer`].
 //! * **A cancelled request does not run, and the number is then free.** See [`Session::cancel`].
 //! * **Shutdown stops the watch.** A client that disconnects without calling `watch_stop` must not
@@ -30,7 +31,7 @@
 //! method, a missing tool name — is a JSON-RPC error, because those are protocol faults rather than
 //! answers.
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 
 use serde_json::{Value, json};
 
@@ -43,12 +44,25 @@ use crate::writer::ProtocolWriter;
 
 /// The largest message this server will read, in bytes.
 ///
-/// A bound on memory, not a claim about traffic: an unbounded line is a way for one client to
-/// exhaust the process, and a `tools/call` carrying a list of refresh paths or a large budget
-/// expression is orders of magnitude smaller than this. A line over the bound is refused and the
-/// rest of it is discarded up to the newline, because the alternative is a stream that cannot be
-/// resynchronised.
+/// A bound on memory, and a real one: a line is read in chunks of [`READ_CHUNK_BYTES`] and at most
+/// this many bytes of it are kept, so the allocation a client would otherwise be able to force
+/// never happens. A bound applied after the line has been read in full is a number in a constant,
+/// not a bound.
+///
+/// A line over the bound is refused and the rest of it is discarded up to the newline, because the
+/// alternative is a stream that cannot be resynchronised. It is refused **on the id it carried**:
+/// these bytes are a prefix of a message the client sent, and the id is usually inside that
+/// prefix, so there is one more statement between a client and the answer it is owed. Where the id
+/// is not in the prefix — because the padding came first and pushed it past the bound — the reply
+/// carries `null` and the diagnostic stream says why, because a client waiting on a number can do
+/// nothing at all with an answer it cannot match.
 pub const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
+
+/// How much of a line is read at a time.
+///
+/// A constant rather than a literal because it is the granularity of the discard, not the limit: a
+/// small one means an over-long line is dropped in bounded steps rather than in a single read.
+const READ_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Read messages, dispatch them, and write replies until the input ends.
 pub fn serve<R: BufRead, W: Write>(
@@ -58,10 +72,11 @@ pub fn serve<R: BufRead, W: Write>(
 ) -> io::Result<()> {
     let mut input = input;
     let mut buffer: Vec<u8> = Vec::with_capacity(4096);
+    let mut chunk = vec![0_u8; READ_CHUNK_BYTES];
     loop {
         buffer.clear();
-        let read = match read_line(&mut input, &mut buffer) {
-            Ok(read) => read,
+        let (read, truncated) = match read_line(&mut input, &mut buffer, &mut chunk) {
+            Ok(outcome) => outcome,
             Err(error) => {
                 session.log(&format!("the input stream failed: {error}"));
                 return Err(error);
@@ -70,26 +85,36 @@ pub fn serve<R: BufRead, W: Write>(
         if read == 0 {
             break;
         }
-        if buffer.len() > MAX_LINE_BYTES {
-            // The line is already read and already over the bound, so the stream is still in sync;
-            // there is nothing to discard.
+        if truncated {
             session.log(&format!(
-                "a message of {} bytes was refused: the limit is {MAX_LINE_BYTES}",
-                buffer.len()
+                "a message of more than {MAX_LINE_BYTES} bytes was refused and the rest of the \
+                 line was discarded; the limit is {MAX_LINE_BYTES}"
             ));
-            output.send_error_with(
-                None,
-                CODE_INVALID_REQUEST,
-                format!(
-                    "that message is {} bytes and this server reads at most {MAX_LINE_BYTES}",
-                    buffer.len()
+            // Recovered from the prefix rather than answered with a null id unconditionally, so a
+            // client whose request was too long is told on its own id and is not left waiting for a
+            // reply that is never coming.
+            let id = id_in_prefix(&buffer);
+            if id.is_none() {
+                session.log(
+                    "the refused message carried no id within the bytes that were read, so the \
+                     refusal has to go out with a null id",
+                );
+            }
+            output.send_error(
+                id,
+                RpcError::new(
+                    CODE_INVALID_REQUEST,
+                    format!(
+                        "that message is longer than {MAX_LINE_BYTES} bytes and this server reads \
+                         at most {MAX_LINE_BYTES}"
+                    ),
                 ),
             )?;
             continue;
         }
         // Lossy rather than strict: a client that sends a byte sequence that is not UTF-8 gets a
-        // parse error naming the problem, which is recoverable, rather than a `read_line` failure
-        // that would end the session.
+        // parse error naming the problem, which is recoverable, rather than a read failure that
+        // would end the session.
         let line = String::from_utf8_lossy(&buffer);
         if let Err(error) = dispatch(session, &line, output) {
             session.log(&format!("a reply could not be written: {error}"));
@@ -100,9 +125,145 @@ pub fn serve<R: BufRead, W: Write>(
     Ok(())
 }
 
-/// Read one line, including its terminator, and report how many bytes arrived.
-fn read_line<R: BufRead>(input: &mut R, buffer: &mut Vec<u8>) -> io::Result<usize> {
-    input.read_until(b'\n', buffer)
+/// Read one line, keeping at most [`MAX_LINE_BYTES`] of it, and say whether more was discarded.
+///
+/// The terminator is consumed either way, so the stream is in step for the next message — that is
+/// the property that makes refusing an over-long line safe at all. The buffer is appended to and
+/// never cleared here, so a caller that reuses one buffer across messages pays for the allocation
+/// once.
+fn read_line<R: BufRead>(
+    input: &mut R,
+    buffer: &mut Vec<u8>,
+    chunk: &mut [u8],
+) -> io::Result<(usize, bool)> {
+    let mut read = 0_usize;
+    let mut truncated = false;
+    loop {
+        let available = match input.read(chunk) {
+            Ok(0) => break,
+            Ok(count) => &chunk[..count],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        match available.iter().position(|byte| *byte == b'\n') {
+            Some(newline) => {
+                read += keep(buffer, &available[..newline]);
+                read += 1;
+                return Ok((read, truncated));
+            }
+            None => {
+                read += available.len();
+                truncated |= keep(buffer, available);
+            }
+        }
+    }
+    // End of input with no terminator: the last line is still a line, and refusing to answer it
+    // would be refusing a request because the client closed its pipe.
+    Ok((read, truncated))
+}
+
+/// Append as much of `bytes` as the bound allows, and report whether the bound was reached.
+fn keep(buffer: &mut Vec<u8>, bytes: &[u8]) -> bool {
+    let room = MAX_LINE_BYTES.saturating_sub(buffer.len());
+    if bytes.len() <= room {
+        buffer.extend_from_slice(bytes);
+        return false;
+    }
+    buffer.extend_from_slice(&bytes[..room]);
+    true
+}
+
+/// The `id` of the JSON-RPC message these bytes are the start of, or `None`.
+///
+/// A tolerant scan rather than a parse, because a truncated line does not parse — that is what
+/// truncation means. Three things make it a scan of the *envelope* rather than a search for a word:
+///
+/// * **Depth.** A member named `id` inside `params` is the caller's own argument, not the request's
+///   identity, so only a member of the top-level object counts.
+/// * **Position.** Only a string where a member's *name* belongs counts, so a string *value* that
+///   happens to read `"id"` is not taken for a key.
+/// * **Completion.** A string that does not close inside the bytes available means the prefix ends
+///   inside it, and there is nothing after it; the scan stops rather than reading on into a string
+///   that is still open.
+///
+/// The value itself is read with a real JSON parser, so an unterminated number or string yields
+/// `None` rather than half of one. `None` is an answer and not a failure: it means the id was not in
+/// the bytes that were read, and the caller says so on the diagnostic stream before the null-id
+/// refusal goes out.
+fn id_in_prefix(bytes: &[u8]) -> Option<Value> {
+    if bytes.first() != Some(&b'{') {
+        return None;
+    }
+    // The opening brace is consumed above rather than counted, so a member of the top-level object
+    // sits at depth zero and anything inside `params` is already below it.
+    let mut index = 1_usize;
+    let mut depth = 0_i32;
+    // Whether the next token is a member's name. Set by the comma and the colon that follow one and
+    // cleared by consuming a name, so a string in a value position is never read as a key.
+    let mut name_next = true;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'{' | b'[' => {
+                depth += 1;
+                index += 1;
+            }
+            b'}' | b']' => {
+                depth -= 1;
+                index += 1;
+                if depth < 0 {
+                    return None;
+                }
+            }
+            b',' | b':' if depth == 0 => {
+                name_next = true;
+                index += 1;
+            }
+            b'"' => {
+                let (text, next) = json_string(bytes, index)?;
+                index = next;
+                if depth == 0 && name_next && text == "id" {
+                    let mut after = index;
+                    while after < bytes.len() && bytes[after].is_ascii_whitespace() {
+                        after += 1;
+                    }
+                    if bytes.get(after) != Some(&b':') {
+                        return None;
+                    }
+                    return json_value(bytes, after + 1).map(|(value, _)| value);
+                }
+                name_next = false;
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+/// One JSON string starting at `open`, as its text, and the index after its closing quote.
+///
+/// `None` when the string does not close within the bytes available, which is the ordinary answer
+/// for a prefix that ends inside one.
+fn json_string(bytes: &[u8], open: usize) -> Option<(String, usize)> {
+    let mut index = open + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => {
+                let text = std::str::from_utf8(&bytes[open + 1..index]).ok()?;
+                return Some((text.to_owned(), index + 1));
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+/// One complete JSON value starting at `open`, and where it ended.
+fn json_value(bytes: &[u8], open: usize) -> Option<(Value, usize)> {
+    let text = std::str::from_utf8(&bytes[open..]).ok()?;
+    let mut de = serde_json::Deserializer::from_str(text).into_iter::<Value>();
+    let value = de.next()?.ok()?;
+    Some((value, open + de.byte_offset()))
 }
 
 /// Route one line. Never writes a reply for a notification.

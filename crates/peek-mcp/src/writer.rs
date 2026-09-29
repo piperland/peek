@@ -65,16 +65,6 @@ impl<W: Write> ProtocolWriter<W> {
         self.send(&ErrorResponse::new(id, error))
     }
 
-    /// An error built from a code and a sentence.
-    pub fn send_error_with(
-        &mut self,
-        id: Option<Value>,
-        code: i64,
-        message: impl Into<String>,
-    ) -> io::Result<()> {
-        self.send_error(id, RpcError::new(code, message))
-    }
-
     /// Hand the stream back, so a caller that owns it can close it.
     pub fn into_inner(self) -> W {
         self.out
