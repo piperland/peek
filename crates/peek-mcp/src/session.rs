@@ -41,7 +41,6 @@ use peek_core::store::{self, RepoId, Store};
 
 use crate::outcome::ToolError;
 use crate::tools::watch;
-use crate::tools::watch::Counters;
 
 /// Where diagnostics go.
 pub trait Log {
@@ -467,6 +466,29 @@ pub struct RunningWatch {
 }
 
 impl RunningWatch {
+    /// Take over a watcher thread that has already started.
+    ///
+    /// The thread is spawned by [`crate::tools::watch::spawn`], which cannot reach these fields —
+    /// they are private to this module — so this is the one door between the two. The handle
+    /// arrives as a [`JoinHandle`] rather than as the `Option` it is stored as, because a watcher
+    /// that has been spawned has a thread to wait for; `None` is the state a stopped watch leaves
+    /// behind, and a constructor is not where that is decided.
+    pub(crate) fn new(
+        id: u64,
+        stop: Arc<AtomicBool>,
+        join: JoinHandle<()>,
+        state: Arc<watch::SharedState>,
+        counters: Arc<watch::Counters>,
+    ) -> Self {
+        Self {
+            id,
+            stop,
+            join: Some(join),
+            state,
+            counters,
+        }
+    }
+
     /// What the watcher is doing, right now.
     fn status(&self) -> watch::WatchStatusView {
         watch::WatchStatusView {
