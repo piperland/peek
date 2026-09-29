@@ -291,6 +291,11 @@ fn a_damaged_index_fails_the_integrity_check_and_offers_a_rebuild() {
     )
     .expect("index the repository");
     drop(install.store());
+    // Settle *before* reading the file to damage. Every page image is also in the write-ahead
+    // log, so truncating the database while the log is intact is invisible — SQLite reads the
+    // log and the database file is never consulted. That is not a weakness in the check, it is
+    // why the test has to damage the file the reader actually uses.
+    install.settle();
 
     let database = install.database();
     let bytes = fs::read(&database).expect("read the database");
@@ -486,10 +491,13 @@ fn ambiguity_is_reported_as_a_fact_about_the_code_and_not_as_a_defect() {
         .with_entity(function("src/target.rs", "target"))
         .with_entity(function("src/one.rs", "shared"))
         .with_entity(function("src/two.rs", "shared"));
-    for name in ["a", "b", "c", "d"] {
-        update = update
-            .with_entity(function("src/callers.rs", name))
-            .with_relation(Relation::ambiguous(
+    for name in ["a", "b", "c", "d", "e", "f"] {
+        update = update.with_entity(function("src/callers.rs", name));
+        // Only the first two callers are ambiguous, so the share is a clear minority rather than
+        // sitting exactly on the escalation boundary — where a test would be asserting a rounding
+        // decision rather than a rule.
+        if name == "a" || name == "b" {
+            update = update.with_relation(Relation::ambiguous(
                 RelationKind::Calls,
                 id("src/callers.rs", EntityKind::Function, name),
                 "shared",
@@ -498,15 +506,16 @@ fn ambiguity_is_reported_as_a_fact_about_the_code_and_not_as_a_defect() {
                     id("src/one.rs", EntityKind::Function, "shared"),
                     id("src/two.rs", EntityKind::Function, "shared"),
                 ],
-            ))
-            .with_relation(Relation::resolved(
-                RelationKind::Calls,
-                id("src/callers.rs", EntityKind::Function, name),
-                id("src/target.rs", EntityKind::Function, "target"),
-                "target",
-                span(),
-                crate::model::Evidence::SameFile,
             ));
+        }
+        update = update.with_relation(Relation::resolved(
+            RelationKind::Calls,
+            id("src/callers.rs", EntityKind::Function, name),
+            id("src/target.rs", EntityKind::Function, "target"),
+            "target",
+            span(),
+            crate::model::Evidence::SameFile,
+        ));
     }
     store.apply_update(update).expect("commit");
     drop(store);
@@ -522,7 +531,7 @@ fn ambiguity_is_reported_as_a_fact_about_the_code_and_not_as_a_defect() {
     );
     assert!(diagnosis.is_healthy());
     assert!(
-        ambiguity[0].detail.contains("8 candidates"),
+        ambiguity[0].detail.contains("4 candidates"),
         "the finding must carry the candidate count: {:?}",
         ambiguity[0]
     );
