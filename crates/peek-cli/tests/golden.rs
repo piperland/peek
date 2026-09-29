@@ -47,8 +47,6 @@ use peek_cli::progress::Silent;
 use peek_cli::{args, run as run_invocation};
 use peek_core::query::BudgetStatus;
 
-/// The committed goldens.
-
 /// The marker an ungenerated golden carries, so it fails loudly rather than comparing equal.
 const UNGENERATED: &str = "PEEK_UPDATE_GOLDENS";
 

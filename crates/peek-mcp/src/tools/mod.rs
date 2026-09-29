@@ -85,7 +85,10 @@ pub fn refusal(tool: &'static str, error: &ToolError) -> ToolAnswer {
     // exists in one and not the other: `ToolError::verdict` puts this same sentence into the
     // structured body as `reason`. A reason that came and went with the outcome would be a field a
     // reader had to interpret.
-    text.push_str(&format!("reason: {error.verdict_reason}\n"));
+    // Positional, because an inline capture takes a plain identifier and not a field access — so
+    // `{error.verdict_reason}` is not a shorthand, it is a format string the compiler rejects.
+    // `uninlined_format_args` does not apply: it fires on a bare variable, not on a field.
+    text.push_str(&format!("reason: {0}\n", error.verdict_reason));
     if let Some(advice) = &error.advice {
         text.push_str(&format!("do this instead: {advice}\n"));
     }
