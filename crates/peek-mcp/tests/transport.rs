@@ -37,7 +37,6 @@ use peek_mcp::session::SharedLog;
 mod common;
 
 use common::{Offence, names_stdout, prints_to_stdout, sources, writes_to_stdout};
-
 // Every source file in the crate is listed in `common::sources`, together with the scan both
 // stdout guards use. They live in one place because they are one claim, and a guard written twice
 // is a guard that can be tightened in one file and not the other.
@@ -361,6 +360,12 @@ fn no_source_file_in_the_crate_prints_to_stdout() {
     // Only stdout is scanned. stderr is the diagnostic channel and `eprintln!` is its correct
     // spelling, so scanning for it would be scanning for the thing the rule asks for.
     for (name, source) in sources() {
+        assert!(
+            common::scanned_every_line(source),
+            "{name} did not survive the round trip through the scanner, so the scan below would be \
+             reporting on part of it. A guard that goes quiet over the half it did not read is \
+             worse than one that is red"
+        );
         assert_eq!(
             prints_to_stdout(source),
             Vec::<Offence>::new(),

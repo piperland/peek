@@ -108,6 +108,20 @@ pub fn writes_to_stdout(source: &str) -> Vec<Offence> {
     offences(source, |line| calls_print_macro(line) || has_identifier(line, "stdout"))
 }
 
+/// Whether [`code_only`] read the whole of `source`.
+///
+/// A lexer that lost the tail of a file would report it clean, which is the worst failure this one
+/// can have: a guard that goes quiet over the half of a file it did not understand. So every scan
+/// is paired with this, and a file whose line count does not survive the round trip fails the test
+/// rather than passing it.
+///
+/// The count is all that is checked, because that is the property that matters and the only one
+/// that can be checked without writing a Rust parser: a literal that swallowed the rest of the
+/// file loses lines, and a correctly-read file loses none.
+pub fn scanned_every_line(source: &str) -> bool {
+    code_only(source).lines().count() == source.lines().count()
+}
+
 /// The lines of `source` that satisfy `is_an_offence`, with their comments already removed.
 fn offences(source: &str, is_an_offence: fn(&str) -> bool) -> Vec<Offence> {
     code_only(source)
@@ -171,9 +185,9 @@ fn is_identifier_continue(byte: u8) -> bool {
 
 /// The source with every comment removed and every literal's contents dropped.
 ///
-/// Newlines are kept, so line *n* of the result is line *n* of the file, which is what lets an
-/// [`Offence`] point at a line a reader can open. Everything else is dropped: the result is not the
-/// file, it is the file with everything a search could mistake for code taken out.
+/// The result is the same file with everything a search could mistake for code taken out: a line
+/// of it is the code on the corresponding line of the file, so an [`Offence`] can point at a line
+/// a reader can open, and a literal that has been emptied is a pair of quotes with nothing inside.
 ///
 /// A small lexer rather than a regular expression, because the four things a search must not be
 /// fooled by are all lexical: a nested block comment, a `//` inside a string, a lifetime, and an
@@ -183,7 +197,7 @@ pub fn code_only(source: &str) -> String {
     let mut code: Vec<u8> = Vec::with_capacity(source.len());
     let mut index = 0;
     while index < bytes.len() {
-        if let Some(end) = literal_end(bytes, index) {
+        if let Some(end) = literal_end(bytes, index, &mut code) {
             index = end;
             continue;
         }
@@ -194,7 +208,7 @@ pub fn code_only(source: &str) -> String {
             continue;
         }
         if bytes[index..].starts_with(b"/*") {
-            index = block_comment_end(bytes, index);
+            index = block_comment_end(bytes, index, &mut code);
             continue;
         }
         code.push(bytes[index]);
@@ -207,18 +221,19 @@ pub fn code_only(source: &str) -> String {
 }
 
 /// The end of the literal starting at `index`, or `None` when no literal starts there.
-fn literal_end(bytes: &[u8], index: usize) -> Option<usize> {
+///
+/// `code` is where the newlines the literal swallows are put back, so that a line number in the
+/// result is still a line number in the file.
+fn literal_end(bytes: &[u8], index: usize, code: &mut Vec<u8>) -> Option<usize> {
     // A prefix may only begin an identifier, so the `b` of `sub` is not a byte-string marker.
     if index > 0 && is_identifier_continue(bytes[index - 1]) {
         return None;
     }
     let mut cursor = index;
-    let mut byte_string = false;
+    let mut raw = false;
     if bytes.get(cursor) == Some(&b'b') {
-        byte_string = true;
         cursor += 1;
     }
-    let mut raw = false;
     if bytes.get(cursor) == Some(&b'r') {
         raw = true;
         cursor += 1;
@@ -229,14 +244,28 @@ fn literal_end(bytes: &[u8], index: usize) -> Option<usize> {
         cursor += 1;
     }
     match bytes.get(cursor).copied() {
-        Some(quote) if quote == b'"' => Some(close_quoted(bytes, cursor + 1, quote, hashes, raw)),
-        Some(b'\'') if !raw && !byte_string => char_literal_end(bytes, cursor + 1),
+        Some(quote) if quote == b'"' => {
+            Some(close_quoted(bytes, cursor + 1, quote, hashes, raw, code))
+        }
+        Some(b'\'') if !raw => char_literal_end(bytes, cursor + 1),
         _ => None,
     }
 }
 
 /// The end of a `"`-delimited literal, whose body starts at `body`.
-fn close_quoted(bytes: &[u8], body: usize, quote: u8, hashes: usize, raw: bool) -> usize {
+///
+/// A plain string literal may hold bare newlines — this crate writes its usage text and its tool
+/// descriptions that way — so the scan runs to the closing quote rather than to the end of the
+/// line. The newlines it passes over go back into `code`, which is what keeps an [`Offence`]'s
+/// line number a line number in the file rather than a line number in a truncated copy of it.
+fn close_quoted(
+    bytes: &[u8],
+    body: usize,
+    quote: u8,
+    hashes: usize,
+    raw: bool,
+    code: &mut Vec<u8>,
+) -> usize {
     let mut index = body;
     while index < bytes.len() {
         if raw {
@@ -245,12 +274,18 @@ fn close_quoted(bytes: &[u8], body: usize, quote: u8, hashes: usize, raw: bool) 
                 return index + 1 + hashes;
             }
         } else if bytes[index] == b'\\' {
-            // The escaped byte, whatever it is. Skipping two also covers the line continuation
-            // that `main.rs` builds its usage text with.
+            // The escaped byte, whatever it is. A backslash before a newline is Rust's line
+            // continuation, and the newline it swallows is put back with everything else.
+            if bytes.get(index + 1) == Some(&b'\n') {
+                code.push(b'\n');
+            }
             index += 2;
             continue;
         } else if bytes[index] == quote {
             return index + 1;
+        }
+        if bytes[index] == b'\n' {
+            code.push(b'\n');
         }
         index += 1;
     }
@@ -288,7 +323,10 @@ fn hashes_after(bytes: &[u8], index: usize) -> usize {
 }
 
 /// The end of the block comment starting at `index`, counting the nesting Rust allows.
-fn block_comment_end(bytes: &[u8], index: usize) -> usize {
+///
+/// The newlines inside it go back into `code`, so a block comment in the middle of a file does not
+/// shift every line number after it.
+fn block_comment_end(bytes: &[u8], index: usize, code: &mut Vec<u8>) -> usize {
     let mut depth = 0usize;
     let mut cursor = index;
     while cursor < bytes.len() {
@@ -304,6 +342,9 @@ fn block_comment_end(bytes: &[u8], index: usize) -> usize {
                 return cursor;
             }
             continue;
+        }
+        if bytes[cursor] == b'\n' {
+            code.push(b'\n');
         }
         cursor += 1;
     }

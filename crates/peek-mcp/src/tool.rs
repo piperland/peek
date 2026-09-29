@@ -596,7 +596,7 @@ After this returns, `index_status` and `context` read the index as it stands.",
                      stopped when it is absent, and the response says which one that was.",
                     &[("minimum", json!(1))],
                 ),
-            ],
+            )],
             &[],
         ),
     }
