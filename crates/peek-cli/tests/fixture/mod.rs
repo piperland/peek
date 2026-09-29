@@ -36,9 +36,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use peek_cli::args;
-use peek_cli::exit::kind;
 use peek_cli::progress::Silent;
-use peek_cli::{Command, Invocation, Output};
+use peek_cli::{Invocation, Output};
 
 // Imported under a different name: this module's own `run` takes a repository and a command line,
 // and inside its own body the two would otherwise be the same identifier.
@@ -253,19 +252,26 @@ pub struct Ran {
 
 /// Run a command line against `repository`.
 ///
-/// A usage error becomes a [`Output`] with `Status::Usage` rather than a panic, so a test can
-/// assert on the exit code of a bad command line without a separate code path. This is the only
-/// place the two representations are unified, and it is the boundary the binary's `main` mirrors.
+/// A usage error becomes an [`Output`] with `Status::Usage` rather than a panic, so a test can
+/// assert on the exit code of a bad command line without a separate code path. A refusal comes back
+/// from the library as an `Err(Failure)` and is turned into an `Output` the same way, which is what
+/// the binary's entry point does.
+///
+/// **Both of those go through `peek_cli` rather than being built here.** The two representations
+/// meeting is a product decision — it decides what the *answer* field says for a command that did
+/// not answer — so the meeting happens in one place in the library. A fixture that assembled its
+/// own `Output` is a second answer to that question, and it is where a failure used to come back
+/// carrying the usage text.
 pub fn run(_repository: &Repository, argv: &[&str]) -> Ran {
     let owned: Vec<std::ffi::OsString> = argv
         .iter()
         .map(|argument| std::ffi::OsString::from(*argument))
         .collect();
-    let invocation: Invocation = match args::parse(owned) {
+    let invocation: Invocation = match args::parse(owned.clone()) {
         Ok(invocation) => invocation,
         Err(error) => {
             return Ran {
-                output: usage_output(argv, error),
+                output: peek_cli::usage_failed(&args::named_command(&owned), &error),
                 narration: Vec::new(),
             };
         }
@@ -279,66 +285,9 @@ pub fn run(_repository: &Repository, argv: &[&str]) -> Ran {
             Ran { output, narration }
         }
         Err(failure) => Ran {
-            output: failure_output(&invocation.command, &failure),
+            output: peek_cli::declined(&failure),
             narration: Vec::new(),
         },
-    }
-}
-
-/// A [`Output`] carrying a usage failure, so a test can assert on its exit code.
-///
-/// The refusal kind is derived from the error variant rather than hardcoded, because "every
-/// argument error exits 2" is only a useful claim if the reason is carried as well.
-fn usage_output(argv: &[&str], error: args::UsageError) -> Output {
-    let refusal_kind = match &error {
-        args::UsageError::UnknownFlag { .. } => kind::UNKNOWN_FLAG,
-        args::UsageError::UnknownCommand { .. } => kind::UNKNOWN_COMMAND,
-        args::UsageError::RepeatedFlag { .. }
-        | args::UsageError::UnexpectedValue { .. }
-        | args::UsageError::FlagNotValidHere { .. } => kind::BAD_FLAG_USE,
-        args::UsageError::MissingValue { .. } => kind::MISSING_VALUE,
-        args::UsageError::NotANumber { .. } => kind::NOT_A_NUMBER,
-        args::UsageError::MissingArgument { .. } | args::UsageError::TooManyArguments { .. } => {
-            kind::WRONG_ARITY
-        }
-        args::UsageError::NotUtf8 { .. } => kind::NOT_UTF8,
-    };
-    let command = argv
-        .iter()
-        .find(|argument| !argument.starts_with('-'))
-        .copied()
-        .unwrap_or("peek");
-    Output {
-        version: peek_core::VERSION.to_owned(),
-        command: command.to_owned(),
-        status: peek_cli::Status::Usage,
-        exit_code: peek_cli::exit::EXIT_USAGE,
-        root: String::new(),
-        index_path: String::new(),
-        index_existed: false,
-        answer: peek_cli::Answer::Help(peek_cli::answer::HelpAnswer {
-            usage: args::help_text(),
-        }),
-        refusal: Some(peek_cli::Refusal::new(refusal_kind, error.message())),
-        progress: Vec::new(),
-    }
-}
-
-/// An [`Output`] carrying a failure, so a test can assert on its exit code the same way.
-fn failure_output(command: &Command, failure: &peek_cli::Failure) -> Output {
-    Output {
-        version: peek_core::VERSION.to_owned(),
-        command: command.name().to_owned(),
-        status: failure.status,
-        exit_code: failure.exit_code(),
-        root: String::new(),
-        index_path: String::new(),
-        index_existed: false,
-        answer: peek_cli::Answer::Help(peek_cli::answer::HelpAnswer {
-            usage: args::help_text(),
-        }),
-        refusal: Some(failure.refusal.clone()),
-        progress: Vec::new(),
     }
 }
 
