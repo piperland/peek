@@ -233,7 +233,7 @@ fn a_reduced_context_pack_renders_exactly_as_committed_and_names_what_it_dropped
                 repository.root_str(),
             ],
         );
-        if !matches!(answer.answer, Answer::Context(ref a) if a.pack.budget.status == BudgetStatus::Reduced)
+        if matches!(answer.answer, Answer::Context(ref a) if a.pack.budget.status == BudgetStatus::Reduced)
         {
             reduced_at = Some(budget);
             break;
@@ -330,7 +330,7 @@ fn a_reduced_pack_renders_its_units_and_edges() {
                 repository.root_str(),
             ],
         );
-        if !matches!(answer.answer, Answer::Context(ref a) if a.pack.budget.status == BudgetStatus::Reduced)
+        if matches!(answer.answer, Answer::Context(ref a) if a.pack.budget.status == BudgetStatus::Reduced)
         {
             reduced_at = Some(budget);
             break;
@@ -428,7 +428,10 @@ fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
     let refusal = output.refusal.as_ref().expect("a refusal must be carried");
     assert_eq!(
         refusal.kind.as_str(),
-        peek_cli::exit::kind::BUDGET_INSUFFICIENT
+        // The engine's own word, not the CLI's JSON tag. `Query::peek` refuses with
+        // `BudgetTooSmall`, and a refusal that renames the reason it is reporting is a refusal
+        // that has to be translated twice.
+        peek_cli::exit::kind::BUDGET_TOO_SMALL
     );
     assert!(
         refusal.minimum_tokens.is_some(),
