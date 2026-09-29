@@ -1,1 +1,30 @@
-PEEK_UPDATE_GOLDENS — not yet generated
+[pass] the index at <index> opened
+        generation 2, durability FULL, WAL-backed, foreign keys enforced
+[pass] the index is at schema v2
+        this build writes and reads v2
+[pass] the index passes SQLite's own integrity check
+        every page, and every index against the table it indexes, was read and compared. This is the check the predecessor had no equivalent of: it reported a healthy install over a broken index
+[pass] the index belongs to this checkout (<repo-id>)
+        identity <repo-id> for <root>, which is correct so two worktrees cannot share one index
+[pass] the index is outside the repository
+        the index lives at <index>
+[pass] commits are durable when they return
+        synchronous=FULL, so a commit that returned success is on disk. A power failure cannot lose a generation that was reported as written
+[pass] generation 2 covers 12 relations
+        22 entities and 12 relations, and the generation is non-zero, so the write path produced them
+[pass] no relation points at a target that is missing
+        checked by an anti-join against the entity table, not assumed from the foreign key
+[pass] every relation has been decided
+        no relation is waiting on the resolver
+[pass] no relation is ambiguous
+        every decided edge names exactly one target
+[pass] the write-ahead log is 0 bytes
+        against a 61440 byte database
+[pass] every file in the repository was indexable
+        4 files yielded, none refused
+
+worst: nothing was checked
+could not:
+  this compared nothing against the working tree: it reports what the store holds and what a filesystem walk can read, not which files have changed since the last commit
+  this reported files the walk refused as counts per reason and named none of them; `peek index` lists every skipped path with its reason
+  this did not run the resolver, so a relation still marked pending is a fact about this index and not about the code

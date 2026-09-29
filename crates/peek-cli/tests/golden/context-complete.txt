@@ -1,1 +1,27 @@
-PEEK_UPDATE_GOLDENS — not yet generated
+peek context pack
+budget: 20000 tokens requested, 218 spent, 19782 remaining
+counted as: ceil(utf8 bytes / 3)
+status: complete
+dropped: nothing
+
+function wallet_charge — src/ledger.rs:19
+  signature: (amount: u64) -> Receipt
+  doc: Settle a charge against the ledger.
+
+This is the one declaration in the fixture whose qualified name is unique, which is what makes
+it addressable by name.
+  included because: it is what you asked for.
+  -> calls src/ledger.rs::ledger_commit  [resolved (same_file)]  src/ledger.rs:21
+  -> contains src/ledger.rs::wallet_charge.amount  [resolved (containment)]  src/ledger.rs:19
+function ledger_commit — src/ledger.rs:26
+  signature: (amount: u64) -> u64
+  doc: Commit an amount to the ledger.
+  included because: `src/ledger.rs::wallet_charge` calls it, 1 hop away.
+candidates: 2 examined, 0 not reached
+note: the neighbourhood was exhausted with 19604 token(s) of budget unspent; there was nothing left worth adding
+note: the answer is complete: the neighbourhood was exhausted with 19734 token(s) of the budget unspent, so the budget was not what limited it
+could not:
+  a unit is the index's own rendering of a declaration — kind, name, path, line, signature and doc comment — and not its body. Nothing here shows what is inside a function
+  the pack is one hop from the target by construction. A larger budget does not reach further; it buys more of the same neighbourhood
+  the counting rule is ceil(utf8 bytes / 3), an estimate and not a tokenizer. The byte count beside every cost is what a real tokenizer would be applied to
+  the target's own file is not a unit unless the target is that file; ask for the file to get its declarations

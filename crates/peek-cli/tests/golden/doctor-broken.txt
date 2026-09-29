@@ -1,1 +1,12 @@
-PEEK_UPDATE_GOLDENS — not yet generated
+[fail] the index could not be opened
+        index store is corrupt: <index> is not a readable SQLite database
+        try: if the index is from an older or newer Peek, delete it and re-index; the source is the only thing that cannot be rebuilt
+
+worst: the index could not be opened
+could not:
+  this compared nothing against the working tree: it reports what the store holds and what a filesystem walk can read, not which files have changed since the last commit
+  this reported files the walk refused as counts per reason and named none of them; `peek index` lists every skipped path with its reason
+  this did not run the resolver, so a relation still marked pending is a fact about this index and not about the code
+
+peek doctor: unhealthy
+peek doctor found a failing check: the index could not be opened - index store is corrupt: <index> is not a readable SQLite database
