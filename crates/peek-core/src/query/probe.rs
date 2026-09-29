@@ -113,7 +113,24 @@ fn pick_a_target(store: &Store, root: &Path) -> Option<EntityId> {
             let Ok(edges) = store.incoming(&entity.id, None, 64) else {
                 continue;
             };
-            if !edges.is_empty() {
+            if edges.is_empty() {
+                continue;
+            }
+            // **Unambiguous, or skip it.** An earlier version took the first candidate with any
+            // edge at all, which on a real repository is a `Debug`/`fmt` impl in a fuzz target —
+            // and a `fmt` method is implemented several times over, so its qualified name is
+            // shared. `peek` then refused every budget with "name one of them", and the probe spent
+            // its whole context-compiler section measuring the *refusal* path instead of the
+            // compiler. A probe that silently exercises the least interesting branch is worse than
+            // one that fails, because it reports numbers that look like coverage.
+            //
+            // So the target must be addressable: a qualified name that exactly one indexed entity
+            // carries. That is a property a real user can rely on being able to ask about, which
+            // is the only reason to pick it.
+            let matches = store
+                .entities_with_qualified_name(entity.id.qualified_name(), 8)
+                .unwrap_or_default();
+            if matches.len() == 1 {
                 return Some(entity.id);
             }
         }
