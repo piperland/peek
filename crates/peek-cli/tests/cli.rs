@@ -13,7 +13,7 @@ mod fixture;
 
 use std::path::Path;
 
-use fixture::{Cleanup, Repository, run};
+use fixture::{Cleanup, Repository, run, run_verbatim};
 
 use peek_cli::answer::{Answer, Counts, StatusAnswer};
 use peek_cli::args::{self, Command, UsageError};
@@ -229,6 +229,53 @@ fn no_arguments_prints_the_help_rather_than_failing() {
         Command::Help
     );
     assert_eq!(args::parse(["help"]).expect("parse").command, Command::Help);
+}
+
+#[test]
+fn the_help_and_version_flags_are_answers_and_are_read_wherever_they_appear() {
+    // The flag table listed `-V, --version` and the parser never read it, so `peek --version` had
+    // no positionals, fell through to the "no command at all" branch, and printed the help. The
+    // help is generated from the table, so it described a flag that did nothing — the one thing
+    // generating the documentation from the table is supposed to make impossible.
+    //
+    // Checked on both spellings and both positions, because either of them could have been the one
+    // that kept working: a flag after the command is still the flag, so `peek status --version`
+    // asks for the build rather than quietly running the status and dropping the version.
+    for argv in [
+        vec!["--version"],
+        vec!["-V"],
+        vec!["version"],
+        vec!["status", "--version"],
+        vec!["--version", "--json"],
+    ] {
+        assert_eq!(
+            args::parse(argv.clone()).expect("parse").command,
+            Command::Version,
+            "{argv:?} did not reach the version command"
+        );
+    }
+    for argv in [
+        vec!["--help"],
+        vec!["-h"],
+        vec!["help"],
+        vec!["status", "--help"],
+        vec!["--help", "--json"],
+    ] {
+        assert_eq!(
+            args::parse(argv.clone()).expect("parse").command,
+            Command::Help,
+            "{argv:?} did not reach the help command"
+        );
+    }
+    // Neither of them takes a repository, so the fixture cannot be tricked into naming one for
+    // them; `Command::root` answering `None` is what says that, and it is asserted here rather
+    // than left to the fixture's own behaviour.
+    assert!(
+        args::parse(["--version"]).expect("parse").command.root().is_none()
+    );
+    assert!(
+        args::parse(["--help"]).expect("parse").command.root().is_none()
+    );
 }
 
 #[test]
@@ -789,7 +836,14 @@ fn a_counts_value_reports_whether_its_states_partition() {
 
 #[test]
 fn a_cold_build_reports_the_mode_and_the_files_it_indexed() {
-    let repository = Repository::empty("index-cold");
+    // **The fixture changed, not the assertion.** This used to build a `Repository::empty` and
+    // then assert `files_indexed > 0`, which cannot hold: there is no file in an empty directory
+    // to index, so the test was asserting something untrue for the tree it had made. Weakening it
+    // to `files_indexed == 0` would have been worse than useless — `a_run_that_indexed_nothing_
+    // still_exits_zero_but_says_the_run_was_empty` already asserts that, and the word "cold" is
+    // about the *index*, not the tree. A repository with four files in it and no generation
+    // committed is exactly as cold as an empty one, so the fixture is the thing that was wrong.
+    let repository = Repository::small("index-cold");
     let outcome = run(&repository, &["index", repository.root_str()]);
     assert_eq!(outcome.output.status, Status::Ok);
     assert_eq!(outcome.output.exit_code, 0);
@@ -1019,9 +1073,16 @@ fn a_run_that_indexed_nothing_still_exits_zero_but_says_the_run_was_empty() {
 
 #[test]
 fn a_run_over_a_path_that_is_not_a_directory_is_a_usage_error() {
+    // **Exempt from the harness's root injection, and deliberately so.** The claim is about the
+    // *argument*: naming a file where a repository root belongs must be refused as
+    // `not_a_repository`. Injecting the fixture's root as `index`'s `[PATH]` positional would
+    // give the command two positionals, and the refusal would be `wrong_arity` instead — a
+    // different refusal that this test would still have been happy to assert. It is run through
+    // `run_verbatim` so the exemption is visible here rather than hidden in a list inside the
+    // fixture.
     let repository = Repository::small("index-not-a-dir");
     let file = repository.root_str().to_owned() + "/src/ledger.rs";
-    let outcome = run(&repository, &["index", &file]);
+    let outcome = run_verbatim(&repository, &["index", &file]);
     assert_eq!(outcome.output.status, Status::Usage);
     assert_eq!(outcome.output.exit_code, 2);
     assert_eq!(
@@ -1213,6 +1274,13 @@ fn rm_refuses_a_repository_with_no_index_rather_than_creating_one() {
 fn the_test_harness_gives_each_repository_its_own_index_and_cleans_up() {
     // Every test above relies on this: two repositories sharing an index would make each of them
     // assert on the other's counts. The harness failing here explains every one of them at once.
+    //
+    // **This test used to hang the whole binary.** Each `Repository` held the process-global
+    // `Mutex` around `set_root_override` for its whole lifetime, and `std::sync::Mutex` is not
+    // reentrant, so constructing the second repository blocked on a guard the first still held —
+    // forever, with no output, which reads as a run that produced no results rather than as a
+    // defect. The override is now installed for the length of a single run instead, which is why
+    // two repositories can be alive at once and why the run below is pointed at the right one.
     let first = Repository::small("harness-a");
     let second = Repository::small("harness-b");
     assert_ne!(
@@ -1220,16 +1288,180 @@ fn the_test_harness_gives_each_repository_its_own_index_and_cleans_up() {
         second.index_path(),
         "two repositories must not share an index"
     );
-    let path = first.index_path();
-    run(&first, &["index", first.root_str()]);
+    let first_path = first.index_path();
+    let second_path = second.index_path();
+    run(&first, &["index"]);
+    run(&second, &["index"]);
     assert!(
-        path.is_file(),
-        "the build must have created the index at {path:?}"
+        first_path.is_file(),
+        "the build must have created the index at {first_path:?}"
     );
-    let _cleanup = Cleanup::on(path.clone());
+    assert!(
+        second_path.is_file(),
+        "the second build must have created its own index at {second_path:?}, not the first's"
+    );
+    let _cleanup = Cleanup::on(first_path.clone());
     drop(first);
     assert!(
-        !path.exists(),
+        !first_path.exists(),
         "dropping the repository must have removed its index"
     );
+    assert!(
+        second_path.is_file(),
+        "dropping one repository must not remove another's index"
+    );
+}
+
+#[test]
+fn the_fixture_names_the_repository_for_a_command_that_takes_a_flag() {
+    // `--root` defaults to `.` and a test binary's working directory is the *package* directory,
+    // so `run(&repository, &["status"])` used to answer about `crates/peek-cli`. It refused with
+    // `no_index`, which reads as a wrong answer type rather than as the missing flag it was, and
+    // fourteen tests were asserting real behaviour about a directory that is not a fixture.
+    //
+    // Asserted through what the command *did*, not through the command line: `status` takes no
+    // positional, so a fixture that named the repository as one would be refused for arity, and
+    // this test would fail. Reaching the fixture's own index is therefore the proof that the flag
+    // was used.
+    let repository = Repository::small("harness-flag-root");
+    let built = run(&repository, &["index"]);
+    assert_eq!(built.output.exit_code, 0, "{:?}", built.output.refusal);
+    let status = run(&repository, &["status"]);
+    assert_eq!(
+        status.output.status,
+        Status::Ok,
+        "the command must have found the fixture's index: {:?}",
+        status.output.refusal
+    );
+    assert_eq!(
+        status.output.root,
+        repository.root_str(),
+        "the answer names the tree it read"
+    );
+}
+
+#[test]
+fn the_fixture_names_the_repository_for_a_command_that_takes_a_positional() {
+    // The same claim for the other shape. `index` reads its repository from the `[PATH]`
+    // positional, and `--root` is a global flag that `index` **accepts and ignores** — so a
+    // fixture that used the flag for every command would index the package directory and report a
+    // confident count for the wrong tree. That is worse than the bug it fixes, which is why the
+    // shape is read out of the command table rather than decided here.
+    //
+    // Asserted by leaving the positional out entirely: if the harness injected the flag instead,
+    // the build would walk the working directory, index nothing, and produce no index file here.
+    let repository = Repository::small("harness-positional-root");
+    let built = run(&repository, &["index"]);
+    assert_eq!(built.output.exit_code, 0, "{:?}", built.output.refusal);
+    assert!(
+        repository.index_path().is_file(),
+        "the build must have written the index under the fixture, not the package directory"
+    );
+    match &built.output.answer {
+        Answer::Index(answer) => assert!(
+            answer.files_indexed > 0,
+            "the fixture's own four files must have been indexed: {answer:?}"
+        ),
+        other => panic!("expected an index answer, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_fixture_leaves_a_command_line_that_already_names_a_repository_alone() {
+    // Adding a second `--root` would be a `RepeatedFlag` usage error, so a test that spells its
+    // own root — a canonicalisation test naming `<root>/src/..`, for instance — would stop testing
+    // canonicalisation and start testing the harness. "Already named" is decided from the parsed
+    // command rather than by counting tokens, so a new spelling of the flag does not defeat it.
+    let repository = Repository::small("harness-already-named");
+    run(&repository, &["index", repository.root_str()]);
+    let roundabout = format!("{}/src/..", repository.root_str());
+    let status = run(&repository, &["status", "--root", &roundabout]);
+    assert_eq!(
+        status.output.status,
+        Status::Ok,
+        "{:?}",
+        status.output.refusal
+    );
+    let spelled_out = run(&repository, &["status", &format!("--root={roundabout}")]);
+    assert_eq!(
+        spelled_out.output.status,
+        Status::Ok,
+        "{:?}",
+        spelled_out.output.refusal
+    );
+    // And the two spellings reached one index, which is the property the roundabout spelling
+    // exists to demonstrate and the reason the harness must not rewrite it.
+    assert_eq!(status.output.index_path, spelled_out.output.index_path);
+}
+
+#[test]
+fn a_command_line_the_parser_refuses_is_never_given_a_root() {
+    // The four cases in `failure.rs` exist to assert on the refusal, and appending `--root` to
+    // `--nonsense` would turn an `unknown_flag` into a `wrong_arity` — a test still passing, now
+    // checking nothing. The exemption is a property of a line that does not parse at all, so it
+    // applies to every one of them without any of them having to know.
+    let repository = Repository::small("harness-unparsable");
+    for (argv, expected) in [
+        (vec!["status", "--nonsense"], kind::UNKNOWN_FLAG),
+        (vec!["contex"], kind::UNKNOWN_COMMAND),
+        (vec!["context", "--budget"], kind::MISSING_VALUE),
+        (vec!["status", "extra"], kind::WRONG_ARITY),
+    ] {
+        let output = run(&repository, &argv).output;
+        assert_eq!(output.status, Status::Usage, "{argv:?}");
+        assert_eq!(
+            output.refusal.as_ref().map(|r| r.kind.as_str()),
+            Some(expected),
+            "{argv:?}: the harness changed which refusal this is"
+        );
+    }
+}
+
+#[test]
+fn the_exempt_command_lines_still_mean_what_they_meant() {
+    // The three tests that are not allowed to have a repository injected, checked together so
+    // that adding a fourth one is a deliberate act rather than an accident. Each is named with
+    // what it is exempt from and why; the point of this test is that the exemptions still hold.
+    let repository = Repository::small("exemptions");
+
+    // 1. `a_run_over_a_path_that_is_not_a_directory_is_a_usage_error` — the argument is the file,
+    //    so a second positional would change the refusal from `not_a_repository` to `wrong_arity`.
+    let file = repository.root_str().to_owned() + "/src/ledger.rs";
+    let not_a_directory = run_verbatim(&repository, &["index", &file]).output;
+    assert_eq!(
+        not_a_directory.refusal.as_ref().map(|r| r.kind.as_str()),
+        Some(kind::NOT_A_REPOSITORY),
+        "the refusal must be about the path, not about how many there were"
+    );
+
+    // 2. `rm_refuses_a_path_outside_the_repository_and_names_both_places` — this one is *not*
+    //    exempt; it is the test that catches the harness forgetting. It names no root at all, and
+    //    its whole claim is that the refusal names the repository the command was pointed at.
+    //    Under the old harness that was the package directory, so the message did not contain the
+    //    fixture and the test failed for a reason nobody could see.
+    run(&repository, &["index", repository.root_str()]);
+    let outside = repository.sibling("elsewhere").join("secret.rs");
+    let named = outside.to_str().expect("utf-8");
+    let escaped = run(&repository, &["rm", named]).output;
+    assert_eq!(escaped.exit_code, 2);
+    let refusal = escaped.refusal.expect("a refusal is required");
+    assert_eq!(refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
+    assert!(
+        refusal.message.contains(repository.root_str()),
+        "the refusal must name the repository the command was actually pointed at: {}",
+        refusal.message
+    );
+
+    // 3. `a_command_that_worked_never_carries_a_declined_answer` — `help` and `version` read no
+    //    repository, so naming one would be a lie about what they read, and the parser ignores it
+    //    anyway, which makes it a dead flag. A command that reports having read a tree it never
+    //    opened is the defect this project exists to remove.
+    for argv in [vec!["--help"], vec!["--version"]] {
+        let output = run(&repository, &argv).output;
+        assert_eq!(output.exit_code, 0, "{argv:?}");
+        assert!(
+            output.root.is_empty() && output.index_path.is_empty(),
+            "{argv:?} must not claim to have read a repository: {output:?}"
+        );
+    }
 }
