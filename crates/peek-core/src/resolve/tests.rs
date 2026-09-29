@@ -168,6 +168,109 @@ fn state_of(relation: &crate::model::Relation) -> String {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
+    // The case R-007 exists for, and the one the path guess structurally cannot reach.
+    //
+    // `alpha`'s module `gateway` lives at `crates/alpha/src/gateway.rs`. The guess builds
+    // candidate paths by anchoring on the importer's directory and climbing, joining the module's
+    // segments with `/` and appending `.rs` — so from `crates/beta/src/` it will try
+    // `crates/beta/alpha/gateway.rs`, `crates/alpha/gateway.rs`, and so on. It never produces
+    // `crates/alpha/src/gateway.rs`, because the `src` directory is not in the module path and
+    // nothing in the module name mentions it. So a cross-crate import is unplaceable by the guess
+    // no matter how many anchors it tries, which is exactly why it was `no_candidate`.
+    //
+    // The table has no such difficulty: `alpha::gateway` *is* the qualified name the extractor
+    // wrote, and one indexed seek finds it.
+    let tree = TempTree::new("cross-package");
+    tree.write(
+        "crates/alpha/Cargo.toml",
+        "[package]\nname = \"alpha\"\n",
+    );
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/alpha/src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        1\n    }\n}\n",
+    );
+    tree.write(
+        "crates/beta/Cargo.toml",
+        "[package]\nname = \"beta\"\n",
+    );
+    tree.write(
+        "crates/beta/src/lib.rs",
+        "use alpha::gateway::Gateway;\n\npub fn go() -> u8 {\n    Gateway.send()\n}\n",
+    );
+
+    let store = tree.index_without_resolving();
+    let options = ResolutionOptions {
+        use_module_table: true,
+        ..ResolutionOptions::default()
+    };
+    resolve_all(&store, &options).expect("resolve with the module table on");
+
+    let import = relations_of(&store, RelationKind::Imports)
+        .into_iter()
+        .find(|relation| relation.target_name == "Gateway")
+        .expect("the import of Gateway was extracted");
+    assert_eq!(
+        state_of(&import),
+        "resolved",
+        "the module table places a cross-package import that the guess cannot: {:?}",
+        import
+    );
+
+    let call = relations_of(&store, RelationKind::Calls)
+        .into_iter()
+        .find(|relation| relation.target_name == "send")
+        .expect("the call to send was extracted");
+    assert_eq!(
+        state_of(&call),
+        "resolved",
+        "and the method call inside the other package with it: {call:?}"
+    );
+}
+
+#[test]
+fn the_module_table_switch_really_turns_the_table_off() {
+    // Without this, "the two arms measured identically" would be unreadable: it would be a result
+    // or a broken switch, and there would be no way to tell. So the switch is proved to do
+    // something, on the same repository, in the same run.
+    //
+    // The counter-case is the same cross-package repository, with the table off. The import must
+    // then be `no_candidate` — the exact defect the table fixes — which is what makes this a test
+    // of the switch rather than of the resolver.
+    let tree = TempTree::new("cross-package-off");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/alpha/src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        1\n    }\n}\n",
+    );
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    tree.write(
+        "crates/beta/src/lib.rs",
+        "use alpha::gateway::Gateway;\n\npub fn go() -> u8 {\n    Gateway.send()\n}\n",
+    );
+
+    let store = tree.index_without_resolving();
+    let options = ResolutionOptions {
+        use_module_table: false,
+        ..ResolutionOptions::default()
+    };
+    resolve_all(&store, &options).expect("resolve with the module table off");
+
+    let import = relations_of(&store, RelationKind::Imports)
+        .into_iter()
+        .find(|relation| relation.target_name == "Gateway")
+        .expect("the import of Gateway was extracted");
+    assert_eq!(
+        state_of(&import),
+        "unresolved (no_candidate)",
+        "with the table off the guess cannot cross a package boundary, and that is the defect: {:?}",
+        import
+    );
+}
+
+#[test]
 fn the_evidence_order_is_total_and_matches_the_documented_rung_order() {
     // The order is a claim the engine makes about its own output, and `peek explain` prints it.
     // If two classes could ever compare equal, "ordered by evidence strength" would be a phrase

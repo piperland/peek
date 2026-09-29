@@ -226,10 +226,33 @@ pub struct ResolutionOptions {
     /// in place indefinitely. Honoured by [`resolve_paths`] only; [`resolve_all`] ignores it,
     /// because a full build has re-emitted every relation as `Pending` already.
     pub reconsider_decided: bool,
+    /// Ask the module table before guessing at file paths.
+    ///
+    /// **This is a measurement switch, not a user setting.** It exists because the module table
+    /// was added and the only honest way to report what it is worth is a controlled comparison,
+    /// which needs both arms from one build — and a comparison across two builds is exactly the
+    /// mistake that produced R-010, where a harness defect was read as a trend. It reads one
+    /// environment variable and nothing else, and the default is `true` on every path, so a
+    /// deployment that sets nothing behaves identically to yesterday.
+    ///
+    /// The fallback is kept in either position: with the table off, `files_for_module` alone
+    /// produces the pre-existing behaviour, which is what makes this a real A/B rather than a
+    /// no-op.
+    pub use_module_table: bool,
 }
+
+/// The environment variable that turns the module table off. Diagnostic only.
+const ENV_MODULE_TABLE: &str = "PEEK_MODULE_TABLE";
 
 impl Default for ResolutionOptions {
     fn default() -> Self {
+        // Read once, and only treat an explicit falsy value as off. An unset variable, an empty
+        // one, and anything unrecognised all leave the table on: a diagnostic switch that has to
+        // be spelled exactly right to *disable* something is a switch that will be on when the
+        // measurement needs it off, and the measurement will be wrong in a way nobody notices.
+        let use_module_table = std::env::var(ENV_MODULE_TABLE)
+            .map(|value| value != "0" && value.to_ascii_lowercase() != "false")
+            .unwrap_or(true);
         Self {
             entities_per_file: 512,
             entities_by_name: 512,
@@ -238,6 +261,7 @@ impl Default for ResolutionOptions {
             modules_per_lookup: 8,
             max_candidates: 32,
             reconsider_decided: true,
+            use_module_table,
         }
     }
 }
@@ -693,6 +717,9 @@ impl<'s> Resolver<'s> {
     /// does not yet know, still needs the old path. Order matters: the table is asked first
     /// because it is exact, and a hit from it is a `Resolved` answer rather than a guess.
     ///
+    /// [`ResolutionOptions::use_module_table`] turns the table off, which is how the two arms of
+    /// the measurement in `.agent/EVIDENCE/MULTI-REPO-SPREAD.md` come out of one build.
+    ///
     /// `super::` is the one shape the table answers better than the guess did, because a relative
     /// climb is defined in terms of the *importer's own module*, which the table knows and the
     /// guess had to infer from the directory name.
@@ -703,15 +730,17 @@ impl<'s> Resolver<'s> {
         strip_last: bool,
     ) -> Result<Vec<RepoPath>, StoreError> {
         let mut via_table = Vec::new();
-        for qualified in self.module_qualified_names(module, importer, strip_last) {
-            for entity in self
-                .store
-                .entities_with_qualified_name(&qualified, self.options.modules_per_lookup)?
-            {
-                if entity.kind() == EntityKind::Module {
-                    let path = entity.path().clone();
-                    if !via_table.contains(&path) {
-                        via_table.push(path);
+        if self.options.use_module_table {
+            for qualified in self.module_qualified_names(module, importer, strip_last) {
+                for entity in self
+                    .store
+                    .entities_with_qualified_name(&qualified, self.options.modules_per_lookup)?
+                {
+                    if entity.kind() == EntityKind::Module {
+                        let path = entity.path().clone();
+                        if !via_table.contains(&path) {
+                            via_table.push(path);
+                        }
                     }
                 }
             }
@@ -759,14 +788,32 @@ impl<'s> Resolver<'s> {
 
         let mut qualified = Vec::new();
         for reading in readings {
-            let mut parts: Vec<String> = Vec::new();
+            // **Both** spellings, and this is the whole cross-crate case. `use alpha::gateway::X`
+            // written in `beta` names the *other* package, so `alpha` is already a package
+            // segment and prefixing the importer's own package produces `beta::alpha::gateway`,
+            // which names nothing. Prefixing is right for `crate::a::b` and wrong for a path
+            // whose head is a different package, and which one a path is cannot be told from the
+            // path alone — so both are tried, cheapest first, and a miss is a miss rather than a
+            // wrong answer.
+            //
+            // The unprefixed reading comes second for a reason that is not arbitrary: for
+            // `crate::a::b` the unprefixed form is `a::b`, which in a workspace is a perfectly
+            // valid qualified name belonging to some *other* package. Trying it second does not
+            // cost a wrong answer, because a hit has to be a `Module` entity and the caller
+            // re-checks the target's own name — but it does cost a lookup, so the reading that is
+            // more likely correct goes first.
+            let mut with_package: Vec<String> = Vec::new();
             if let Some(package) = &package {
-                parts.push(package.clone());
+                with_package.push(package.clone());
             }
-            parts.extend(reading.iter().map(|part| (*part).to_owned()));
-            let candidate = parts.join("::");
-            if !qualified.contains(&candidate) {
-                qualified.push(candidate);
+            with_package.extend(reading.iter().map(|part| (*part).to_owned()));
+            for candidate in [
+                with_package.join("::"),
+                reading.join("::"),
+            ] {
+                if !qualified.contains(&candidate) {
+                    qualified.push(candidate);
+                }
             }
         }
         qualified
