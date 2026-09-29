@@ -69,7 +69,10 @@ pub mod writer;
 
 pub use outcome::{Outcome, ToolError, Verdict};
 pub use server::serve;
-pub use session::{Log, Session};
+// `StderrLog` beside `Log` because the binary needs the two together: it opens a session, and
+// where that session's diagnostics go is not a choice the binary should have to reach into
+// `session` to make.
+pub use session::{Log, Session, StderrLog};
 pub use tool::Tool;
 
 /// The engine version this server reports in `initialize`.
