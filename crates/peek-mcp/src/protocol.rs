@@ -24,7 +24,7 @@
 //! latest. [`negotiate`] implements exactly that, and [`KNOWN_PROTOCOL_VERSIONS`] is the supported
 //! set. `2024-11-05` and `2025-03-26` are in the set because a client pinned to one of them is a
 //! real client, and refusing to talk to it helps nobody — the shapes this server uses (`tools`,
-//! `inputSchema`, text content) are identical across all four.
+//! `inputSchema`, text content) are identical across all three.
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -38,15 +38,14 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// Every version this build can speak, oldest first.
 ///
-/// The first is here because a client pinned to it is a real client, and the tool shapes it uses
-/// are the same ones. The last is the newest this build has been written against; naming a version
-/// newer than that would be claiming conformance nobody has tested.
-pub const KNOWN_PROTOCOL_VERSIONS: &[&str] = &[
-    "2024-11-05",
-    "2025-03-26",
-    "2025-06-18",
-    "2025-11-25",
-];
+/// The first two are here because a client pinned to one of them is a real client, and the tool
+/// shapes it uses are the same ones. The last is the newest this build has been written against,
+/// and it is [`PROTOCOL_VERSION`]: a revision this server has not implemented — tasks, icons, the
+/// clarified rule that argument errors are tool execution errors — may not be named here, because a
+/// client that is answered with a version believes the server implements that revision. Adding a
+/// line here is a claim of conformance, and the difference between a claim and an implementation is
+/// the whole subject of the paragraph above.
+pub const KNOWN_PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
 
 /// Parse error: the bytes were not JSON.
 pub const CODE_PARSE_ERROR: i64 = -32700;
@@ -368,6 +367,11 @@ impl CallToolResult {
 /// [`KNOWN_PROTOCOL_VERSIONS`], because a client that receives one it does not know may refuse to
 /// continue, and a server that claims a version it has not been written against is the same class
 /// of claim as a benchmark nobody ran.
+///
+/// "Newest this build does speak" is [`PROTOCOL_VERSION`], and a test in `tests/protocol.rs`
+/// asserts it is the last entry of the list. That assertion is the point: if the list ever grows
+/// past the version this build implements, the fallback starts answering with something this
+/// server has not been written against, and no test of the negotiation itself would notice.
 #[must_use]
 pub fn negotiate(requested: Option<&str>) -> String {
     match requested {

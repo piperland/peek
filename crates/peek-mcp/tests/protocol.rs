@@ -146,19 +146,44 @@ fn the_version_answered_is_the_one_the_client_asked_for_when_it_is_known() {
 }
 
 #[test]
-fn the_version_answered_is_a_known_one_when_the_client_asks_for_something_newer() {
-    let dir = TempDir::new("negotiate-unknown");
-    let driven = drive(
-        dir.path(),
-        &[request(1, "initialize", json!({ "protocolVersion": "2099-01-01" }))],
+fn the_version_answered_is_one_this_build_implements_when_the_client_asks_for_another() {
+    // The negotiation rule is only half the claim. The other half is that the answer is a version
+    // this server has actually been written against: a client that asks for a revision this build
+    // does not implement must be answered with the one it does, never with an echo of what it
+    // asked for and never with a different unimplemented revision.
+    for asked in ["2099-01-01", "2025-11-25", "not a version at all", ""] {
+        let dir = TempDir::new("negotiate-unknown");
+        let driven = drive(
+            dir.path(),
+            &[request(1, "initialize", json!({ "protocolVersion": asked }))],
+        );
+        let answered = replies(&driven.stdout)[0]["result"]["protocolVersion"]
+            .as_str()
+            .expect("a version is always answered")
+            .to_owned();
+        assert_eq!(
+            answered,
+            peek_mcp::protocol::PROTOCOL_VERSION,
+            "a client asking for {asked:?} is answered with the version this build implements"
+        );
+        assert_ne!(answered, asked, "and never with an echo of what it asked for");
+    }
+}
+
+#[test]
+fn every_version_this_build_claims_is_one_it_implements() {
+    // A version in the list is a promise to a client, so the list and the constant this build was
+    // written against cannot drift apart. When they do, a client asking for the newer revision is
+    // told the server speaks it, and it does not.
+    assert_eq!(
+        peek_mcp::protocol::KNOWN_PROTOCOL_VERSIONS.last(),
+        Some(&peek_mcp::protocol::PROTOCOL_VERSION),
+        "the newest version claimed is the newest one implemented; a version this build has not \
+         been written against may not be in the list"
     );
-    let answered = replies(&driven.stdout)[0]["result"]["protocolVersion"]
-        .as_str()
-        .expect("a version is always answered")
-        .to_owned();
     assert!(
-        peek_mcp::protocol::KNOWN_PROTOCOL_VERSIONS.contains(&answered.as_str()),
-        "a version this build has not been written against must not be claimed: {answered}"
+        peek_mcp::protocol::KNOWN_PROTOCOL_VERSIONS.contains(&peek_mcp::protocol::PROTOCOL_VERSION),
+        "and the version it does implement is in the list, so a client asking for it is echoed"
     );
 }
 
