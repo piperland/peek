@@ -807,10 +807,7 @@ impl<'s> Resolver<'s> {
                 with_package.push(package.clone());
             }
             with_package.extend(reading.iter().map(|part| (*part).to_owned()));
-            for candidate in [
-                with_package.join("::"),
-                reading.join("::"),
-            ] {
+            for candidate in [with_package.join("::"), reading.join("::")] {
                 if !qualified.contains(&candidate) {
                     qualified.push(candidate);
                 }

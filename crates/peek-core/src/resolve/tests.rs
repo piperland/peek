@@ -182,30 +182,24 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
     // The table has no such difficulty: `alpha::gateway` *is* the qualified name the extractor
     // wrote, and one indexed seek finds it.
     let tree = TempTree::new("cross-package");
-    tree.write(
-        "crates/alpha/Cargo.toml",
-        "[package]\nname = \"alpha\"\n",
-    );
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
     tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
     tree.write(
         "crates/alpha/src/gateway.rs",
         "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        1\n    }\n}\n",
     );
-    tree.write(
-        "crates/beta/Cargo.toml",
-        "[package]\nname = \"beta\"\n",
-    );
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
     tree.write(
         "crates/beta/src/lib.rs",
         "use alpha::gateway::Gateway;\n\npub fn go() -> u8 {\n    Gateway.send()\n}\n",
     );
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let options = ResolutionOptions {
         use_module_table: true,
         ..ResolutionOptions::default()
     };
-    resolve_all(&store, &options).expect("resolve with the module table on");
+    resolve_all(&store, &options).expect("XXXMARKERXXX");
 
     let import = relations_of(&store, RelationKind::Imports)
         .into_iter()
@@ -251,12 +245,12 @@ fn the_module_table_switch_really_turns_the_table_off() {
         "use alpha::gateway::Gateway;\n\npub fn go() -> u8 {\n    Gateway.send()\n}\n",
     );
 
-    let store = tree.index_without_resolving();
+    let mut store = tree.index_without_resolving();
     let options = ResolutionOptions {
         use_module_table: false,
         ..ResolutionOptions::default()
     };
-    resolve_all(&store, &options).expect("resolve with the module table off");
+    resolve_all(&mut store, &options).expect("resolve with the module table off");
 
     let import = relations_of(&store, RelationKind::Imports)
         .into_iter()
@@ -352,7 +346,7 @@ fn an_import_that_names_a_module_rather_than_an_item_binds_to_that_modules_file(
         "use payments::service as svc;\nfn boot() {}\n",
     );
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let imports: Vec<_> = relations_of(&store, RelationKind::Imports)
@@ -399,7 +393,7 @@ fn a_call_to_a_function_in_the_same_file_resolves() {
     let tree = TempTree::new("same-file");
     tree.write("src/lib.rs", "fn helper() {}\nfn main() { helper(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "helper");
@@ -432,7 +426,7 @@ fn a_call_bound_by_an_import_in_another_file_resolves_across_files() {
         "use payments::charge;\nfn boot() { charge(1); }\n",
     );
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "charge");
@@ -486,7 +480,7 @@ fn two_symbols_with_the_same_name_in_different_files_are_ambiguous_and_neither_i
     tree.write("src/two.rs", "pub fn charge() {}\n");
     tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "charge");
@@ -530,7 +524,7 @@ fn a_name_nothing_in_the_repository_carries_is_unresolved_with_a_reason_and_stil
     let tree = TempTree::new("unknown-name");
     tree.write("src/lib.rs", "fn boot() { nowhere_to_be_found(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "nowhere_to_be_found");
@@ -592,7 +586,7 @@ fn a_qualified_name_the_repository_does_not_contain_is_reported_as_external() {
         "struct MyType;\nimpl std::fmt::Debug for MyType {}\n",
     );
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let implements: Vec<_> = relations_of(&store, RelationKind::Implements)
@@ -639,7 +633,7 @@ fn a_receiver_never_binds_to_an_unrelated_function_with_the_same_name() {
     );
     tree.write("src/app.rs", "fn boot() { let s = Service; s.charge(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "charge");
@@ -683,7 +677,7 @@ fn a_receiver_that_names_a_type_in_its_own_file_resolves_to_that_type_only() {
          fn retry(&self) {} }\n",
     );
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "retry");
@@ -718,7 +712,7 @@ fn a_receiver_matched_while_ignoring_letter_case_is_a_claim_and_is_labelled_as_o
          fn run() { let service = Service; service.retry(); }\n",
     );
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "retry");
@@ -757,7 +751,7 @@ fn a_name_matched_only_by_a_repository_wide_uniqueness_check_is_inferred_not_res
     tree.write("src/payments.rs", "pub fn charge() {}\n");
     tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "charge");
@@ -852,7 +846,7 @@ fn resolving_an_unchanged_index_again_is_a_no_op_that_moves_no_generation() {
     let tree = TempTree::new("idempotent");
     tree.write("src/lib.rs", "fn helper() {}\nfn main() { helper(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
     assert!(
         first.committed,
@@ -896,7 +890,7 @@ fn a_definition_that_moves_to_another_file_its_callers_are_re_decided() {
     tree.write("src/one.rs", "pub fn charge() {}\n");
     tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
     assert_eq!(
         first.inferred,
@@ -954,7 +948,7 @@ fn a_scoped_pass_decides_the_paths_it_was_given_and_nothing_else() {
     );
     tree.write("src/untouched.rs", "fn go() { not_yet(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     let _ = refresh(&tree, &mut store, &["src/settled.rs"]);
 
     let settled = the_call(&store, "already_done");
@@ -1031,7 +1025,7 @@ fn a_failed_resolution_leaves_the_previous_generation_readable() {
     let tree = TempTree::new("failed-pass");
     tree.write("src/lib.rs", "fn helper() {}\nfn main() { helper(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     let before = store.generation();
     assert!(before > 0, "the extraction pass committed something");
 
@@ -1148,7 +1142,7 @@ fn a_multi_segment_path_resolves_through_the_module_it_names() {
         "fn go() { crate::payments::Service::charge(); }\n",
     );
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let call = the_call(&store, "charge");
@@ -1183,7 +1177,7 @@ fn a_capped_candidate_list_is_truncated_and_the_omitted_candidates_are_counted_n
     }
     tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     let report = resolve_all(
         &mut store,
         ResolutionOptions::default().with_max_candidates(2),
@@ -1222,7 +1216,7 @@ fn a_pass_with_nothing_in_scope_examines_nothing_and_commits_nothing() {
     let tree = TempTree::new("empty-scope");
     tree.write("src/one.rs", "fn helper() {}\nfn go() { helper(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     // The edge is decided first, so a pass that reached outside its scope would have a decided
     // edge to re-examine and this test would fail rather than pass for the wrong reason.
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
@@ -1292,7 +1286,7 @@ fn an_ambiguity_widened_by_a_new_file_is_not_re_decided_until_a_full_pass_runs()
     tree.write("src/two.rs", "pub fn charge() {}\n");
     tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
     let first = the_call(&store, "charge");
     let before = match &first.resolution {
@@ -1349,7 +1343,7 @@ fn a_truncated_candidate_lookup_is_reported_rather_than_silently_accepted() {
     }
     tree.write("src/lib.rs", &source);
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     let report = resolve_all(
         &mut store,
         ResolutionOptions::default()
@@ -1387,7 +1381,7 @@ fn every_relation_the_pass_examined_is_accounted_for_and_none_is_left_pending() 
         "trait Base {}\ntrait Extended: Base {}\n",
     );
 
-    let mut store = tree.index_without_resolving();
+    let store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     assert_eq!(
