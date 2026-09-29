@@ -128,13 +128,18 @@ fn function(relative: &str, name: &str) -> Entity {
 }
 
 #[test]
-fn a_missing_index_is_a_failure_that_names_what_to_do() {
-    // The most common first run: nothing has been indexed yet. This must not be an error — it is
-    // a normal state with an obvious next step.
-    let install = Install::empty("missing");
-    let diagnosis = install.diagnose();
+fn an_index_that_cannot_be_opened_is_a_failure_that_names_what_to_do() {
+    // `Store::open` *creates* a missing index, so "never indexed" is detected by emptiness rather
+    // than by absence — see the next test. This one arranges the state that really is
+    // unopenable: a file where the database should be that is not a database.
+    let install = Install::empty("unopenable");
+    let repo = RepoId::discover(install.path()).expect("derive a repository id");
+    let database = install.index.join(repo.as_str()).join("index.db");
+    fs::create_dir_all(database.parent().expect("the index has a parent")).expect("make the dir");
+    fs::write(&database, b"this is not a sqlite database, it is a sentence").expect("write it");
 
-    assert!(!diagnosis.is_healthy(), "an unopened index is not healthy");
+    let diagnosis = install.diagnose();
+    assert!(!diagnosis.is_healthy(), "an unopenable index is not healthy");
     let openable = findings_of(&diagnosis, Check::IndexOpenable);
     assert_eq!(openable.len(), 1, "{openable:?}");
     assert_eq!(openable[0].severity, Severity::Fail);
@@ -142,6 +147,23 @@ fn a_missing_index_is_a_failure_that_names_what_to_do() {
         openable[0].action.is_some(),
         "a failure a user cannot act on is a failure that will not be acted on: {:?}",
         openable[0]
+    );
+}
+
+#[test]
+fn a_never_indexed_install_says_so_rather_than_failing() {
+    // The most common first run. `Store::open` creates the index, so this is a healthy install
+    // with nothing in it — a state with an obvious next step, not a fault.
+    let install = Install::empty("never-indexed");
+    let diagnosis = install.diagnose();
+
+    assert!(diagnosis.is_healthy(), "{}", diagnosis.report());
+    let generation = findings_of(&diagnosis, Check::Generation);
+    assert_eq!(generation[0].severity, Severity::Notice);
+    assert!(
+        generation[0].summary.contains("empty"),
+        "the user must be told what is missing, in words: {:?}",
+        generation[0]
     );
 }
 
@@ -183,12 +205,28 @@ fn a_healthy_index_passes_every_check_and_says_what_it_measured() {
         "a healthy install must be reported healthy:\n{}",
         diagnosis.report()
     );
-    assert_eq!(diagnosis.worst(), Some(Severity::Pass));
-    assert_eq!(findings_of(&diagnosis, Check::OrphanEdges)[0].severity, Severity::Pass);
-    assert_eq!(findings_of(&diagnosis, Check::Integrity)[0].severity, Severity::Pass);
-    assert_eq!(findings_of(&diagnosis, Check::PendingWork)[0].severity, Severity::Pass);
-    assert_eq!(findings_of(&diagnosis, Check::Durability)[0].severity, Severity::Pass);
-    assert_eq!(findings_of(&diagnosis, Check::IndexLocation)[0].severity, Severity::Pass);
+    // The checks that say something about whether the *index* is trustworthy. Deliberately not
+    // `worst() == Pass`: a one-page database legitimately has a write-ahead log larger than
+    // itself until something checkpoints, and the log check is right to mention it. Asserting
+    // "nothing at all is ever worth mentioning" would be asserting a fixture property, not a
+    // property of the diagnosis.
+    for check in [
+        Check::OrphanEdges,
+        Check::Integrity,
+        Check::PendingWork,
+        Check::Durability,
+        Check::IndexLocation,
+        Check::RepositoryIdentity,
+    ] {
+        let found = findings_of(&diagnosis, check);
+        assert_eq!(found.len(), 1, "{check:?} produced {found:?}");
+        assert_eq!(
+            found[0].severity,
+            Severity::Pass,
+            "{check:?} on a healthy install: {:?}",
+            found[0]
+        );
+    }
 
     for finding in &diagnosis.findings {
         assert!(
@@ -215,24 +253,36 @@ fn a_damaged_index_fails_the_integrity_check_and_offers_a_rebuild() {
     drop(install.store());
 
     let database = install.index.join("index.db");
-    let mut bytes = fs::read(&database).expect("read the database");
-    // Well past the header, so this is page damage rather than a file that was never a database.
-    for byte in bytes.iter_mut().skip(4096).take(512) {
-        *byte ^= 0xA5;
-    }
-    fs::write(&database, &bytes).expect("write the damaged database");
+    let bytes = fs::read(&database).expect("read the database");
+    assert!(bytes.len() > 512, "there is a database to damage");
+    // Truncated to a length that is not a whole number of pages. This is the corruption SQLite's
+    // own reader cannot silently absorb: a page count that does not match the file, so the last
+    // page is a fragment. Byte-flipping inside the file, by contrast, can land on a free page and
+    // be entirely invisible — which is itself a reason to trust `integrity_check` rather than to
+    // assume any damage is detectable.
+    fs::write(&database, &bytes[..bytes.len() - 700]).expect("truncate the database");
 
     let diagnosis = install.diagnose();
+    // Either the damage stops SQLite opening the file, or `integrity_check` catches it. Both are
+    // the correct outcome; what must not happen is a pass.
+    assert!(!diagnosis.is_healthy(), "{}", diagnosis.report());
+    let openable = findings_of(&diagnosis, Check::IndexOpenable);
     let integrity = findings_of(&diagnosis, Check::Integrity);
-    assert_eq!(integrity.len(), 1, "{integrity:?}");
-    assert_eq!(
-        integrity[0].severity,
-        Severity::Fail,
-        "a damaged index must not be reported healthy: {}",
-        diagnosis.report()
-    );
-    assert!(!diagnosis.is_healthy());
-    assert!(integrity[0].action.is_some());
+    if openable[0].severity == Severity::Fail {
+        assert!(
+            openable[0].action.is_some(),
+            "an unopenable damaged index must say what to do: {:?}",
+            openable[0]
+        );
+    } else {
+        assert_eq!(
+            integrity[0].severity,
+            Severity::Fail,
+            "a damaged index that opens must fail the integrity check: {}",
+            diagnosis.report()
+        );
+        assert!(integrity[0].action.is_some());
+    }
 }
 
 #[test]
@@ -307,27 +357,26 @@ fn an_index_holding_rows_with_no_generation_is_reported_as_impossible() {
 
 #[test]
 fn a_dangling_edge_is_caught_even_with_the_guards_disabled() {
-    // Foreign keys make this impossible, so producing it requires going around them. That is
-    // exactly the scenario worth checking: a migration, a maintenance script, or a bug.
+    // Foreign keys make this impossible, so producing it requires going around them — a migration,
+    // a maintenance script, or a bug. That is exactly why the check exists rather than trusting
+    // the constraint: the constraint can be switched off, and the orphan counter cannot.
     let install = Install::empty("orphan");
-    install.write("src/a.rs", "fn a() {}\n");
     let mut store = install.store();
-    let source = id("src/a.rs", EntityKind::Function, "a");
-    let target = id("src/gone.rs", EntityKind::Function, "gone");
     store
         .apply_update(
             IndexUpdate::empty()
                 .with_entity(function("src/a.rs", "a"))
+                .with_entity(function("src/gone.rs", "gone"))
                 .with_relation(Relation::resolved(
                     RelationKind::Calls,
-                    source,
-                    target,
+                    id("src/a.rs", EntityKind::Function, "a"),
+                    id("src/gone.rs", EntityKind::Function, "gone"),
                     "gone",
                     span(),
                     crate::model::Evidence::SameFile,
                 )),
         )
-        .expect("the first commit cannot dangle");
+        .expect("a committed edge has both ends present");
     drop(store);
 
     // Now break it behind the store's back: the target row goes, the edge stays.
@@ -491,26 +540,28 @@ fn a_weaker_durability_is_reported_as_a_warning() {
 }
 
 #[test]
-fn a_walk_that_cannot_run_is_reported_as_a_failure_and_not_as_a_pass() {
-    // The rule the module is built around: a check that cannot be performed says so. Silently
-    // passing is worse than failing, because it converts an unknown into an assurance.
-    let install = Install::empty("unwalkable");
+fn a_missing_repository_is_reported_as_a_failure_rather_than_an_empty_install() {
+    // The rule the module is built around: something that cannot be checked says so. A path that
+    // is not a repository cannot have its files walked, and reporting "0 files, nothing refused"
+    // would convert a mistake into a clean bill of health.
+    let install = Install::empty("missing-root");
     let missing = install.path().join("does-not-exist");
     paths::set_root_override(Some(install.index.clone()));
     let diagnosis = diagnose(&missing);
 
-    let walk = findings_of(&diagnosis, Check::UnsupportedFiles);
-    assert_eq!(walk.len(), 1, "{walk:?}");
-    assert_eq!(
-        walk[0].severity,
-        Severity::Fail,
-        "a check that did not run must not pass: {}",
-        diagnosis.report()
+    assert!(!diagnosis.is_healthy(), "{}", diagnosis.report());
+    let openable = findings_of(&diagnosis, Check::IndexOpenable);
+    assert_eq!(openable[0].severity, Severity::Fail);
+    assert!(
+        openable[0].action.is_some(),
+        "the user has to be told the path is wrong, not left to infer it: {:?}",
+        openable[0]
     );
     assert!(
-        walk[0].detail.contains("did not run"),
-        "the finding must say the check was not performed: {:?}",
-        walk[0]
+        !findings_of(&diagnosis, Check::UnsupportedFiles)
+            .iter()
+            .any(|f| f.severity == Severity::Pass),
+        "a walk that did not happen must not be reported as a walk that found nothing"
     );
 }
 
