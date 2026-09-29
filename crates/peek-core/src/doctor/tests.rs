@@ -124,7 +124,7 @@ impl Drop for Install {
 }
 
 /// The findings of one check, so an assertion reads as a claim about that check alone.
-fn findings_of<'a>(diagnosis: &'a Diagnosis, check: Check) -> Vec<&'a super::Finding> {
+fn findings_of(diagnosis: &Diagnosis, check: Check) -> Vec<&super::Finding> {
     diagnosis.check(check)
 }
 
@@ -164,7 +164,6 @@ fn an_index_that_cannot_be_opened_is_a_failure_that_names_what_to_do() {
     // than by absence — see the next test. This one arranges the state that really is
     // unopenable: a file where the database should be that is not a database.
     let install = Install::empty("unopenable");
-    let repo = RepoId::discover(install.path()).expect("derive a repository id");
     let database = install.database();
     fs::create_dir_all(database.parent().expect("the index has a parent")).expect("make the dir");
     fs::write(
@@ -625,7 +624,7 @@ fn a_weaker_durability_is_reported_as_a_warning() {
     // given rather than assuming the default.
     let install = Install::empty("weak-durability");
     let repo = RepoId::discover(install.path()).expect("derive a repository id");
-    let mut store = Store::open_with(&install.database(), &repo, Durability::Normal)
+    let store = Store::open_with(&install.database(), &repo, Durability::Normal)
         .expect("open with a weaker guarantee");
 
     paths::set_root_override(Some(install.index.clone()));
