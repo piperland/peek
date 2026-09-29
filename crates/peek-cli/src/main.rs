@@ -83,8 +83,8 @@ fn usage_failure(error: &UsageError, command: &str, mode: &Mode) -> std::process
         // not — because an unknown flag has no command to be specific *about*, and a reader who
         // typed `peek contex` needs to see the list.
         match error.command() {
-            Some(command) => {
-                let _ = write!(stderr, "{}", args::command_usage(command));
+            Some(named) => {
+                let _ = write!(stderr, "{}", args::command_usage(named));
                 let _ = writeln!(stderr, "run `peek --help` for every command");
             }
             None => {
