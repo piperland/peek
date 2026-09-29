@@ -366,12 +366,27 @@ mod tests {
         // The rule the default of `.` depends on. Compared against the process's own working
         // directory rather than a guess, so the assertion is about the resolution and not about a
         // value the test invented.
-        let expected = std::env::current_dir()
-            .expect("the process has a working directory")
-            .join("crates");
-        let root = resolve_root(std::path::Path::new("crates"), "status")
+        //
+        // The directory is **created here** rather than assumed. An earlier version of this test
+        // resolved the relative path `crates`, which exists at the workspace root and not in the
+        // package directory cargo runs tests from — so it passed or failed depending on where the
+        // harness happened to be invoked from, which is a test whose result depends on the command
+        // that ran it. Nothing here touches the working directory either: `set_current_dir` is
+        // process-global, and one test changing it makes every other test's paths relative to
+        // something it did not choose.
+        let working = std::env::current_dir().expect("the process has a working directory");
+        let name = "peek-cli-relative-fixture";
+        let created = working.join(name);
+        std::fs::create_dir_all(&created).expect("create the fixture directory");
+        let _guard = Cleanup(created.clone());
+
+        let root = resolve_root(std::path::Path::new(name), "status")
             .expect("a path under the working directory resolves");
-        assert_eq!(root, expected.canonicalize().expect("canonicalise"));
+        assert_eq!(
+            root,
+            created.canonicalize().expect("canonicalise"),
+            "a relative path is resolved against the working directory, not the repository"
+        );
     }
 
     #[test]
