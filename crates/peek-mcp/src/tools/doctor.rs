@@ -7,10 +7,20 @@
 //! needed exactly when it is unavailable. `doctor::diagnose` opens its own store and reports the
 //! failure as a finding, which is the whole point of it.
 //!
+//! # It creates the index, and that is worth knowing
+//!
+//! `Store::open` creates a missing index, so running `doctor` against a repository that has never
+//! been indexed **creates an empty one**. That is the engine's behaviour and this tool does not
+//! paper over it: an empty index is a state a person needs diagnosed, and refusing to diagnose it
+//! would be the module's own rule inverted. It is also different from every other query tool,
+//! which refuses with `not_indexed` and leaves the filesystem alone — so the two paths are
+//! deliberately not the same, and a caller who wants to know whether an index exists should ask
+//! `index_status`, which never creates anything.
+//!
 //! The response is the engine's own [`Diagnosis`], serialised. Not a copy of it: a copy is a
-//! second definition of the shape, and two definitions of a shape drift. The engine's
-//! `Severity` and `Check` enums serialise as the same words their `as_str` prints, and a test here
-//! pins that so the JSON and the terminal can never disagree about what a check is called.
+//! second definition of the shape, and two definitions of a shape drift. The engine's `Severity`
+//! and `Check` enums serialise as the same words their `as_str` prints, and a test here pins that
+//! so the JSON and the terminal can never disagree about what a check is called.
 
 use serde::Serialize;
 use serde_json::Value;
