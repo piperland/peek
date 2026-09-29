@@ -59,6 +59,8 @@ mod tokens;
 mod traverse;
 
 #[cfg(test)]
+mod probe;
+#[cfg(test)]
 mod tests;
 
 pub use context::{
