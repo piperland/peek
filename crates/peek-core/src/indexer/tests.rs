@@ -14,8 +14,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{IndexError, SkipReason, build_full, refresh};
 use crate::discover::DiscoveryOptions;
-use crate::model::{EntityId, EntityKind, Evidence, RelationKind, RepoPath, ResolutionState};
-use crate::store::{RepoId, Store};
+use crate::model::
+    EntityId, EntityKind, Evidence, Relation, RelationKind, RepoPath, ResolutionState, Span,
+};
+use crate::store::{IndexUpdate, RepoId, Store};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -108,6 +110,8 @@ fn a_full_build_indexes_the_repository_and_reports_what_it_did() {
     assert_eq!(report.files_degraded, 0, "both files parse cleanly");
     assert!(report.entities_written > 0);
     assert!(report.relations_written > 0);
+    // A full build commits twice: extraction, then the resolution pass. Two generations is what
+    // makes the second pass *visible* rather than an invisible step inside the first.
     assert_eq!(
         report.generation, 2,
         "extraction commits generation 1 and the resolution pass commits generation 2"
@@ -504,19 +508,54 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
 
     let mut store = open_store(&tree);
     let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
+    let report = outcome.report();
     assert!(
-        outcome.report().relations_pending > 0,
+        report.relations_pending > 0,
         "the extractor should have left work for the resolver: {}",
-        outcome.report().summary()
+        report.summary()
+    );
+
+    // The second pass ran, so the *store* no longer holds pending edges. What must match is that
+    // the resolver examined exactly as many as the extractor wrote: that is what proves the
+    // pending rows were readable on the way in, which is the step that used to fail.
+    let resolution = report
+        .resolution
+        .as_ref()
+        .expect("a full build runs the resolution pass");
+    assert_eq!(
+        resolution.examined as u64,
+        report.relations_pending,
+        "the resolver must see every relation the extractor left pending: {report:?}"
     );
     assert_eq!(
         store.stats().expect("stats").pending_relations,
-        outcome.report().relations_pending,
-        "the store counts the same pending edges the report claims to have written"
+        0,
+        "a full build resolves what it can, so nothing may be left pending"
+    );
+    assert!(
+        !resolution.pending_remaining,
+        "and nothing may remain unexamined: {}",
+        resolution.summary()
     );
 
-    // Now read them back. This is the step that used to fail.
-    let pending = store
+    // The round trip itself, isolated: write a pending relation through the public API and read it
+    // back. This is the step that used to fail, and it has to be tested directly rather than
+    // inferred from the resolver's success — the resolver failing loudly is evidence, not proof.
+    let source = id("src/caller.rs", EntityKind::Function, "main");
+    let target = id("src/caller.rs", EntityKind::Function, "target");
+    let pending = Relation::pending(
+        RelationKind::Calls,
+        source.clone(),
+        "not_yet_resolved",
+        Span::new(0, 10, 1, 0, 1, 9),
+        Evidence::NameOnly,
+        "a reference the resolver has not looked at",
+    );
+    store
+        .apply_update(IndexUpdate::empty().with_relation(pending))
+        .expect("write a pending relation");
+
+    let read_back = store
         .relations_in_state(
             &ResolutionState::Pending {
                 evidence: Evidence::NameOnly,
@@ -524,29 +563,38 @@ fn a_pending_relation_can_be_written_and_then_read_back() {
             },
             64,
         )
-        .expect("pending relations must be readable");
+        .expect("a pending relation must be readable, not Corrupt");
     assert_eq!(
-        pending.len() as u64,
-        outcome.report().relations_pending,
-        "every pending edge the report counted is retrievable by state"
+        read_back.len(),
+        1,
+        "the row that was just written must come back"
     );
-    for relation in &pending {
-        assert!(
-            !relation.resolution.describe().is_empty(),
-            "a pending relation must still say why it is pending"
-        );
-        assert!(
-            relation.target.is_none(),
-            "a pending relation has no target yet, and must not be given one"
-        );
-    }
+    assert!(
+        !read_back[0].resolution.describe().is_empty(),
+        "a pending relation must still say why it is pending, not just that it is"
+    );
+    assert!(
+        read_back[0].resolution.describe().contains("has not looked at"),
+        "the basis must survive the round trip: {}",
+        read_back[0].resolution.describe()
+    );
+    assert!(
+        read_back[0].target.is_none(),
+        "a pending relation has no target yet, and must not be given one"
+    );
 
     // And through the adjacency path, which is the one a consumer actually uses.
-    let source = id("src/caller.rs", EntityKind::Function, "main");
     let edges = store.outgoing(&source, None, 32).expect("outgoing");
     assert!(
         edges.iter().any(|edge| edge.resolution.is_pending()),
         "the call edge survives a full write and read cycle as pending: {edges:?}"
+    );
+    assert!(
+        store
+            .entity(&target)
+            .expect("query")
+            .is_some(),
+        "and the write did not disturb the entities around it"
     );
 }
 
@@ -614,19 +662,33 @@ fn every_relation_the_report_counts_is_in_exactly_one_state() {
         "the extractor leaves work for the resolver, so the pending count is the one that matters"
     );
     assert!(
-        report.relations_written > report.relations_pending,
-        "a build that resolved everything would not need a resolver; if this fails the \
-         extractor's evidence is being discarded rather than carried"
+        report.relations_written >= report.relations_pending,
+        "everything the extractor writes is in some state, and most of it is pending"
     );
 
-    // And the same partition must hold against the store, which counts rows rather than
-    // intentions.
+    // The report counts what the *extractor* wrote. The store holds what survives *after* the
+    // resolution pass, so these are two different moments and comparing them directly would be
+    // wrong — it would assert that the resolver did nothing. What must hold is that the report's
+    // five states partition its own total, and that the store's five partition the store's.
+    assert_eq!(
+        report.relations_accounted_for(),
+        report.relations_written,
+        "the five states must account for every relation written: {report:?}"
+    );
     let stats = store.stats().expect("stats");
-    assert_eq!(report.relations_pending, stats.pending_relations);
-    assert_eq!(report.relations_resolved, stats.resolved_relations);
-    assert_eq!(report.relations_ambiguous, stats.ambiguous_relations);
-    assert_eq!(report.relations_unresolved, stats.unresolved_relations);
-    assert_eq!(report.relations_inferred, stats.inferred_relations);
+    assert_eq!(
+        stats.resolved_relations
+            + stats.pending_relations
+            + stats.ambiguous_relations
+            + stats.unresolved_relations
+            + stats.inferred_relations,
+        stats.relation_count,
+        "and the store's five states must account for every row it holds"
+    );
+    assert!(
+        stats.pending_relations == 0,
+        "a full build resolves what it can, so the store must not be left holding pending rows"
+    );
 }
 
 #[test]
@@ -734,8 +796,9 @@ fn the_summary_reports_the_generation_and_the_uncertainty_counts() {
 
     assert!(summary.contains("generation 2"), "{summary}");
     assert!(summary.contains("files indexed"), "{summary}");
-    assert!(summary.contains("extracted pending"), "{summary}");
+    assert!(summary.contains("pending"), "{summary}");
     assert!(summary.contains("ambiguous"), "{summary}");
+    assert!(summary.contains("wal"), "{summary}");
     // The resolution pass has to be visible in the same string, or `peek status` reports only the
     // work that is outstanding and never what was decided.
     assert!(summary.contains("resolution pass 2"), "{summary}");

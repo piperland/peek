@@ -590,9 +590,9 @@ impl<'s> Resolver<'s> {
         }
         Ok(match found.is_empty() {
             true => None,
-            false => {
-                Some(self.decide_candidates(found, "resolved through an import binding in this file"))
-            }
+            false => Some(
+                self.decide_candidates(found, "resolved through an import binding in this file"),
+            ),
         })
     }
 
@@ -863,12 +863,25 @@ impl<'s> Resolver<'s> {
                 .cmp(&a.by.strength())
                 .then_with(|| a.id.cmp(&b.id))
         });
+
+        // Drop duplicate identities before counting, keeping the first occurrence — which, after
+        // the sort, is the one with the strongest evidence. Without this, a case-folded match
+        // reports the *same* entity twice and calls it ambiguity: the edge comes back
+        // `Ambiguous { [X, X] }`, which is not uncertainty but a bug that reads exactly like it.
+        // An agent shown two identical candidates cannot tell a real ambiguity from a
+        // double-count, so the two are indistinguishable at the point where it matters most.
+        found.dedup_by(|a, b| a.id == b.id);
         if found.len() > 1 {
             return Decision::Ambiguous {
                 candidates: self.cap(found.into_iter().map(|f| f.id).collect()),
             };
         }
-        let only = found.remove(0);
+        // `dedup_by` can empty the list, so this is not a "there is one" assumption.
+        let Some(mut only) = found.pop() else {
+            return Decision::Unresolved {
+                reason: UnresolvedReason::NoCandidate,
+            };
+        };
         match only.guessed {
             false => Decision::Resolved {
                 target: only.id,
