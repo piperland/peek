@@ -128,14 +128,7 @@ impl IndexReport {
             self.wal_bytes,
             self.resolution.as_ref().map_or(String::new(), |r| format!("; {}", r.summary())),
             self.elapsed
-        );
-        match &self.resolution {
-            // The resolution clause is appended rather than folded into the counts above, because
-            // the two passes are separate commits with separate failures. A reader who sees them
-            // interleaved cannot tell which stage made a decision.
-            Some(resolution) => format!("{base}; {}", resolution.summary()),
-            None => base,
-        }
+        )
     }
 
     /// The five resolution states, added up.

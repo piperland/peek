@@ -492,7 +492,6 @@ fn a_rejected_write_surfaces_as_an_error_rather_than_a_successful_looking_report
 }
 
 #[test]
-<<<<<<< ours
 fn a_pending_relation_can_be_written_and_then_read_back() {
     // The extractor's normal output is `pending`, so this is the round trip that matters most.
     // It was broken: the schema accepted the row but the row decoder had no arm for the tag, so
