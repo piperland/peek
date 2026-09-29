@@ -111,9 +111,10 @@ ROWS="$OUT/rows.txt"
 
 while IFS='|' read -r slug url why; do
   [ -z "$slug" ] && continue
+  safe="${slug//\//__}"
   echo "$why" >"$OUT/$safe.why"
   probe_one "$slug" "$url" "$why"
-  [ -f "$OUT/$safe.row" ] && cat "$OUT/$safe.row" | cut -d'|' -f1-7 >>"$ROWS"
+  [ -f "$OUT/$safe.row" ] && cut -d'|' -f1-7 "$OUT/$safe.row" >>"$ROWS"
 done <<EOF
 $DEFAULT_SET
 EOF
