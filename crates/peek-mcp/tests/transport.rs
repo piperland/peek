@@ -22,7 +22,7 @@
 // `lib.rs`; an integration test is a separate crate and does not inherit that, so it is exempted
 // here instead. The justification is the same one: a test that fails inside an `expect` has
 // already failed, and a message naming what went wrong is worth more than a panic location.
-#![allow(clippy::expect_used, clippy::panic)]
+#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};

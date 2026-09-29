@@ -39,6 +39,10 @@
 // a caller that needs only the print scan would get a dead-code warning for the stdout scan. The
 // alternative is three copies of the scan, which is the thing this file exists to stop.
 #![allow(dead_code)]
+// A test that panics on a broken fixture is a test reporting a false claim, and the line above
+// this one is where `unwrap` is the shortest honest way to say it. Same rule as every other
+// test binary in the workspace: see `crates/peek-cli/tests/cli.rs`.
+#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 /// The printing macros whose invocation writes to stdout. `eprintln!` and `eprint!` are absent on
 /// purpose: stderr is the diagnostic channel, and `session::Log` is its correct spelling.
@@ -104,7 +108,7 @@ pub struct Offence {
 /// The positive form of "this crate does not print", and the check a developer expects to fail
 /// first: a banner in `main.rs`, a debug line in a handler, a stray `dbg!` in a loop.
 pub fn prints_to_stdout(source: &str) -> Vec<Offence> {
-    offences(source, |line| calls_print_macro(line))
+    offences(source, calls_print_macro)
 }
 
 /// Every line of `source` whose code names the process's stdout at all.

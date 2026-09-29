@@ -18,7 +18,7 @@
 // not inherit the exemption the engine's own unit tests get, so it is exempted here instead, with
 // the same justification: a test that fails inside an `expect` has already failed, and a message
 // naming what went wrong is worth more than a panic location.
-#![allow(clippy::expect_used, clippy::panic)]
+#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};

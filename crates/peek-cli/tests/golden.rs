@@ -243,8 +243,7 @@ fn the_repository_path_is_the_only_thing_normalise_replaces_in_it() {
     let text = format!("indexed at {root}, sources under {root}/src");
     let actual = normalise(&text, &repository);
     assert_eq!(
-        actual,
-        "indexed at <root>, sources under <root>/src",
+        actual, "indexed at <root>, sources under <root>/src",
         "the repository's path is the whole of what is replaced: {actual}"
     );
 }
@@ -261,13 +260,10 @@ fn the_repository_path_is_the_only_thing_normalise_replaces_in_it() {
 fn the_index_path_is_the_only_thing_normalise_replaces_in_it() {
     let repository = Repository::small("golden-normalise-index");
     let index = repository.index_path().display().to_string();
-    let text = format!(
-        "the index at {index} opened\n        the index lives at {index}"
-    );
+    let text = format!("the index at {index} opened\n        the index lives at {index}");
     let actual = normalise(&text, &repository);
     assert_eq!(
-        actual,
-        "the index at <index> opened\n        the index lives at <index>",
+        actual, "the index at <index> opened\n        the index lives at <index>",
         "the index's path is the whole of what is replaced, in both places it appears: {actual}"
     );
 }
@@ -299,8 +295,7 @@ fn the_repository_identity_is_replaced_and_two_fixtures_disagree_about_it() {
     let text = format!("the index belongs to this checkout ({identity})");
     let actual = normalise(&text, &first);
     assert_eq!(
-        actual,
-        "the index belongs to this checkout (<repo-id>)",
+        actual, "the index belongs to this checkout (<repo-id>)",
         "the sentence must survive with only the hash replaced: {actual}"
     );
     assert!(
@@ -477,9 +472,7 @@ fn sweep_for_a_reduced_budget(repository: &Repository) -> u64 {
         }
         budget /= 2;
     }
-    panic!(
-        "no budget in the sweep produced a reduced pack; the fixture is too small to omit"
-    );
+    panic!("no budget in the sweep produced a reduced pack; the fixture is too small to omit");
 }
 
 /// The same command, twice against one repository, has to produce the same text.
@@ -501,16 +494,14 @@ fn a_rendering_is_the_same_text_when_the_same_command_is_run_twice() {
     let first_doctor = normalise(&render(&repository, &doctor), &repository);
     let second_doctor = normalise(&render(&repository, &doctor), &repository);
     assert_eq!(
-        second_doctor,
-        first_doctor,
+        second_doctor, first_doctor,
         "doctor produced two different texts for one unchanged index, so something in the \
          rendering is a function of the run rather than of the repository"
     );
     let first_context = normalise(&complete_context(&repository), &repository);
     let second_context = normalise(&complete_context(&repository), &repository);
     assert_eq!(
-        second_context,
-        first_context,
+        second_context, first_context,
         "context produced two different texts for one unchanged index, so something in the \
          rendering is a function of the run rather than of the repository"
     );
@@ -540,8 +531,7 @@ fn a_rendering_is_the_same_text_from_two_different_temporary_directories() {
     let first_doctor = render(&first, &["doctor", "--root", first.root_str()]);
     let second_doctor = render(&second, &["doctor", "--root", second.root_str()]);
     assert_ne!(
-        first_doctor,
-        second_doctor,
+        first_doctor, second_doctor,
         "two fixtures must render differently before normalisation, or this test would be \
          comparing a string with itself and would pass whatever the substitutions did"
     );
@@ -655,8 +645,7 @@ fn a_reduced_pack_renders_its_units_and_edges() {
     )
     .output;
     assert_eq!(
-        output.exit_code,
-        0,
+        output.exit_code, 0,
         "a reduced pack is an answer with limits, not a refusal"
     );
     let Answer::Context(answer) = &output.answer else {
