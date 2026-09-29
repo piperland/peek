@@ -10,8 +10,8 @@
 //! That includes `--help` and `--version`, which go to **stderr**. A person running the binary sees
 //! them in a terminal either way, and putting them on stdout would mean the invariant above has an
 //! exception somebody has to remember — and an exception is how the invariant dies. A test in
-//! `tests/transport.rs` scans this crate's sources for `print!` and `println!` and fails if either
-//! appears outside the writer; that test can only be honest if the rule has no exceptions.
+//! `tests/transport.rs` reads this crate's code for a called printing macro and fails if one
+//! appears anywhere in it; that test can only be honest if the rule has no exceptions.
 //!
 //! # Nothing leaves the machine
 //!

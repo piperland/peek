@@ -8,15 +8,16 @@
 //! names a byte offset and nothing else. There is no partial credit: the session is over.
 //!
 //! The defence is structural rather than a code review. This type takes the output stream **as a
-//! parameter**. Nothing in this crate holds a `Stdout` handle, calls `io::stdout()`, or otherwise
-//! has a route to the process's file descriptor 1; the binary constructs the writer once in
-//! [`crate::main`] and hands it down. A tool handler physically cannot print, because the only
-//! thing it can reach is a `&Store`.
+//! parameter**. Nothing in this crate holds a `Stdout` handle, asks the standard library for the
+//! process's standard output, or otherwise has a route to file descriptor 1; the binary constructs
+//! the writer once in [`crate::main`] and hands it down. A tool handler physically cannot print,
+//! because the only thing it can reach is a `&Store`.
 //!
 //! Two tests back that up, in `tests/transport.rs`:
 //!
-//! * a **source scan** over every file in this crate for `println!`, `print!` and `dbg!`, which
-//!   fails if any appears outside this module;
+//! * a **source scan** over every file in this crate for a *called* printing macro and for the
+//!   process's standard output. It reads each file's code rather than its text, so neither a
+//!   paragraph of documentation about `println!` nor a `let _ = println!(..)` can hide from it;
 //! * a **subprocess run** of the real binary over a real session, asserting that every byte on
 //!   stdout parses as a JSON-RPC message and that diagnostics arrived on stderr instead.
 //!

@@ -2,11 +2,11 @@
 //!
 //! # Why the loop is a function over two streams
 //!
-//! [`serve`] takes its input and its output as parameters. That is the whole reason stdout can be
-//! defended: nothing inside the server holds a handle on the process's file descriptor 1, so a
-//! tool handler has nothing to print to even by accident. The alternative — a `serve()` that reads
-//! `io::stdin()` and writes `io::stdout()` — is one line shorter and makes the property
-//! untestable, untestable being the same as absent.
+//! [`serve`] takes its input and its output as parameters. That is the whole reason the protocol
+//! channel can be defended: nothing inside the server holds a handle on the process's file
+//! descriptor 1, so a tool handler has nothing to print to even by accident. The alternative —
+//! a `serve()` that reached for the process's own standard input and standard output itself — is
+//! one line shorter and makes the property untestable, untestable being the same as absent.
 //!
 //! # The loop's rules
 //!

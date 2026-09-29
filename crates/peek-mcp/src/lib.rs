@@ -31,7 +31,8 @@
 //!    process's stdout except the one it was handed in [`writer::ProtocolWriter`]. Diagnostics go
 //!    to stderr through [`session::Log`]. A single stray `println!` corrupts the stream and the
 //!    client dies with a parse error that names nothing; three separate tests in `tests/` defend
-//!    this, the strictest being a source scan for `println!` outside the writer.
+//!    this, the strictest being a scan of this crate's own code for a called printing macro or a
+//!    handle on the process's standard output.
 //! 2. **A budget is a hard input.** See [`tools::context`].
 //! 3. **Uncertainty reaches the caller.** Every edge in a response is the engine's own
 //!    [`peek_core::model::Relation`], carrying its typed

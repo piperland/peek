@@ -34,31 +34,13 @@ use serde_json::{Value, json};
 use peek_mcp::Session;
 use peek_mcp::session::SharedLog;
 
-/// Every source file in the crate, as `(path, contents)`.
-///
-/// Listed rather than discovered, so the scan is over what is in the commit rather than over
-/// whatever happens to be on disk when the test runs. A new source file is a new line here, which
-/// is the point: a file nobody listed is a file nobody scanned.
-fn sources() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("src/lib.rs", include_str!("../src/lib.rs")),
-        ("src/main.rs", include_str!("../src/main.rs")),
-        ("src/outcome.rs", include_str!("../src/outcome.rs")),
-        ("src/params.rs", include_str!("../src/params.rs")),
-        ("src/protocol.rs", include_str!("../src/protocol.rs")),
-        ("src/server.rs", include_str!("../src/server.rs")),
-        ("src/session.rs", include_str!("../src/session.rs")),
-        ("src/tool.rs", include_str!("../src/tool.rs")),
-        ("src/writer.rs", include_str!("../src/writer.rs")),
-        ("src/tools/mod.rs", include_str!("../src/tools/mod.rs")),
-        ("src/tools/context.rs", include_str!("../src/tools/context.rs")),
-        ("src/tools/doctor.rs", include_str!("../src/tools/doctor.rs")),
-        ("src/tools/explain.rs", include_str!("../src/tools/explain.rs")),
-        ("src/tools/index.rs", include_str!("../src/tools/index.rs")),
-        ("src/tools/walk.rs", include_str!("../src/tools/walk.rs")),
-        ("src/tools/watch.rs", include_str!("../src/tools/watch.rs")),
-    ]
-}
+mod common;
+
+use common::{Offence, names_stdout, prints_to_stdout, sources, writes_to_stdout};
+
+/// Every source file in the crate is listed in [`common::sources`], together with the scan both
+/// stdout guards use. They live in one place because they are one claim, and a guard written twice
+/// is a guard that can be tightened in one file and not the other.
 
 /// A child server, and the pipes it speaks through.
 struct Server {
@@ -371,45 +353,99 @@ fn no_source_file_in_the_crate_prints_to_stdout() {
     // handler. It is a plain string search over sources compiled into the test, so it cannot itself
     // be broken by a build configuration.
     //
+    // The search is over the file's **code**, not its text: comments and the contents of string
+    // literals are removed first, and what is left is searched for a printing macro called as a
+    // whole identifier. That is what lets this test say something it means — a sentence about
+    // `println!` in a doc comment is not a print, and a `println!` after `let _ = ` is.
+    //
     // Only stdout is scanned. stderr is the diagnostic channel and `eprintln!` is its correct
     // spelling, so scanning for it would be scanning for the thing the rule asks for.
     for (name, source) in sources() {
-        for line in source.lines() {
-            let trimmed = line.trim_start();
-            let printing = trimmed.starts_with("println!")
-                || trimmed.starts_with("print!")
-                || trimmed.starts_with("dbg!");
-            assert!(
-                !printing,
-                "{name} writes to stdout at `{trimmed}`. stdout is the protocol channel; use \
-                 `session::Log` for diagnostics."
-            );
-        }
+        assert_eq!(
+            prints_to_stdout(source),
+            Vec::<Offence>::new(),
+            "{name} writes to stdout. stdout is the protocol channel; use `session::Log` for \
+             diagnostics."
+        );
     }
 }
 
 #[test]
 fn only_the_binary_holds_the_processs_stdout() {
     // The positive form of the same rule: not "it does not print" but "it cannot". The library
-    // never names `io::stdout`, so a tool handler has nothing to print to even by accident.
+    // never names the process's standard output, so a tool handler has nothing to print to even by
+    // accident. Every spelling counts — `io::stdout()`, `std::io::stdout()`, a `use` of either, a
+    // `writeln!` to the result — because the scan matches the identifier rather than one of them.
     let mut holders: Vec<&str> = sources()
         .into_iter()
-        .filter(|(_, source)| source.contains("io::stdout"))
+        .filter(|(_, source)| !names_stdout(source).is_empty())
         .map(|(name, _)| name)
         .collect();
     assert_eq!(
         holders,
         vec!["src/main.rs"],
-        "only the binary may hold the process's stdout, and it hands it straight to the protocol \
+        "only the binary may hold the process's stdout, and it hands that straight to the protocol \
          writer: {holders:?}"
     );
-    assert!(
-        sources()
-            .iter()
-            .filter(|(name, _)| *name != "src/main.rs")
-            .all(|(_, source)| !source.contains("std::io::stdout")),
-        "and no other spelling of the same call appears either"
-    );
+}
+
+#[test]
+fn the_stdout_scan_reads_code_and_cannot_be_satisfied_by_prose() {
+    // The scan is a lexer over the file, not a search through it, and this is the test for the
+    // difference. Every input below is a sentence *about* stdout or about a printing macro,
+    // written the way this crate's own documentation writes them, and not one of them may be
+    // reported: a guard that a paragraph of documentation can switch off is worse than the one it
+    // replaced.
+    let prose = vec![
+        (
+            "a line comment",
+            "//! Nothing here names the process's standard output, or calls a printing macro.\n",
+        ),
+        (
+            "a nested block comment",
+            "/* outer /* inner */ and still says println! in prose */\n",
+        ),
+        (
+            "a string literal",
+            "let note = \"text naming a printing macro, and a // that is not a comment\";\n",
+        ),
+        (
+            "a raw string",
+            "let note = r#\"text naming io::stdout() in prose\"#;\n",
+        ),
+        (
+            "a lifetime",
+            "let note: &'static str = \"text naming a printing macro\";\n",
+        ),
+        (
+            "a character literal",
+            "let brace = '{';\n",
+        ),
+    ];
+    for (label, source) in prose {
+        assert_eq!(
+            writes_to_stdout(source),
+            Vec::<Offence>::new(),
+            "prose must not be able to satisfy or break the scan: {label}"
+        );
+    }
+
+    // And the other direction: a real call is found wherever it is written, not only at the start of
+    // a line. Each of these really does put bytes on the protocol channel.
+    for (label, source) in [
+        ("a bare call", "    println!(\"ready\");\n"),
+        ("a discarded call", "    let _ = println!(\"ready\");\n"),
+        ("a qualified call", "    std::println!(\"ready\");\n"),
+        ("a write! to a handle", "    writeln!(io::stdout(), \"ready\").ok();\n"),
+        ("a bare handle", "    let out = std::io::stdout();\n"),
+        ("a use of the module", "use std::io::stdout;\n"),
+    ] {
+        assert_eq!(
+            writes_to_stdout(source).len(),
+            1,
+            "a real call cannot escape the scan: {label}"
+        );
+    }
 }
 
 #[test]
