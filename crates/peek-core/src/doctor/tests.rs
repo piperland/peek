@@ -300,12 +300,18 @@ fn a_damaged_index_fails_the_integrity_check_and_offers_a_rebuild() {
     let database = install.database();
     let bytes = fs::read(&database).expect("read the database");
     assert!(bytes.len() > 512, "there is a database to damage");
-    // Truncated to a length that is not a whole number of pages. This is the corruption SQLite's
-    // own reader cannot silently absorb: a page count that does not match the file, so the last
-    // page is a fragment. Byte-flipping inside the file, by contrast, can land on a free page and
-    // be entirely invisible — which is itself a reason to trust `integrity_check` rather than to
-    // assume any damage is detectable.
-    fs::write(&database, &bytes[..bytes.len() - 700]).expect("truncate the database");
+    // Cut into the header itself rather than shaving bytes off the end. This is deliberate and it
+    // is the lesson of the two earlier attempts at this test:
+    //
+    //  - Shaving the tail of a one-page database lands in *unused space* of page 1, and
+    //    `integrity_check` is right to pass: unused bytes are not part of any structure.
+    //  - Damaging the database while the write-ahead log is intact is invisible, because every
+    //    page image is also in the log and the log is what gets read.
+    //
+    // Neither is a weakness in the check. A check that reported damage nobody can observe would be
+    // the defect. What has to be caught is damage a reader cannot avoid, and the header is the one
+    // thing every read has to look at.
+    fs::write(&database, &bytes[..100]).expect("truncate into the header");
 
     // Settled *before* the damage, never after: a checkpoint would fold the log into the
     // truncated file and quietly repair it, and the test would then be proving nothing.
