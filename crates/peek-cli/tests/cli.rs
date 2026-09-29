@@ -1138,7 +1138,7 @@ fn rm_refuses_a_path_outside_the_repository_and_names_both_places() {
     let refusal = outcome.output.refusal.expect("a refusal is required");
     assert_eq!(refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
     assert!(
-        refusal.message.contains(&repository.root_str()),
+        refusal.message.contains(repository.root_str()),
         "{}",
         refusal.message
     );
