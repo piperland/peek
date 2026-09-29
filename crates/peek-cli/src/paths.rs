@@ -5,7 +5,10 @@
 //! Four cases have to behave differently, and each of them is a way to end up reading or writing
 //! the wrong tree:
 //!
-//! 1. **A relative path.** Resolved against the process's working directory, then canonicalised.
+//! 1. **A relative path.** Resolved against the tree it belongs to, then canonicalised: a path
+//!    *inside* a root the command already named is relative to that root, and a path that *names*
+//!    the root is relative to the process's working directory, because the root is the one path
+//!    with nothing else it could be relative to.
 //! 2. **An absolute path.** Used as given, then canonicalised.
 //! 3. **A symlinked root.** Canonicalisation follows it, so a link and its target are one
 //!    repository and therefore one index. Two spellings of one directory must never produce two
@@ -159,23 +162,24 @@ pub fn resolve_root(given: &Path, command: &'static str) -> Result<PathBuf, Fail
     Ok(canonical)
 }
 
-/// Make a path absolute against the working directory, without requiring it to exist.
+/// Make a path absolute, without requiring it to exist, against the tree it belongs to.
 ///
-/// **R-015 is still open and this is one half of it.** A relative path in a `--root` command is
-/// resolved against the process's working directory rather than the named root, so
-/// `peek rm src/gone.rs --root /some/repo` means different things depending on where the user is
-/// standing. The containment check catches it from outside the repository; from inside, `rm` would
-/// delete a different file.
+/// **Against the root, not the working directory.** `peek rm src/gone.rs --root /some/repo` used to
+/// resolve `src/gone.rs` against the process's working directory, so one command line meant
+/// different things depending on where the user was standing. From outside the repository the
+/// containment check caught it and the command refused, which is why it read as a harmless usage
+/// error; from a working directory *inside* the repository the same line landed on a different file
+/// that was still in the tree, the check passed, and `rm` removed that one's rows. A guard that
+/// only catches the escape is not a containment check.
 ///
-/// The obvious fix — join the root instead — was applied and measured. It fixed the three `rm`
-/// tests that demonstrate the defect and broke five others, and on inspection the breakage is **not**
-/// this function's fault: those five fail because the failure path substitutes the help text for
-/// the answer, which is R-014. So the two defects are entangled in the symptom, and fixing this one
-/// in isolation trades three red tests for five without making anything true that was not true
-/// before.
+/// `--root` has already answered "which tree". Once a command has named one, a relative path in
+/// that command is relative to it, and [`resolve_root`] passes the working directory in as the base
+/// for the root itself, which is the single path that has no other candidate.
 ///
-/// **Fix R-014 first.** Then this becomes a one-line change with a measurable result, which is the
-/// only way to tell a real fix from a trade.
+/// An absolute path is returned unchanged, so this is a no-op for a caller that already anchored it.
+/// A symlinked root is unaffected rather than newly special: the root arrives here already
+/// canonical, which is the one spelling a link and its target share, so a relative path resolves
+/// through the link exactly once and then stays anchored to the tree the index describes.
 fn absolutise(given: &Path, root: &Path) -> Result<PathBuf, String> {
     if given.as_os_str().is_empty() {
         return Err("the path is empty".to_owned());
@@ -183,10 +187,7 @@ fn absolutise(given: &Path, root: &Path) -> Result<PathBuf, String> {
     if given.is_absolute() {
         return Ok(given.to_path_buf());
     }
-    let _ = root;
-    let cwd = std::env::current_dir()
-        .map_err(|error| format!("the working directory cannot be read: {error}"))?;
-    Ok(cwd.join(given))
+    Ok(root.join(given))
 }
 
 /// A repository-relative path, and whether it names a directory on disk.
@@ -455,6 +456,30 @@ mod tests {
         assert_eq!(through, direct);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_path_under_a_symlinked_root_reaches_the_file_the_link_points_at() {
+        // Where a lexical join and a canonicalisation disagree, and why the disagreement is
+        // harmless: `resolve_root` has already followed the link by the time a path inside the
+        // root is anchored, so the root it hands on is the target. The relative path is therefore
+        // joined onto the tree the index describes, and a symlinked checkout reaches one
+        // repository rather than indexing twice.
+        let target = temp("symlink-relative-target");
+        let _guard = Cleanup(target.clone());
+        let links = temp("symlink-relative-links");
+        let _other = Cleanup(links.clone());
+        std::fs::create_dir_all(target.join("src")).expect("create src");
+        std::fs::write(target.join("src/linked.rs"), "fn linked() {}\n").expect("write");
+        let link = links.join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("create a directory symlink");
+
+        let root = resolve_root(&link, "status").expect("resolve through the link");
+        assert_eq!(root, target.canonicalize().expect("canonicalise"));
+        let found = relative_to(&root, "src/linked.rs", "rm")
+            .expect("a relative path under a symlinked root names the file it reaches");
+        assert_eq!(found.path.as_str(), "src/linked.rs");
+    }
+
     #[test]
     fn a_file_is_not_a_repository() {
         let directory = temp("not-a-repo");
@@ -493,6 +518,96 @@ mod tests {
             relative_to(&root, file.to_str().expect("utf-8"), "rm").expect("inside the root");
         assert_eq!(found.path.as_str(), "src/deep/a.rs");
         assert!(!found.is_directory, "a file is not a directory");
+    }
+
+    #[test]
+    fn a_relative_path_is_resolved_against_the_root_and_not_the_working_directory() {
+        // The rule, asserted where the base is chosen. `--root` has already answered which tree,
+        // so a path inside that root is relative to it; resolving it against the process's working
+        // directory instead makes one command line mean different things depending on where the
+        // user is standing.
+        //
+        // **This test cannot see the dangerous half of the defect, and says so.** The fixture is a
+        // temporary directory, so the working directory of the test binary is always outside it, and
+        // resolving against it fails loudly rather than landing on a real file. The case that
+        // matters — a working directory *inside* the repository, where the wrong resolution still
+        // passes the containment check and removes the wrong rows — needs a different working
+        // directory, and `set_current_dir` is process-global. The test that covers it runs the
+        // binary as a subprocess from inside the repository; this one covers the rule itself.
+        let root = temp("relative-base");
+        let _guard = Cleanup(root.clone());
+        std::fs::create_dir_all(root.join("src")).expect("create src");
+        std::fs::write(root.join("src/inside.rs"), "fn inside() {}\n").expect("write");
+        let found = relative_to(&root, "src/inside.rs", "rm")
+            .expect("a relative path names a file in the root the command was pointed at");
+        assert_eq!(found.path.as_str(), "src/inside.rs");
+        assert!(!found.is_directory, "a file is not a directory");
+    }
+
+    #[test]
+    fn an_absolute_path_is_answered_by_the_root_that_contains_it_and_by_no_other() {
+        // The negative claim is the one with teeth: the root does not participate. The same
+        // absolute path is addressed against two repositories and answers against the one that
+        // holds it, which an implementation that joined the root onto its argument could not
+        // produce — `Path::join` with an absolute argument discards the base, so a join would look
+        // correct here and still be wrong for a relative path.
+        let holding = temp("absolute-holding");
+        let _held = Cleanup(holding.clone());
+        let other = temp("absolute-other");
+        let _other = Cleanup(other.clone());
+        std::fs::create_dir_all(holding.join("src")).expect("create src");
+        let file = holding.join("src/absolute.rs");
+        std::fs::write(&file, "fn absolute() {}\n").expect("write");
+        let named = file.to_str().expect("utf-8");
+
+        let inside = relative_to(&holding, named, "rm").expect("the root that holds it");
+        assert_eq!(inside.path.as_str(), "src/absolute.rs");
+
+        let outside = relative_to(&other, named, "rm")
+            .expect_err("the same absolute path is outside a different root");
+        assert_eq!(outside.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
+        let named_absolute = file.display().to_string();
+        assert!(
+            outside.refusal.message.contains(&named_absolute),
+            "the refusal must name the absolute path as written, not something derived from \
+             the root it was refused against: {}",
+            outside.refusal.message
+        );
+    }
+
+    #[test]
+    fn a_relative_path_that_climbs_out_of_the_root_is_refused_and_names_both_places() {
+        // `..` is the other way out, and anchoring on the root does not close it: `<root>/../x` is
+        // outside the root exactly as `../x` was. Canonicalisation runs before the containment
+        // test, so the climb is resolved on the filesystem rather than read as text, and the
+        // message names where it actually landed.
+        let outer = temp("climb-parent");
+        let _guard = Cleanup(outer.clone());
+        let root = outer.join("repo");
+        let elsewhere = outer.join("elsewhere");
+        std::fs::create_dir_all(&root).expect("create the repository");
+        std::fs::create_dir_all(&elsewhere).expect("create the sibling");
+        std::fs::write(elsewhere.join("secret.rs"), "fn secret() {}\n").expect("write");
+        let canonical_root = root.canonicalize().expect("canonicalise the repository");
+
+        let error = relative_to(&canonical_root, "../elsewhere/secret.rs", "rm")
+            .expect_err("a relative path that climbs out of the root is refused");
+        assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
+        // Derived from the filesystem rather than from the spelling the test typed, so the
+        // assertion is about the refusal and not about how this test wrote the path.
+        let sibling = elsewhere.canonicalize().expect("canonicalise");
+        let landed = sibling.join("secret.rs").display().to_string();
+        let refused_root = canonical_root.display().to_string();
+        assert!(
+            error.refusal.message.contains(&refused_root),
+            "the message must name the repository it refused to leave: {}",
+            error.refusal.message
+        );
+        assert!(
+            error.refusal.message.contains(&landed),
+            "the message must name where the climb landed, not the spelling that was typed: {}",
+            error.refusal.message
+        );
     }
 
     #[test]

@@ -310,6 +310,71 @@ fn rm_removes_exactly_the_rows_of_the_path_it_names() {
 }
 
 #[test]
+fn a_relative_path_is_resolved_against_the_root_and_not_the_working_directory() {
+    // The one case an in-process test cannot reach, because it needs a *different* working
+    // directory and `set_current_dir` is process-global: a command pointed at a repository with
+    // `--root`, given a relative path, and run from a working directory **inside** that repository.
+    //
+    // Every other test in this crate runs from the package directory, which is outside every
+    // fixture, so a path resolved against it lands nowhere and the command refuses. That is a loud
+    // failure, and it is why the defect read as a usage error rather than as a wrong removal. From
+    // inside the repository the same command lands on a *real* file that is still in the tree, the
+    // containment check passes, and `rm` removes that file's rows and reports success.
+    //
+    // The decoy at `<repo>/src/ui/src/ui/b.rs` is what makes that observable rather than
+    // hypothetical: it exists, it is indexed, and it is inside the repository, so nothing refuses
+    // it. Both behaviours report one path removed, so the count cannot tell them apart — the
+    // answer's own `path` field says which one it removed, and the store says which one it kept.
+    let repository = Repository::small("e2e-relative-root");
+    repository.write("src/ui/src/ui/b.rs", "pub fn decoy() {}\n");
+    run(&repository, &["index", repository.root_str()]);
+
+    let inside = repository.root().join("src/ui");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_peek"))
+        .current_dir(&inside)
+        .args(["rm", "src/ui/b.rs", "--root"])
+        .arg(repository.root_str())
+        .args(["--index-dir"])
+        .arg(repository.index_root())
+        .args(["--json", "--quiet"])
+        .output()
+        .expect("the peek binary runs");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the command refused: {}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let answer: peek_cli::Output =
+        serde_json::from_slice(&output.stdout).expect("the JSON mode parses back");
+    let removed = match &answer.answer {
+        Answer::Remove(remove) => remove,
+        other => panic!("expected a remove answer, got {other:?}"),
+    };
+    // The answer names the file it removed, so this compares the file that was asked for with
+    // the file that actually left the index. The count cannot: one path is removed either way,
+    // and both candidates are inside the repository, which is exactly where the containment
+    // check has nothing to say.
+    assert_eq!(removed.path, "src/ui/b.rs", "asked for it from {}", inside.display());
+    assert_eq!(removed.indexed_paths_removed, 1, "{removed:?}");
+
+    let store = open_store(&repository);
+    let paths = store.indexed_paths(1 << 24).expect("the paths the index holds");
+    let held: Vec<&str> = paths.iter().map(|path| path.as_str()).collect();
+    drop(store);
+    assert!(
+        !held.contains(&"src/ui/b.rs"),
+        "the file that was named must have left the index: {held:?}"
+    );
+    assert!(
+        held.contains(&"src/ui/src/ui/b.rs"),
+        "the decoy is still indexed, so a run that had removed it was pointed at it: {held:?}"
+    );
+}
+
+#[test]
 fn doctor_and_status_agree_about_every_count() {
     // One `Counts` type, two commands, one measurement. A number that differs between them is a
     // number one of them invented.
