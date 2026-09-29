@@ -118,7 +118,11 @@ fn a_path_from_outside_the_repository_is_counted_because_the_watcher_is_misconfi
 fn the_same_path_seen_from_outside_twice_is_counted_once() {
     let outside = PathBuf::from("/elsewhere/x.rs");
     let plan = plan_batch(&root(), &[outside.clone(), outside.clone()], rust_only);
-    assert_eq!(plan.outside_root, vec![outside], "a duplicate is not a second problem");
+    assert_eq!(
+        plan.outside_root,
+        vec![outside],
+        "a duplicate is not a second problem"
+    );
 }
 
 #[test]
@@ -178,7 +182,9 @@ fn a_batch_closes_once_the_quiet_period_has_passed() {
     debouncer.record([under("src/a.rs"), under("src/b.rs")]);
 
     let later = start + Duration::from_millis(500);
-    let batch = debouncer.drain_if_quiet(later).expect("the batch should close");
+    let batch = debouncer
+        .drain_if_quiet(later)
+        .expect("the batch should close");
     assert_eq!(batch.len(), 2);
     assert!(debouncer.is_empty(), "the batch is handed over, not copied");
     assert!(
@@ -194,9 +200,14 @@ fn a_batch_open_at_shutdown_is_still_handed_over() {
     let mut debouncer = Debouncer::new(Duration::from_secs(30));
     debouncer.record([under("src/late.rs")]);
 
-    let flushed = debouncer.flush().expect("an open batch must be handed over");
+    let flushed = debouncer
+        .flush()
+        .expect("an open batch must be handed over");
     assert_eq!(flushed, vec![under("src/late.rs")]);
-    assert!(debouncer.flush().is_none(), "flushing twice yields nothing the second time");
+    assert!(
+        debouncer.flush().is_none(),
+        "flushing twice yields nothing the second time"
+    );
 }
 
 #[test]
@@ -234,7 +245,11 @@ fn a_failed_apply_is_reported_once_rather_than_swallowed() {
     assert!(debouncer.last_failure().is_none());
 
     debouncer.record([under("src/a.rs")]);
-    assert!(debouncer.drain_if_quiet(start + Duration::from_millis(50)).is_some());
+    assert!(
+        debouncer
+            .drain_if_quiet(start + Duration::from_millis(50))
+            .is_some()
+    );
 
     debouncer.note_failure("store is locked by another process");
     assert_eq!(
@@ -253,7 +268,8 @@ fn an_empty_recording_does_not_start_the_quiet_period() {
     // open forever. Not recording means the quiet period still runs.
     let start = std::time::Instant::now();
     let mut debouncer = Debouncer::new(Duration::from_millis(50));
-    debouncer.record([PathBuf::new()]);
+    // A metadata event that carries no path at all, which some backends produce.
+    debouncer.record(Vec::<PathBuf>::new());
     assert!(debouncer.is_empty());
     assert!(
         debouncer.quiet_for_so_far(start).is_none(),
@@ -272,15 +288,23 @@ fn the_quiet_period_is_a_parameter_and_not_a_constant() {
     patient.record([under("src/a.rs")]);
 
     let later = start + Duration::from_millis(100);
-    assert!(eager.drain_if_quiet(later).is_some(), "100ms is past a 1ms quiet period");
+    assert!(
+        eager.drain_if_quiet(later).is_some(),
+        "100ms is past a 1ms quiet period"
+    );
     assert!(
         patient.drain_if_quiet(later).is_none(),
         "100ms is nowhere near a 60s quiet period"
     );
     assert_eq!(patient.quiet_for(), Duration::from_secs(60));
-    assert_eq!(
-        patient.quiet_for_so_far(later),
-        Some(Duration::from_millis(100)),
-        "the elapsed quiet time is observable, so a caller can log it"
+    // A range rather than an equality: the last event was stamped from the real clock a moment
+    // after `start` was read, so the elapsed time is "about 100ms" and asserting an exact value
+    // would be asserting a coincidence.
+    let elapsed = patient
+        .quiet_for_so_far(later)
+        .expect("an event arrived, so there is a quiet period to measure");
+    assert!(
+        elapsed < patient.quiet_for() && elapsed <= Duration::from_millis(100),
+        "the elapsed quiet time is observable and short: {elapsed:?}"
     );
 }
