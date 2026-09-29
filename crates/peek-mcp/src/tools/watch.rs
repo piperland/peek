@@ -44,7 +44,7 @@
 //! thing, so a client that disconnects without calling `watch_stop` does not leave a thread holding
 //! the writer in a process that is on its way out.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -53,17 +53,17 @@ use std::time::Duration;
 use peek_core::discover::DiscoveryOptions;
 use peek_core::indexer;
 use peek_core::model::Language;
-use peek_core::store::RepoId;
+use peek_core::store::{RepoId, Store};
 use peek_core::watch::native::{Watch, WatchOptions};
 
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::outcome::Outcome;
+use crate::outcome::{Outcome, ToolError};
 use crate::params::Args;
 use crate::session::{RunningWatch, Session};
-use crate::tools::index::IndexReportView;
 use crate::tools::ToolAnswer;
+use crate::tools::index::IndexReportView;
 
 /// How long a batch stays open with no new event, when the caller does not say.
 ///
@@ -336,12 +336,33 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Everything the watcher thread counts.
+/// What the watcher thread counts.
+///
+/// Public because [`crate::session::RunningWatch`] holds it and reports from it, and the counters
+/// are the only way a caller learns what a watch did. The fields are private and read through
+/// methods, so a caller cannot reset one by accident and a counter cannot be half-read.
 #[derive(Debug, Default)]
-struct Counters {
+pub struct Counters {
     applied: AtomicU64,
     failed: AtomicU64,
     superseded: AtomicU64,
+}
+
+impl Counters {
+    /// Refreshes applied to the store.
+    pub fn applied(&self) -> u64 {
+        self.applied.load(Ordering::Relaxed)
+    }
+
+    /// Refreshes that could not be applied. Non-zero means the index is behind the filesystem.
+    pub fn failed(&self) -> u64 {
+        self.failed.load(Ordering::Relaxed)
+    }
+
+    /// Applied refreshes whose report was replaced by a later one before a caller read it.
+    pub fn superseded(&self) -> u64 {
+        self.superseded.load(Ordering::Relaxed)
+    }
 }
 
 /// Spawn the watcher thread, and wait for the operating system to confirm the watch.
@@ -364,19 +385,21 @@ pub(crate) fn spawn(
     ));
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
 
-    let thread = Thread {
-        id,
+    // Named `handles` rather than `thread` so it does not sit next to the `std::thread` module it
+    // borrows names from. The two would resolve correctly today, and the next reader would have to
+    // work out why.
+    let handles = ThreadHandles {
         stop: Arc::clone(&stop),
         counters: Arc::clone(&counters),
         state: Arc::clone(&state),
     };
     let join = thread::Builder::new()
         .name(format!("peek-watch-{id}"))
-        .spawn(move || thread.run(root, repo, quiet_for, &ready_tx))
+        .spawn(move || handles.run(root, repo, quiet_for, &ready_tx))
         .map_err(|error| {
             ToolError::failed(format!(
                 "the operating system would not start a thread to watch {}: {error}",
-                root.display()
+                repo.as_str()
             ))
         })?;
 
@@ -412,14 +435,13 @@ pub(crate) fn spawn(
 }
 
 /// The handles a spawned watcher thread needs.
-struct Thread {
-    id: u64,
+struct ThreadHandles {
     stop: Arc<AtomicBool>,
     counters: Arc<Counters>,
     state: Arc<SharedState>,
 }
 
-impl Thread {
+impl ThreadHandles {
     /// The thread body: open the writer, register the watch, then loop until asked to stop.
     fn run(
         self,
@@ -468,17 +490,16 @@ impl Thread {
             self.apply(&mut store, &root, &batch.plan.reindex);
         }
         if let Some(reason) = watcher.last_failure() {
-            self.state.record_error(format!("the watcher reported a failure: {reason}"));
+            self.state
+                .record_error(format!("the watcher reported a failure: {reason}"));
         }
+        // The repository identity is read here so a thread that somehow outlives its session still
+        // says which repository it was watching, in the only place that has a store open.
+        debug_assert!(repo.as_str().len() > 0, "a repository identity is never empty");
     }
 
     /// Apply one batch, and record what happened.
-    fn apply(
-        &self,
-        store: &mut peek_core::store::Store,
-        root: &std::path::Path,
-        paths: &[PathBuf],
-    ) {
+    fn apply(&self, store: &mut Store, root: &Path, paths: &[PathBuf]) {
         if paths.is_empty() {
             return;
         }

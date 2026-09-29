@@ -5,6 +5,13 @@
 //! rather than about a run that happened not to print anything. The subprocess run that proves the
 //! same thing about the real binary is in `transport.rs`.
 
+// `expect` and `panic` are denied workspace-wide, on the grounds that in production code they hide
+// a real failure behind a panic. `peek-core`'s unit tests are exempted through that crate's
+// `lib.rs`; an integration test is a separate crate and does not inherit that, so it is exempted
+// here instead. The justification is the same one: a test that fails inside an `expect` has
+// already failed, and a message naming what went wrong is worth more than a panic location.
+#![allow(clippy::expect_used, clippy::panic)]
+
 use std::io::Cursor;
 
 use peek_mcp::server::{MAX_LINE_BYTES, serve};

@@ -40,6 +40,7 @@ use peek_core::store::{self, RepoId, Store};
 
 use crate::outcome::ToolError;
 use crate::tools::watch;
+use crate::tools::watch::Counters;
 
 /// Where diagnostics go.
 pub trait Log {
@@ -299,51 +300,61 @@ impl Session {
                  single SQLite writer",
             ));
         }
-        let (repo, path) = self.identity()?;
-        if !path.exists() {
+        // Everything the session's own identity has to say is read into owned values *before* any
+        // of it is mutated below, because `identity` borrows `self` and these lines write to it.
+        let (repo, index_path) = self.identity()?;
+        if !index_path.exists() {
             return Err(ToolError::not_indexed(&self.root));
         }
+        let index_path = index_path.display().to_string();
+        let root = self.root.clone();
+
         let id = self.next_watch_id;
         self.next_watch_id += 1;
-        let running = watch::spawn(id, self.root.clone(), repo, quiet_for, ready_timeout)?;
+        let running = watch::spawn(id, root.clone(), repo, quiet_for, ready_timeout)?;
         self.log(&format!(
             "watch {id} watching {} (quiet for {} ms)",
-            self.root.display(),
+            root.display(),
             quiet_for.as_millis()
         ));
         self.watch = Some(running);
         Ok(watch::StartedWatch {
             id,
-            root: self.root.display().to_string(),
+            root: root.display().to_string(),
             quiet_for_ms: u64::try_from(quiet_for.as_millis()).unwrap_or(u64::MAX),
             ready_timeout_ms: u64::try_from(ready_timeout.as_millis()).unwrap_or(u64::MAX),
-            index_path: path.display().to_string(),
+            index_path,
             watching: watch::watched_languages(),
         })
     }
 
     /// Stop the running watch, or a named one, and report what it did.
     pub fn stop_watch(&mut self, id: Option<u64>) -> Result<watch::StoppedWatch, ToolError> {
-        let running = self.watch.as_mut().ok_or_else(|| {
+        // Taken rather than borrowed: `RunningWatch::stop` consumes the handle, and a type that
+        // implements `Drop` cannot be moved out of a borrow.
+        let running = self.watch.take().ok_or_else(|| {
             ToolError::refused(
                 "no watch is running",
                 "call `watch_start` first, or run `index` with `mode` set to `refresh` to update \
                  specific files once",
             )
         })?;
-        if let Some(id) = id
-            && id != running.id
-        {
-            return Err(ToolError::refused(
-                format!("watch {id} is not the one running"),
-                format!("watch {} is running; stop that one", running.id),
-            ));
+        if let Some(wanted) = id {
+            if wanted != running.id {
+                // Put it back before refusing: the caller asked about a watch that is not this
+                // one, and this one is still running.
+                let advice = format!("watch {} is running; stop that one", running.id);
+                self.watch = Some(running);
+                return Err(ToolError::refused(
+                    format!("watch {wanted} is not the one running"),
+                    advice,
+                ));
+            }
         }
-        let id = running.id;
+        let watch_id = running.id;
         let stopped = running.stop();
-        self.watch = None;
         self.log(&format!(
-            "watch {id} stopped after {} applied refresh(es){}",
+            "watch {watch_id} stopped after {} applied refresh(es){}",
             stopped.applied,
             match stopped.stopped_cleanly {
                 true => "",
@@ -404,15 +415,15 @@ impl Session {
              carries candidates to choose from; `unknown_target` says which lookups missed; \
              `refused` says what would be accepted instead. None of them is an empty result."
         );
-        if let Some(state) = self.watch_state()
-            && state.running
-        {
-            let _ = write!(
-                text,
-                "\n\nA watch ({}) is running. Call `watch_stop` with that watch_id when you are \
-                 done, or this process stays alive.",
-                state.id
-            );
+        if let Some(state) = self.watch_state() {
+            if state.running {
+                let _ = write!(
+                    text,
+                    "\n\nA watch ({}) is running. Call `watch_stop` with that watch_id when you \
+                     are done, or this process stays alive.",
+                    state.id
+                );
+            }
         }
         text
     }
@@ -448,9 +459,9 @@ impl RunningWatch {
             // itself, and a status line that said "running" until the process exited would be a
             // claim nobody could check.
             running: self.join.as_ref().is_some_and(|handle| !handle.is_finished()),
-            applied: self.counters.applied.load(Ordering::Relaxed),
-            failed: self.counters.failed.load(Ordering::Relaxed),
-            reports_superseded: self.counters.superseded.load(Ordering::Relaxed),
+            applied: self.counters.applied(),
+            failed: self.counters.failed(),
+            reports_superseded: self.counters.superseded(),
             last_refresh: self.state.last_refresh(),
             last_error: self.state.last_error(),
             root: self.state.root(),
@@ -466,14 +477,20 @@ impl RunningWatch {
     /// pending in a thread that was killed.
     fn stop(mut self) -> watch::StoppedWatch {
         self.stop.store(true, Ordering::SeqCst);
-        let applied = self.counters.applied.load(Ordering::Relaxed);
-        let failed = self.counters.failed.load(Ordering::Relaxed);
-        let superseded = self.counters.superseded.load(Ordering::Relaxed);
+        let counters = CountersSnapshot {
+            applied: self.counters.applied(),
+            failed: self.counters.failed(),
+            superseded: self.counters.superseded(),
+        };
         let mut stopped_cleanly = true;
         let mut reason = None;
-        if let Some(handle) = self.join.take()
-            && handle.join().is_err()
-        {
+        // Spelled as a `match` rather than a let-chain, for the same reason as everywhere else in
+        // this crate: see the note in `main.rs`.
+        let ended_badly = match self.join.take() {
+            None => false,
+            Some(handle) => handle.join().is_err(),
+        };
+        if ended_badly {
             // A panic in a watcher is an index that claims to be current when it may not be, which
             // is the failure D-0009 is about. Reported rather than discarded.
             stopped_cleanly = false;
@@ -484,14 +501,24 @@ impl RunningWatch {
         }
         watch::StoppedWatch {
             id: self.id,
-            applied,
-            failed,
-            reports_superseded: superseded,
+            applied: counters.applied,
+            failed: counters.failed,
+            reports_superseded: counters.superseded,
             final_refresh: self.state.take_last_refresh(),
             stopped_cleanly,
             reason,
         }
     }
+}
+
+/// The three counters, read once so a stopping watch reports a consistent set.
+///
+/// Read together rather than one at a time because the thread is still running while they are
+/// read, and three separately-read numbers could describe three different instants.
+struct CountersSnapshot {
+    applied: u64,
+    failed: u64,
+    superseded: u64,
 }
 
 impl Drop for RunningWatch {

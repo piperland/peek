@@ -139,15 +139,20 @@ pub fn classify(line: &str) -> Option<Incoming> {
         }
     };
 
-    let Value::Object(object) = value else {
-        return Some(Incoming::Unroutable {
-            id: None,
-            code: CODE_INVALID_REQUEST,
-            message: format!(
-                "a JSON-RPC message is an object; this line is {}",
-                describe(&value)
-            ),
-        });
+    // A `match` rather than a `let ... else`, because the else arm needs to name what arrived and
+    // a let-else's scrutinee is not reliably readable from its else block.
+    let object = match value {
+        Value::Object(object) => object,
+        other => {
+            return Some(Incoming::Unroutable {
+                id: None,
+                code: CODE_INVALID_REQUEST,
+                message: format!(
+                    "a JSON-RPC message is an object; this line is {}",
+                    describe(&other)
+                ),
+            });
+        }
     };
 
     // The id is read before the version, because an id is the only thing a reply can be addressed

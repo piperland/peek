@@ -208,14 +208,15 @@ fn call<W: Write>(
         );
     };
     let arguments = params.get("arguments");
-    let name = name.to_owned();
-    let answer = match tools::dispatch(session, &name, arguments) {
+    // `name` is used after `arguments` is taken out of the same object. That is two shared borrows
+    // of one value, which is fine; an owned copy here would be a clone nobody asked for.
+    let answer = match tools::dispatch(session, name, arguments) {
         Ok(answer) => answer,
         Err(error) => {
             // The tool was found and could not do the job, which is a result the model has to
             // read, not a protocol fault.
             session.log(&format!("{name} refused: {}", error.verdict_reason));
-            tools::refusal(&name, &error)
+            tools::refusal(tool_name(name), &error)
         }
     };
     let ToolAnswer {
@@ -249,4 +250,17 @@ pub fn surface_summary() -> String {
         .map(|tool| format!("  {:<14} {}", tool.name, tool.title))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The `'static` name of a tool, so a refusal can say which tool refused.
+///
+/// The name arrived from a client as a borrowed string, but every tool in the catalogue is a
+/// compile-time constant, so this returns the constant rather than leaking the borrow. A name that
+/// is *not* in the catalogue comes back as `"unknown"`, which is the truth about it: `dispatch`
+/// already refused it and `refusal` is only ever reached for a name the client sent.
+fn tool_name(name: &str) -> &'static str {
+    crate::tool::names()
+        .into_iter()
+        .find(|known| *known == name)
+        .unwrap_or("unknown")
 }

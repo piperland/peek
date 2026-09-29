@@ -67,7 +67,7 @@ pub mod tools;
 pub mod writer;
 
 pub use outcome::{Outcome, ToolError, Verdict};
-pub use server::{serve, ServeOptions};
+pub use server::serve;
 pub use session::{Log, Session};
 pub use tool::Tool;
 

@@ -17,6 +17,13 @@
 //! One fixture, no network, no filesystem events, no sleeping. There is no timing in this file, so
 //! there is nothing in it to be flaky; it stays on the default test path.
 
+// `expect` and `panic` are denied workspace-wide, on the grounds that in production code they hide
+// a real failure behind a panic. `peek-core`'s unit tests are exempted through that crate's
+// `lib.rs`; an integration test is a separate crate and does not inherit that, so it is exempted
+// here instead. The justification is the same one: a test that fails inside an `expect` has
+// already failed, and a message naming what went wrong is worth more than a panic location.
+#![allow(clippy::expect_used, clippy::panic)]
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
@@ -197,9 +204,9 @@ impl Drop for TempDir {
         // The index lives outside the repository, under the OS cache root, named for the
         // repository's identity. Asking the library where that is, rather than reaching for the
         // engine's paths module, keeps this file a test of the MCP surface and nothing else.
-        if let Ok(session) = Session::new(&self.0, Box::new(SharedLog::new()))
-            && let Some(path) = session.index_path()
-        {
+        // A throwaway session, used only for its answer about where the index lives.
+        let session = Session::new(&self.0, Box::new(SharedLog::new()));
+        if let Some(path) = session.index_path() {
             let _ = std::fs::remove_dir_all(path.parent().unwrap_or(path));
         }
         let _ = std::fs::remove_dir_all(&self.0);

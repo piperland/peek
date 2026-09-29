@@ -68,21 +68,30 @@ pub fn context(session: &mut Session, arguments: Option<&Value>) -> Result<ToolA
     }
 
     // The floor comes from the engine, and it is available without a target — which is the point:
-    // a caller can find out what the smallest acceptable budget is before composing one.
-    let minimum = session.minimum_budget().unwrap_or(0);
+    // a caller can find out what the smallest acceptable budget is before composing one. On a
+    // repository with no index it is `None`, and the refusal then says so rather than naming zero.
+    let minimum = session.minimum_budget();
     let Some(budget) = budget else {
-        return Err(ToolError::budget(
-            format!(
+        let sentence = match minimum {
+            Some(floor) => format!(
                 "`context` needs a `budget_tokens` argument, and this call did not send one \
-                 (the smallest this build accepts is {minimum})"
+                 (the smallest this build accepts is {floor})"
             ),
-            format!(
+            None => "`context` needs a `budget_tokens` argument, and this call did not send one \
+                     (this repository has no index, so the smallest budget cannot be read yet)"
+                .to_owned(),
+        };
+        let advice = match minimum {
+            Some(floor) => format!(
                 "a context pack is compiled to a budget rather than truncated to fit one, so the \
-                 number has to come from you; {minimum} is the floor and anything at or above it \
-                 is honoured"
+                 number has to come from you; {floor} is the floor and anything at or above it is \
+                 honoured"
             ),
-            minimum,
-        ));
+            None => "run `index` first, then ask again: the compiler reports the smallest budget \
+                     it will accept as part of its `initialize` instructions"
+                .to_owned(),
+        };
+        return Err(ToolError::budget(sentence, advice, minimum.unwrap_or(0)));
     };
 
     let pack = {
@@ -128,14 +137,16 @@ pub fn context(session: &mut Session, arguments: Option<&Value>) -> Result<ToolA
             outcome,
             reason: match outcome {
                 Outcome::Insufficient => Some(format!(
-                    "the target does not fit a budget of {} token(s) alongside the {}-token \
-                     report, so this is a refusal rather than a slice",
-                    pack.budget.requested_tokens, minimum
+                    "the target does not fit a budget of {} token(s) alongside the report, so \
+                     this is a refusal rather than a slice",
+                    pack.budget.requested_tokens
                 )),
                 _ => None,
             },
-            advice: match outcome {
-                Outcome::Insufficient => Some(format!("ask for at least {minimum} tokens")),
+            advice: match minimum {
+                Some(floor) if outcome == Outcome::Insufficient => {
+                    Some(format!("ask for at least {floor} tokens"))
+                }
                 _ => None,
             },
             candidates: Vec::new(),

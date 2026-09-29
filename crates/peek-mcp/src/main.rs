@@ -138,10 +138,13 @@ impl Options {
                 }
             }
         }
-        if let Some(root) = &options.root
-            && !root.is_dir()
-        {
-            return Err(format!("{} is not a directory", root.display()));
+        // A nested `if` rather than a let-chain. A let-chain is edition-2024 syntax and reads
+        // better here, but the workspace declares `rust-version = "1.85"` and let-chains need
+        // 1.88, so using one would be a claim about the toolchain this crate has not earned.
+        if let Some(root) = &options.root {
+            if !root.is_dir() {
+                return Err(format!("{} is not a directory", root.display()));
+            }
         }
         Ok(options)
     }

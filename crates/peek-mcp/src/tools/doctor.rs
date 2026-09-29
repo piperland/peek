@@ -25,7 +25,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use peek_core::doctor::{self, Check, Diagnosis, Severity};
+use peek_core::doctor::{self, Diagnosis, Severity};
 
 use crate::outcome::{Outcome, ToolError, Verdict};
 use crate::params::Args;
@@ -135,24 +135,3 @@ fn body(diagnosis: &Diagnosis, verdict: &Verdict) -> Value {
     })
 }
 
-/// The checks this build knows about, by name.
-///
-/// Public so a caller can ask "what does `doctor` look at" without running it, and so the count
-/// in the module documentation is checkable.
-#[must_use]
-pub fn checks() -> Vec<&'static str> {
-    vec![
-        Check::IndexOpenable.as_str(),
-        Check::SchemaVersion.as_str(),
-        Check::Integrity.as_str(),
-        Check::Generation.as_str(),
-        Check::OrphanEdges.as_str(),
-        Check::PendingWork.as_str(),
-        Check::Ambiguity.as_str(),
-        Check::WalSize.as_str(),
-        Check::IndexLocation.as_str(),
-        Check::Durability.as_str(),
-        Check::UnsupportedFiles.as_str(),
-        Check::RepositoryIdentity.as_str(),
-    ]
-}
