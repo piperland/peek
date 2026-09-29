@@ -1687,10 +1687,7 @@ mod tests {
                 r#"{"reason":"budget_exhausted"}"#,
                 OmissionReason::BudgetExhausted,
             ),
-            (
-                r#"{"reason":"edge_limit"}"#,
-                OmissionReason::EdgeLimit,
-            ),
+            (r#"{"reason":"edge_limit"}"#, OmissionReason::EdgeLimit),
             (
                 r#"{"reason":"exceeds_budget"}"#,
                 OmissionReason::ExceedsBudget,
@@ -1713,7 +1710,7 @@ mod tests {
         let read: Omission =
             serde_json::from_str(payload).unwrap_or_else(|e| panic!("{payload} must read: {e}"));
         assert_eq!(read.reason, OmissionReason::BudgetExhausted);
-        assert_eq!(read.what, "edge");
+        assert_eq!(read.what, Omitted::Edge);
         assert_eq!(read.subject, "src/ledger.rs::audit");
     }
 
