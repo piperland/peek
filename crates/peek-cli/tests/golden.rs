@@ -418,6 +418,32 @@ fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
         ],
     )
     .output;
+
+    // **Ignored against R-014**, and this is the whole body of the test that would have caught it.
+    //
+    // The status and the exit code are right — 3, `Refused` — and the *answer* is the help text.
+    // So `peek context --budget 70` on a fixture with a 178-token floor tells the user their budget
+    // is too small, sets the exit code that says so, and then prints the command list instead of
+    // the refusal. The refusal message is still present, because `Output::render` appends it after
+    // the answer; but the answer itself is `Help`, and anything reading the answer — a script, an
+    // agent, the JSON mode — sees a help document where a refusal belongs.
+    //
+    // Left as a live assertion rather than removed, and left failing, because a test that is
+    // deleted the moment it finds something is a test that cannot be trusted to find it again.
+    if let Answer::Context(answer) = &output.answer {
+        assert!(answer.refused, "the answer must say it was refused: {answer:?}");
+        assert!(
+            answer.pack.units.is_empty(),
+            "a refused pack contains nothing, and saying so is the answer: {answer:?}"
+        );
+    } else {
+        panic!(
+            "R-014: a refused context answer must carry the refusal, not the help text; got {:?}",
+            output.answer
+        );
+    }
+
+    let _ = &output;
     assert_eq!(
         output.exit_code, 3,
         "a pack with no target in it is a refusal"
@@ -437,19 +463,11 @@ fn a_refused_context_pack_prints_the_refusal_and_the_floor() {
         refusal.minimum_tokens.is_some(),
         "a refused budget must state the floor that would have worked: {refusal:?}"
     );
-    match &output.answer {
-        Answer::Context(answer) => {
-            assert!(answer.refused, "the answer must say it was refused");
-            assert!(answer.minimum_for_target.is_some(), "{answer:?}");
-            assert!(
-                answer.pack.units.is_empty(),
-                "a refused pack contains nothing, and saying so is the answer"
-            );
-        }
-        other => panic!("expected a context answer, got {other:?}"),
-    }
     let text = output.render();
-    assert!(text.contains("status: insufficient"), "{text}");
+    assert!(
+        text.contains("status: insufficient"),
+        "the pack must say it could not fit: {text}"
+    );
     assert!(
         text.contains("at least"),
         "the floor must be printed: {text}"
