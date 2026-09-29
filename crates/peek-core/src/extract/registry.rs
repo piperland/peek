@@ -6,7 +6,8 @@
 //! [`Language::tier`](crate::model::Language::tier) will not advertise it.
 
 use super::spec::{
-    CallRule, ImportRule, InheritanceStyle, LanguageSpec, NameStrategy, ReferenceRule, SymbolRule,
+    CallRule, ImportRule, InheritanceStyle, LanguageSpec, ModuleLayout, NameStrategy, ReferenceRule,
+    SymbolRule,
 };
 use crate::model::{EntityKind, Language};
 
@@ -140,7 +141,16 @@ static RUST: LanguageSpec = LanguageSpec {
         CallRule::new("call_expression", "function"),
         CallRule::new("macro_invocation", "macro"),
     ],
-    imports: &[ImportRule::new("use_declaration", Some("argument"), None)],
+    imports: &[ImportRule::new(
+        "use_declaration",
+        Some("argument"),
+        None,
+        // `pub use a::B;` carries a `visibility_modifier` child. The relation is still an
+        // `Imports` edge, because the resolver's R1 rung reads only `Imports` and a re-export is
+        // a binding every other file in the module can be resolved against; the marker is what
+        // lets the basis say so.
+        &["visibility_modifier"],
+    )],
     // Cortex declared `Inherit` and `Implement` in its enums and never constructed either one,
     // so its graph contained no inheritance edge at all. These are what make it possible.
     // The bounds *field* is `bounds` and the bounds *node type* is `trait_bounds` — passing one
@@ -195,7 +205,24 @@ static RUST: LanguageSpec = LanguageSpec {
     // `EntityKind::is_type()`. Without this list every method in a Rust codebase was extracted
     // as a bare function and the graph had no method/type distinction at all.
     type_scope_nodes: &["impl_item", "trait_item"],
+    // `mod_item` is the only Rust node that declares a module. `impl_item` is deliberately
+    // absent even though it is also an `EntityKind::Module` in the table above: an `impl` block
+    // is a scope, not a namespace anybody can `use`.
+    module_nodes: &["mod_item"],
+    modules: Some(RUST_MODULE_LAYOUT),
     grammar: || tree_sitter_rust::LANGUAGE.into(),
+};
+
+/// Cargo's file layout, as a table.
+///
+/// The three lists are Cargo's own conventions and the separator is Rust's own. Nothing here is
+/// a fallback shared with another language: a language whose module layout is not known has
+/// `modules: None` and emits no module entities at all.
+static RUST_MODULE_LAYOUT: ModuleLayout = ModuleLayout {
+    source_roots: &["src"],
+    package_roots: &["lib", "main"],
+    directory_modules: &["mod"],
+    segment_separator: "::",
 };
 
 /// Every spec Peek currently has.
