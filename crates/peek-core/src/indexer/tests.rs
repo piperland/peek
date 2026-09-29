@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{IndexError, SkipReason, build_full, refresh};
 use crate::discover::DiscoveryOptions;
-use crate::model::
+use crate::model::{
     EntityId, EntityKind, Evidence, Relation, RelationKind, RepoPath, ResolutionState, Span,
 };
 use crate::store::{IndexUpdate, RepoId, Store};
