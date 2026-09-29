@@ -1132,30 +1132,18 @@ impl DeclinedAnswer {
 /// folded into another arm so that a caller who constructs one by hand gets a statement telling
 /// them it is a defect in `peek` rather than a result.
 fn did_not_for(failure: &Failure) -> Vec<String> {
+    let because = match failure.status {
+        Status::Ok => "a successful status with no answer is a defect in peek, not a result",
+        Status::Usage => "the command line was not understood, so nothing reached the repository",
+        Status::Refused => "the question cannot be answered from this index, and no part of it was",
+        Status::Unhealthy => "the diagnosis found something wrong and did not repair it",
+        Status::Failed => "the engine stopped rather than reporting a partial answer",
+    };
     let mut did_not = vec![format!(
-        "this command did not answer the question it was asked, and there is no partial answer \
-         behind it: the `{}` refusal above is the whole result",
+        "this command did not answer the question; the `{}` refusal above is all of it",
         failure.refusal.kind
     )];
-    did_not.push(match failure.status {
-        Status::Ok => "this carries a successful status with no answer, which is a defect in peek \
-                       rather than a result: there is nothing here to read"
-            .to_owned(),
-        Status::Usage => "the command line was not understood, so nothing was attempted against \
-                          the repository. This exit code is about the invocation, not about the \
-                          index"
-            .to_owned(),
-        Status::Refused => "the question cannot be answered from this index as it stands, and no \
-                            part of it was answered. The same command against the same index is \
-                            refused the same way"
-            .to_owned(),
-        Status::Unhealthy => "the diagnosis found something wrong and did not repair it. This \
-                             command reports; it does not fix"
-            .to_owned(),
-        Status::Failed => "the engine stopped rather than reporting a partial answer, so no number \
-                           here describes a half-finished state"
-            .to_owned(),
-    });
+    did_not.push(because.to_owned());
     did_not
 }
 
