@@ -130,7 +130,6 @@ fn run_any(_repository: &Repository, argv: &[&str]) -> peek_cli::Output {
     run_invocation(&invocation, &mut silent).expect("the command must produce an output")
 }
 
-
 /// Replace the two machine-dependent substrings with fixed placeholders.
 ///
 /// **Exactly two**, and named in the failure message so a reader can see what was elided. Anything

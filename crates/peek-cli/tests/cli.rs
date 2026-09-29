@@ -496,19 +496,40 @@ fn a_failure_renders_the_command_and_the_reason_together() {
 fn quiet_suppresses_narration_and_changes_nothing_else() {
     // The strongest claim this crate makes about `--quiet`: the answer is byte-identical. If a
     // finding ever went through the narration sink this test would catch it.
+    //
+    // The comparison is on **`status`**, not on `index`, and that is the whole substance of the
+    // fix. An earlier version ran `index` twice — once loud, once quiet — and asserted the two
+    // renders matched. They cannot: the first is a build and the second a refresh, so the mode,
+    // the generation and the removed counts all differ for reasons that have nothing to do with
+    // `--quiet`. The test was failing on correct behaviour, and worse, it would have *passed* if
+    // `--quiet` had been leaking a finding into the answer, because a leak of that size could
+    // hide inside a difference the test blamed on the build.
+    //
+    // `status` reads and does not write, so the only thing that can differ between the two runs
+    // is the flag.
     let repository = Repository::small("quiet");
-    let loud = run(&repository, &["index", repository.root_str()]);
-    let quiet = run(&repository, &["index", repository.root_str(), "--quiet"]);
-    assert_eq!(loud.output.render(), quiet.output.render());
-    assert!(
-        !loud.output.progress.is_empty(),
-        "index must narrate something"
+    run(&repository, &["index", repository.root_str()]);
+
+    let loud = run(&repository, &["status"]);
+    let quiet = run(&repository, &["status", "--quiet"]);
+    assert_eq!(
+        loud.output.render(),
+        quiet.output.render(),
+        "--quiet silences the narration sink and nothing else"
     );
     assert_eq!(
         quiet.output.progress.len(),
         loud.output.progress.len(),
         "the recorded narration is complete in both modes; --quiet silences the sink, not the \
          record"
+    );
+
+    // And the narration that `index` does produce is still there, so the first run is not a no-op
+    // and the sink is genuinely wired up.
+    let narrated = run(&repository, &["index", repository.root_str()]);
+    assert!(
+        !narrated.output.progress.is_empty(),
+        "index must narrate something"
     );
 }
 

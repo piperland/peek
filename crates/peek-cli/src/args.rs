@@ -514,7 +514,7 @@ impl UsageError {
         match self {
             UsageError::UnknownFlag { flag, known } => format!(
                 "unknown flag `--{flag}`; this build accepts {}",
-                list(known)
+                flag_list(known)
             ),
             UsageError::MissingValue { flag } => {
                 format!("`--{flag}` needs a value and the command line ended")
@@ -573,6 +573,22 @@ fn list(items: &[&str]) -> String {
         [only] => (*only).to_owned(),
         [first, middle @ .., last] => format!("{first}, {}, and {last}", middle.join(", ")),
     }
+}
+
+/// The same list, spelled the way a flag is typed.
+///
+/// Separate from [`list`] because the two are spelled differently and the difference matters: a
+/// command is `peek index` and a flag is `--index`, so a message that quotes the offending flag as
+/// `` `--nonsense` `` and then lists what *is* accepted as `nonsense, index-dir, full` tells the
+/// reader they can type any of the two forms. They cannot. Each of those is only valid with a
+/// leading `--`.
+///
+/// A known gap, stated rather than hidden: this lists long forms only, so a user who typed `-x` is
+/// not shown that `-h` and `-V` exist. The table knows the short forms and this does not read
+/// them, which is a small fix rather than a design decision.
+fn flag_list(items: &[&str]) -> String {
+    let dashed: Vec<String> = items.iter().map(|flag| format!("--{flag}")).collect();
+    list(&dashed.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
 /// The default quiet period for `watch`, in milliseconds.
