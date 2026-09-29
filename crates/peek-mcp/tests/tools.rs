@@ -282,7 +282,9 @@ fn entity_in(store: &Store, file: &str, kind: EntityKind, qualified_name: &str) 
 /// its absence means nothing and its presence would mean a tool had duplicated itself.
 fn call_both(session: &mut Session, name: &str, arguments: Value) -> (Value, String) {
     match tools::dispatch(session, name, Some(&arguments)) {
-        Ok(ToolAnswer { text, structured, .. }) => (structured, text),
+        Ok(ToolAnswer {
+            text, structured, ..
+        }) => (structured, text),
         Err(error) => panic!(
             "`{name}` refused a call the test expected to work: {} ({:?})",
             error.verdict_reason, error.outcome
@@ -385,7 +387,9 @@ fn a_full_build_reports_all_five_resolution_states_and_they_partition() {
          debt: {report}"
     );
     assert_eq!(
-        report["resolution_states"]["resolved"].as_u64().expect("a count")
+        report["resolution_states"]["resolved"]
+            .as_u64()
+            .expect("a count")
             + resolution["resolved"].as_u64().expect("a count"),
         report["relations_written"].as_u64().expect("a count"),
         "the relations the extractor settled and the ones the pass settled are additive, not \
