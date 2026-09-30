@@ -557,7 +557,10 @@ fn an_uncheckpointed_log_is_a_notice_and_a_checkpointed_one_is_a_pass() {
     assert_eq!(waiting_stats.relation_count, settled_stats.relation_count);
     assert_eq!(waiting_stats.generation, settled_stats.generation);
     assert_eq!(waiting_stats.schema_version, settled_stats.schema_version);
-    assert_eq!(waiting_stats.orphan_relations, settled_stats.orphan_relations);
+    assert_eq!(
+        waiting_stats.orphan_relations,
+        settled_stats.orphan_relations
+    );
 
     // The measurements that moved, and the one the old rule graded on.
     assert_eq!(settled_stats.wal_size_bytes, 0, "TRUNCATE empties the log");
@@ -565,7 +568,8 @@ fn an_uncheckpointed_log_is_a_notice_and_a_checkpointed_one_is_a_pass() {
         settled_stats.file_size_bytes > waiting_stats.file_size_bytes,
         "the checkpoint is what grew the database file: {} bytes became {}, so the file size \
          measures checkpointing rather than the index",
-        waiting_stats.file_size_bytes, settled_stats.file_size_bytes
+        waiting_stats.file_size_bytes,
+        settled_stats.file_size_bytes
     );
 
     assert_eq!(

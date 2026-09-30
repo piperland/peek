@@ -1437,7 +1437,10 @@ fn a_root_the_filesystem_will_not_locate_is_not_called_a_misdirected_command() {
         nowhere.display()
     );
 
-    run(&repository, &["status", "--root", nowhere.to_str().expect("utf-8")]);
+    run(
+        &repository,
+        &["status", "--root", nowhere.to_str().expect("utf-8")],
+    );
 }
 
 #[test]
@@ -1488,7 +1491,10 @@ fn one_directory_named_through_a_climb_is_still_the_fixtures_root() {
     // is nothing on this platform that reaches it. That branch exists for the platform whose path
     // parser hands a verbatim spelling straight to the filesystem with the climb still written
     // down, and the assertion above is what holds on every platform.
-    run(&repository, &["status", "--root", roundabout.to_str().expect("utf-8")]);
+    run(
+        &repository,
+        &["status", "--root", roundabout.to_str().expect("utf-8")],
+    );
 }
 
 #[test]
@@ -1507,7 +1513,10 @@ fn a_directory_inside_the_fixture_is_not_the_fixtures_root() {
          nothing can locate and the other test already covers it: {}",
         inside.display()
     );
-    run(&repository, &["status", "--root", inside.to_str().expect("utf-8")]);
+    run(
+        &repository,
+        &["status", "--root", inside.to_str().expect("utf-8")],
+    );
 }
 
 #[test]
