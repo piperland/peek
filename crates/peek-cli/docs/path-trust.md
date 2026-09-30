@@ -233,3 +233,22 @@ mentions neither the root nor the contract.
 The failing `canonicalize` was an **answer**, not a specification. It did not say which notion of
 containment was intended; it only said the filesystem could not help. Reading the contract out of
 that error is how the current three-notions-in-one-function shape got here.
+
+## A failure this change does not fix, and why
+
+`rm_on_a_subtree_removes_everything_at_or_below_it_and_says_so` in `tests/cli.rs` asks
+`peek rm src/ledger` on a fixture where `src/ledger.rs` exists and `src/ledger` does not, and
+asserts the scope is `subtree`. The answer is `file`, because nothing at `src/ledger` is a
+directory. **This test fails on `origin/main` and failed before any of this work**, it is not
+caused by this change, and it is not a path-containment question: the path is inside the repository
+and the containment check is doing its job. It is a *scope* question — whether a removal of a stem
+with no file of its own should be a subtree or a file — and `paths.rs` is not where that is decided;
+`commands/rm.rs` reads `Relative::is_directory` and chooses.
+
+It is recorded here because the `is_directory` flag is this module's, and the rule above is what
+this module now guarantees about it: `is_directory` is false for anything that is not a directory
+right now, **including a directory that has not been created yet**. If the intended answer is that
+`src/ledger` means the subtree `src/ledger.rs`, then the flag is the wrong place to express it and
+the fix belongs in the caller or in the flag's meaning. This document does not decide that, and
+changing `is_directory` to make the test pass would be a scope decision made by a path check.
+
