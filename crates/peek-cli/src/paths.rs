@@ -44,6 +44,19 @@
 //!    are names. That trust is a real risk and is stated in the document, with the reason it is
 //!    acceptable here and would not be for a command that writes to the filesystem.
 //!
+//! # Containment is decided on components, never on a spelling
+//!
+//! On Windows `canonicalize` answers in the extended-length spelling, `\\?\C:\repo`, so a location
+//! the filesystem named and a root the caller spelled can be one directory and still fail a string
+//! comparison: `\\?\C:\repo` and `C:\repo` differ in their first component and in nothing else.
+//! `Path::starts_with` calls that a different directory, and the consequence is not a subtle one —
+//! **every path inside the repository is refused, and the message blames a symlink for it**, which
+//! is a second thing that is not true.
+//!
+//! So both comparisons go through [`is_under`], which compares components and reads a verbatim
+//! prefix as the bare prefix it stands for. Everything else about it is `Path::starts_with`, which
+//! is why on Unix — where a path has no prefix component at all — it cannot answer differently.
+//!
 //! # Why one function and not one per command
 //!
 //! The previous shape was `canonicalize()`, then canonicalize the parent, then give up with a
@@ -53,7 +66,7 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use peek_core::model::RepoPath;
 use peek_core::store::{RepoId, Store, StoreError, paths};
@@ -334,7 +347,7 @@ fn locate_within(root: &Path, given: &str) -> Result<Located, String> {
     // I/O — and, on Windows, a path on a share that is not answering is refused on the spelling
     // rather than by waiting for the network to say no.
     let spelled = normalise_lexically(&anchored);
-    if !spelled.starts_with(&base) {
+    if !is_under(&base, &spelled) {
         return Err(outside_the_repository(given, &spelled, &base));
     }
 
@@ -343,7 +356,16 @@ fn locate_within(root: &Path, given: &str) -> Result<Located, String> {
     // system would open. This can add a refusal; it cannot remove one, because the gate has
     // already refused everything the refinement would have let through.
     let location = resolve_location(&anchored);
-    if !location.starts_with(&base) {
+    // The root is compared in the spelling the same function gives it, for the same reason the
+    // comparison is component-wise: `canonicalize` answers in the extended-length form on Windows
+    // and expands a short name on the way to a directory, so a root the caller spelled and a
+    // location the filesystem named would be compared as two directories where there is one. Both
+    // sides now come from one function and cannot disagree about spelling.
+    //
+    // This removes refusals and never adds one: `anchored` was built by joining onto this same
+    // `base`, so the root's resolution and the path's resolution walk the same links.
+    let resolved_base = resolve_location(&base);
+    if !is_under(&resolved_base, &location) {
         return Err(format!(
             "{} is written as if it were inside the repository at {}, but it reaches {}, which is \
              outside the tree. A symlink inside the repository points out of it, and this command \
@@ -354,8 +376,8 @@ fn locate_within(root: &Path, given: &str) -> Result<Located, String> {
         ));
     }
 
-    let inside = match location.strip_prefix(&base) {
-        Ok(inside) => inside.to_path_buf(),
+    let inside = match strip_base(&resolved_base, &location) {
+        Ok(inside) => inside,
         // Unreachable: the line above is this test. Refused rather than asserted, because a panic
         // inside a containment check is a worse answer than a refusal, and a change of order must
         // not be able to produce one.
@@ -365,6 +387,92 @@ fn locate_within(root: &Path, given: &str) -> Result<Located, String> {
         is_directory: location.is_dir(),
         inside,
     })
+}
+
+/// Whether `path` names `base` itself or something under it, compared component by component.
+///
+/// **`path` has to begin with `base`**, which is the judgement `path.starts_with(base)` makes and
+/// which is stated here because getting the two the wrong way round refuses almost everything and
+/// looks, from the failure, like a containment bug in the caller rather than in the direction.
+///
+/// **This is that judgement with one exception, and the exception is the whole reason it exists.**
+/// On Windows `canonicalize` answers in the extended-length spelling, so the root `resolve_root`
+/// hands on is `\\?\C:\repo` while a path the user typed is `C:\repo`, and the two agree on every
+/// component except the first: `Prefix(VerbatimDisk(C))` against `Prefix(Disk(C))`. `starts_with`
+/// calls that a different directory, so the gate would refuse every path inside the repository —
+/// including one the user named with a full absolute path — and the refinement's message would say
+/// a symlink sent it out of the tree.
+///
+/// **It reads a spelling being different as a location being different.** Case is still exact, on
+/// purpose: `docs/path-trust.md` records refusing `C:\Repo` against a root of `C:\repo` as a false
+/// refusal it is choosing not to fix, and folding case here would quietly fix it in one direction
+/// only.
+fn is_under(base: &Path, path: &Path) -> bool {
+    let mut components = path.components();
+    for component in base.components() {
+        // `base` has a component `path` does not: `path` is shorter, so the base is not under it.
+        let Some(want) = components.next() else {
+            return false;
+        };
+        if !same_component(&want, &component) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The components of `path` that follow `base`, or `None` when `path` does not begin with it.
+///
+/// **The same walk as [`is_under`], written twice rather than derived from it.** A caller that
+/// accepts a path at the gate and then cannot strip the base from it has answered one question
+/// twice, and the second answer is the one that decides what the index holds. `Some` iff
+/// [`is_under`] is true; a test asserts the two agree on a case where they would otherwise differ.
+///
+/// `Some` an empty path when `path` *is* the base: there is nothing under the root, and letting
+/// that through to [`RepoPath::new`] is what turns `peek rm .` into a refusal that names why,
+/// rather than one that claims the root is somewhere else.
+fn strip_base(base: &Path, path: &Path) -> Option<PathBuf> {
+    let mut expected = base.components();
+    let mut inside: Vec<OsString> = Vec::new();
+    for component in path.components() {
+        match expected.next() {
+            Some(want) if same_component(&want, &component) => {}
+            // A component of `base` that `path` does not have: the two diverge here, so nothing
+            // after this point is under the base.
+            Some(_) => return None,
+            None => inside.push(component.as_os_str().to_os_string()),
+        }
+    }
+    // `path` ran out before `base` did. The base is longer than the path, so it is not under it
+    // and there is nothing to strip — the case `is_under` answers by the same walk.
+    if expected.next().is_some() {
+        return None;
+    }
+    Some(inside.into_iter().collect())
+}
+
+/// Whether two components of a path name the same thing.
+///
+/// **Equal, with the verbatim prefix excepted.** `\\?\C:\repo` and `C:\repo` are one directory in
+/// two spellings, and the prefix is the only part of the difference that carries no location. Every
+/// other prefix has to be equal on its own terms: a different drive designator is a different
+/// volume, a different share is a different share, and a disk prefix is never a share prefix
+/// however much alike the two spellings look.
+fn same_component(left: &Component<'_>, right: &Component<'_>) -> bool {
+    let (Component::Prefix(left), Component::Prefix(right)) = (left, right) else {
+        return left == right;
+    };
+    match (left.kind(), right.kind()) {
+        (Prefix::VerbatimDisk(disk), Prefix::Disk(other))
+        | (Prefix::Disk(disk), Prefix::VerbatimDisk(other)) => disk == other,
+        (Prefix::VerbatimUNC(server, share), Prefix::UNC(other_server, other_share)) => {
+            server == other_server && share == other_share
+        }
+        (Prefix::UNC(server, share), Prefix::VerbatimUNC(other_server, other_share)) => {
+            server == other_server && share == other_share
+        }
+        (left, right) => left == right,
+    }
 }
 
 /// Whether `text` is one of the Windows spellings whose meaning is relative to the current
@@ -550,7 +658,10 @@ pub fn open_store(location: &Location, command: &'static str) -> Result<Store, F
 
 #[cfg(test)]
 mod tests {
-    use super::{Relative, normalise_lexically, relative_to, resolve_root, windows_drive_relative};
+    use super::{
+        Relative, is_under, normalise_lexically, relative_to, resolve_root, strip_base,
+        windows_drive_relative,
+    };
     use crate::args::{self, Command};
     use crate::exit::{EXIT_USAGE, kind};
     use std::path::{Path, PathBuf};
@@ -875,6 +986,26 @@ mod tests {
         std::os::windows::fs::symlink_file(target, link).is_ok()
     }
 
+    /// Say on stderr that a symlink could not be created, so a caller can return rather than go on
+    /// to assert nothing.
+    ///
+    /// Windows grants symlink creation to an elevated process or one in Developer Mode, so a test
+    /// that needs a link can be *unrunnable* rather than failing, and `#[ignore]` cannot say which:
+    /// an ignored test is skipped on every platform, this one is skipped only where the platform
+    /// says no.
+    ///
+    /// **The quiet return is the failure this exists to prevent.** Every claim this module makes
+    /// about a symlink is a claim about containment, so a green run that never built a link reports
+    /// having checked something it did not, and nothing in the output says otherwise. The reason
+    /// goes to stderr, which the harness prints for a failing run and `--nocapture` always prints —
+    /// the same bar `peek-core`'s discovery tests set.
+    fn skipped_without_a_symlink() {
+        eprintln!(
+            "skipping: this environment cannot create symlinks, so the assertions below did not \
+             run (on Windows that needs Developer Mode or an elevated process)"
+        );
+    }
+
     #[test]
     fn a_symlink_pointing_outside_the_repository_is_outside_it() {
         // Canonicalisation runs before the containment test, so a link out of the tree is caught.
@@ -887,14 +1018,12 @@ mod tests {
         let file = elsewhere.join("a.rs");
         std::fs::write(&file, "fn a() {}\n").expect("write");
         let link = root.join("link.rs");
-        if make_symlink(&file, &link) {
-            let error =
-                relative_to(&root, link.to_str().expect("utf-8"), "rm").expect_err("refused");
-            assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
-        } else {
-            // Neither platform will let this process make a symlink, so there is nothing to
-            // assert; the canonicalisation itself is covered by the spelling test above.
+        if !make_symlink(&file, &link) {
+            skipped_without_a_symlink();
+            return;
         }
+        let error = relative_to(&root, link.to_str().expect("utf-8"), "rm").expect_err("refused");
+        assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
     }
 
     #[test]
@@ -1073,22 +1202,21 @@ mod tests {
         let elsewhere = temp("trust-link-target");
         let _other = Cleanup(elsewhere.clone());
         let link = root.join("link");
-        if make_directory_symlink(&elsewhere, &link) {
-            let escaped = root.join("link/gone.rs");
-            let error = relative_to(&root, escaped.to_str().expect("utf-8"), "rm")
-                .expect_err("a path through a symlink out of the tree is refused");
-            assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
-            let target = elsewhere.canonicalize().expect("canonicalise");
-            assert!(
-                error
-                    .refusal
-                    .message
-                    .contains(&target.display().to_string()),
-                "the refusal must name where the link actually goes, since no component of the \
-                 spelling does: {}",
-                error.refusal.message
-            );
+        if !make_directory_symlink(&elsewhere, &link) {
+            skipped_without_a_symlink();
+            return;
         }
+        let escaped = root.join("link/gone.rs");
+        let error = relative_to(&root, escaped.to_str().expect("utf-8"), "rm")
+            .expect_err("a path through a symlink out of the tree is refused");
+        assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
+        let target = elsewhere.canonicalize().expect("canonicalise");
+        assert!(
+            error.refusal.message.contains(&target.display().to_string()),
+            "the refusal must name where the link actually goes, since no component of the \
+             spelling does: {}",
+            error.refusal.message
+        );
     }
 
     #[test]
@@ -1103,18 +1231,20 @@ mod tests {
         let elsewhere = temp("trust-link-whole-target");
         let _other = Cleanup(elsewhere.clone());
         let link = root.join("link");
-        if make_directory_symlink(&elsewhere, &link) {
-            let file = link.join("a.rs");
-            std::fs::write(&file, "fn a() {}\n").expect("write");
-            let error = relative_to(&root, file.to_str().expect("utf-8"), "rm")
-                .expect_err("a path through a symlink out of the tree is refused");
-            assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
-            assert!(
-                error.refusal.message.contains(&root.display().to_string()),
-                "the refusal must name the repository as well as the link: {}",
-                error.refusal.message
-            );
+        if !make_directory_symlink(&elsewhere, &link) {
+            skipped_without_a_symlink();
+            return;
         }
+        let file = link.join("a.rs");
+        std::fs::write(&file, "fn a() {}\n").expect("write");
+        let error = relative_to(&root, file.to_str().expect("utf-8"), "rm")
+            .expect_err("a path through a symlink out of the tree is refused");
+        assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
+        assert!(
+            error.refusal.message.contains(&root.display().to_string()),
+            "the refusal must name the repository as well as the link: {}",
+            error.refusal.message
+        );
     }
 
     #[test]
@@ -1127,16 +1257,18 @@ mod tests {
         let _guard = Cleanup(root.clone());
         std::fs::create_dir_all(root.join("real")).expect("create the directory the link names");
         let link = root.join("alias");
-        if make_directory_symlink(&root.join("real"), &link) {
-            let found = relative_to(&root, "alias/gone.rs", "rm")
-                .expect("a link that stays inside the root is a path inside the root");
-            assert_eq!(
-                found.path.as_str(),
-                "real/gone.rs",
-                "the answer is the location, not the spelling: a link and its target are one \
-                 directory, and the index holds it under the one the walk found"
-            );
+        if !make_directory_symlink(&root.join("real"), &link) {
+            skipped_without_a_symlink();
+            return;
         }
+        let found = relative_to(&root, "alias/gone.rs", "rm")
+            .expect("a link that stays inside the root is a path inside the root");
+        assert_eq!(
+            found.path.as_str(),
+            "real/gone.rs",
+            "the answer is the location, not the spelling: a link and its target are one \
+             directory, and the index holds it under the one the walk found"
+        );
     }
 
     #[test]
@@ -1154,17 +1286,19 @@ mod tests {
         std::fs::create_dir_all(root.join("real")).expect("create the directory the link names");
         std::fs::write(root.join("a.rs"), "fn a() {}\n").expect("write");
         let link = root.join("src/link");
-        if make_directory_symlink(&root.join("real"), &link) {
-            let spelling = root.join("src/link/../a.rs");
-            let found = relative_to(&root, spelling.to_str().expect("utf-8"), "rm")
-                .expect("the climb stays inside the root");
-            assert_eq!(
-                found.path.as_str(),
-                "a.rs",
-                "the filesystem resolves the link before the `..`, so this is the file it would \
-                 open and the only one the index can hold rows for"
-            );
+        if !make_directory_symlink(&root.join("real"), &link) {
+            skipped_without_a_symlink();
+            return;
         }
+        let spelling = root.join("src/link/../a.rs");
+        let found = relative_to(&root, spelling.to_str().expect("utf-8"), "rm")
+            .expect("the climb stays inside the root");
+        assert_eq!(
+            found.path.as_str(),
+            "a.rs",
+            "the filesystem resolves the link before the `..`, so this is the file it would \
+             open and the only one the index can hold rows for"
+        );
     }
 
     #[test]
@@ -1286,6 +1420,107 @@ mod tests {
         assert_eq!(normalise_lexically(Path::new(".")), PathBuf::from(""));
         let root = PathBuf::from(std::path::MAIN_SEPARATOR_STR);
         assert_eq!(normalise_lexically(&root.join("a/../..")), root);
+    }
+
+    #[test]
+    fn containment_is_decided_on_components_rather_than_on_a_spelling() {
+        // The judgement every answer in this module rests on, exercised on the platform's own
+        // spelling of one directory. On Windows `canonicalize` answers `\\?\C:\repo` where the
+        // caller spelled `C:\repo`, so the two spellings are the ordinary state of affairs there
+        // rather than an edge case, and a string comparison refuses every path inside the
+        // repository in exchange — with a message that blames a symlink for it.
+        //
+        // **The verbatim half cannot be reached on a host whose paths carry no prefix**, because
+        // `canonicalize` hands back the one spelling on both sides and the comparison is never
+        // asked about two. So on Unix this asserts that the walk agrees with `Path::starts_with`,
+        // and the Windows spelling is covered by the tests above that go through `relative_to`: a
+        // helper that is only testable on one platform is not a test.
+        //
+        // Nothing here touches the disk beyond creating the fixture. Both functions are judgements
+        // about two spellings, and a test that needs them to exist is testing the filesystem.
+        let directory = temp("under");
+        let _guard = Cleanup(directory.clone());
+        std::fs::create_dir_all(directory.join("src")).expect("create src");
+        let canonical = directory.canonicalize().expect("canonicalise");
+        let inside = canonical.join("src/a.rs");
+        let above = canonical.parent().expect("a temp directory has a parent");
+        // `/x/repo` and `/x/repo-old`, which is the shape the gate exists to refuse.
+        let repo = above.join("repo");
+        let repo_old = above.join("repo-old/a.rs");
+
+        // **The one the defect turned on**: a location the filesystem named against a root the
+        // caller spelled, which is one directory in two spellings.
+        assert!(
+            is_under(&directory, &inside),
+            "a location and a root that name one directory in two spellings are still one \
+             directory, not two: {} and {}",
+            directory.display(),
+            inside.display()
+        );
+        assert_eq!(
+            strip_base(&directory, &inside),
+            Some(PathBuf::from("src").join("a.rs")),
+            "and stripping the spelled base from the named location has to leave the same path \
+             the index holds"
+        );
+
+        assert!(
+            is_under(&canonical, &canonical),
+            "the root is under itself, and there is nothing under it"
+        );
+        assert_eq!(
+            strip_base(&canonical, &canonical),
+            Some(PathBuf::new()),
+            "there is nothing under the root, and that has to be an answer rather than a panic"
+        );
+        assert!(
+            is_under(&above, &canonical),
+            "the root is under its parent, which is the other direction and has to stay allowed"
+        );
+        assert!(
+            !is_under(&canonical, &above),
+            "a parent is not inside the tree it contains"
+        );
+        assert_eq!(
+            strip_base(&canonical, &above),
+            None,
+            "and a path shorter than the base is not under it either, so the two cannot disagree"
+        );
+        assert!(
+            !is_under(&repo, &repo_old),
+            "a shared name prefix is not containment, which is the whole reason the gate compares \
+             components"
+        );
+        assert_eq!(
+            strip_base(&repo, &repo_old),
+            None,
+            "the strip and the test have to answer alike, or the two disagree about what is inside"
+        );
+    }
+
+    #[test]
+    fn the_root_the_resolver_hands_on_answers_for_a_path_the_user_typed_in_full() {
+        // The production shape, which no other test here had: a root that has been through
+        // `resolve_root`, and so carries the filesystem's own spelling of itself, asked about
+        // a path written out in full. On Windows those are one directory and two strings — the
+        // resolved root is `\\?\C:\repo` where the user wrote `C:\repo` — and comparing them as
+        // strings refuses a path that is inside the repository and names a symlink as the reason.
+        // Both spellings are asserted because both are command lines someone can run, and they
+        // name one file.
+        let directory = temp("resolved-root");
+        let _guard = Cleanup(directory.clone());
+        std::fs::create_dir_all(directory.join("src")).expect("create src");
+        let file = directory.join("src/a.rs");
+        std::fs::write(&file, "fn a() {}\n").expect("write");
+        let root = resolve_root(&directory, "status").expect("resolve the root");
+
+        let relative = relative_to(&root, "src/a.rs", "rm")
+            .expect("a relative path inside a resolved root");
+        assert_eq!(relative.path.as_str(), "src/a.rs");
+
+        let absolute = relative_to(&root, file.to_str().expect("utf-8"), "rm")
+            .expect("an absolute path inside a resolved root, spelled the way it was typed");
+        assert_eq!(absolute.path.as_str(), "src/a.rs");
     }
 
     #[test]
