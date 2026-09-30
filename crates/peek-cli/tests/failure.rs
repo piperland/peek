@@ -166,7 +166,14 @@ fn a_command_line_that_was_not_understood_carries_the_reason_as_its_answer() {
 fn a_refusal_carries_the_reason_as_its_answer() {
     // Exit 3, and the case the finding was reported on: a budget too small to hold the report that
     // would say what was dropped. The floor travels with it, so one round trip is enough.
+    //
+    // **The repository is indexed first, and that is load-bearing.** `peek context` opens the store
+    // before it looks at the budget, so a repository that was never indexed refuses with
+    // `no_index` and the budget is never reached — the sibling test below is exactly that case, on
+    // its own fixture because the process-global index root means one repository at a time. This
+    // test is about the *budget* refusal, so it has to give the command an index to refuse against.
     let repository = Repository::small("failure-refused");
+    run(&repository, &["index", repository.root_str()]);
     let root = repository.root_str();
     let argv = ["context", "wallet_charge", "--budget", "1", "--root", root];
     let output = run(&repository, &argv).output;
@@ -339,8 +346,15 @@ fn a_command_that_declined_reached_no_repository() {
         declined.root.is_empty(),
         "a decline names a tree it never read"
     );
+    // **The negation that was here asserted the opposite of the message above it**, and so of the
+    // behaviour `declined` documents: "`root` and `index_path` are empty and `index_existed` is
+    // `false` — a command that declined did not read a tree, and naming the one it was pointed at
+    // would be the same defect as naming an answer it never produced". A decline reached no
+    // repository, so it names no repository *and* no index; the two fields are the same claim and
+    // are held to it together. Asserting the index path was non-empty would have required the
+    // defect this file exists to prevent.
     assert!(
-        !declined.index_path.is_empty(),
+        declined.index_path.is_empty(),
         "a decline names an index it never read"
     );
     assert_eq!(

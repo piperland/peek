@@ -157,17 +157,38 @@ fn a_path_outside_the_repository_is_counted_separately() {
     run_watch_setup(&repository);
     let mut store = open_store(&repository);
 
+    // **The outside path is spelled absolutely, and it is outside rather than climbing out.**
+    //
+    // `plan_batch` decides containment with `Path::starts_with`, which is component-wise, so
+    // `<root>/../escape.rs` *is* under `<root>` by that test and is planned for re-indexing. The
+    // earlier spelling of this test built its escape with exactly that `..` and was asserting a
+    // count the planner never makes: the path reached `refresh`, which refused it and counted it
+    // under `skipped_by_reason` as "outside the repository root". The two facts are both true and
+    // they are different facts, and only one of them is this test's.
+    //
+    // A sibling under the fixture's own base is outside in the sense the planner measures, and is
+    // the shape the real watcher produces for a misconfigured watch: a symlink target or a second
+    // repository. The watcher subscribes to `root` recursively, so the OS cannot hand it a `..`.
+    let outside = repository.sibling("elsewhere").join("escape.rs");
+    let outside = outside.to_str().expect("a temporary path is UTF-8");
     let mut session = Session::new();
     session.apply(
         &mut store,
         repository.root(),
-        batch(repository.root(), &["../escape.rs", "src/ledger.rs"]),
+        batch(repository.root(), &[outside, "src/ledger.rs"]),
         &DiscoveryOptions::default(),
     );
     assert_eq!(session.outside_root, 1, "{session:?}");
     assert_eq!(
         session.paths_reindexed, 1,
         "the path outside the root must not have been re-indexed"
+    );
+    // And it was counted as a misconfiguration rather than as a decline, which is the distinction
+    // the count exists for: a `.rs` file outside the root is not a file type this build declined.
+    assert!(
+        session.skipped_by_reason.is_empty(),
+        "an outside path is not also a refused file: {:?}",
+        session.skipped_by_reason
     );
 }
 

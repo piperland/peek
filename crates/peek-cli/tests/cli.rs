@@ -1167,10 +1167,15 @@ fn rm_removes_a_files_rows_and_leaves_the_file_on_disk() {
 fn rm_on_a_subtree_removes_everything_at_or_below_it_and_says_so() {
     let repository = Repository::small("rm-subtree");
     run(&repository, &["index", repository.root_str()]);
-    let outcome = run(
-        &repository,
-        &["rm", "src/ledger", "--root", repository.root_str()],
-    );
+    // **`src`, and not `src/ledger`.** The fixture's directory is `src`; the only thing it holds
+    // that is called `ledger` is the *file* `src/ledger.rs`, so `src/ledger` names nothing at all.
+    // `RemoveAnswer::scope` is "decided by whether a directory is there now" and the command
+    // documents the same rule ("A path that names a directory removes the subtree; anything else
+    // removes exactly that file"), so a path with no directory under it is correctly a `file` scope
+    // covering zero indexed rows. The earlier spelling of this test asserted `subtree` for a path
+    // its own fixture did not contain, and was failing on correct behaviour. Naming the real
+    // directory keeps every assertion below exactly as strong.
+    let outcome = run(&repository, &["rm", "src", "--root", repository.root_str()]);
     match &outcome.output.answer {
         Answer::Remove(answer) => {
             assert_eq!(answer.scope, "subtree");

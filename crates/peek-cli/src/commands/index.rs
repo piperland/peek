@@ -87,12 +87,20 @@ pub fn run(
         }
     }
 
+    // **Every narration line names the tree it is working on.** `index` takes the repository as a
+    // positional that defaults to `.`, so it is the command where a reader is least likely to know
+    // which checkout a long build is chewing through, and it is the slowest one. `peek watch` has
+    // always named its root here; this is the same line of narration and the same reader.
+    //
     // Cold is "nothing has ever been committed", which the generation answers exactly.
     let cold = store.generation() == 0;
     let options = DiscoveryOptions::default();
 
     let (mode, outcome) = if cold {
-        progress.note("no generation has been committed here; building the index".to_owned());
+        progress.note(format!(
+            "building the index at {}: no generation has been committed there",
+            location.root_text()
+        ));
         let outcome =
             indexer::build_full(&mut store, &location.root, options).map_err(|error| {
                 Failure::failed(
@@ -108,8 +116,9 @@ pub fn run(
         let (batch, stale) = refresh_batch(&location.root, &store, command)?;
         stale_paths_removed = stale;
         progress.note(format!(
-            "refreshing {} path(s), {} of which are no longer on disk",
+            "refreshing {} path(s) at {}, {} of which are no longer on disk",
             batch.len(),
+            location.root_text(),
             stale_paths_removed
         ));
         let outcome =

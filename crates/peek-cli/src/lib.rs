@@ -68,7 +68,7 @@
 //! };
 //! let mut progress = Silent;
 //! match run(&invocation, &mut progress) {
-//!     Ok(output) => println!("{}", crate::render(&output, &Mode::json())),
+//!     Ok(output) => println!("{}", peek_cli::render(&output, &Mode::json())),
 //!     Err(failure) => eprintln!("{}", failure.render()),
 //! }
 //! # }

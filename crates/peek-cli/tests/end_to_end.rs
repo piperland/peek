@@ -717,8 +717,13 @@ fn every_command_states_what_it_could_not_do() {
             "ambiguous or unresolved edge",
         ),
         (vec!["callees", "wallet_charge"], "structural edges"),
+        // `--depth 0` explicitly, and that is the whole point of the case. The depth-0 rule is a
+        // statement about a walk that returns *nothing*, so it is the only depth at which a reader
+        // needs it: `dependents` defaults to one hop, and at one hop the answer has results and the
+        // sentence would be noise. Naming the default depth here made the case assert a sentence its
+        // own command line cannot produce.
         (
-            vec!["dependents", "wallet_charge"],
+            vec!["dependents", "wallet_charge", "--depth", "0"],
             "a depth of 0 returns nothing",
         ),
         (
