@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::{Check, Diagnosis, Severity, diagnose, refusal_reasons};
+use super::{Check, Diagnosis, Severity, diagnose, diagnose_at, diagnose_open, refusal_reasons};
 use crate::discover::DiscoveryOptions;
 use crate::indexer;
 use crate::model::{Entity, EntityId, EntityKind, Relation, RelationKind, RepoPath, Span};
@@ -80,6 +80,12 @@ impl Install {
     /// invisible, because SQLite reads the log. Three of these tests were silently proving
     /// nothing for exactly that reason, which is the failure mode this project keeps running
     /// into: a test that cannot fail is worse than no test.
+    ///
+    /// The rule this encodes: **a test that grades on what the store contains settles; a test
+    /// that damages the database file does not**, because a checkpoint would fold the log into
+    /// the file and quietly repair it. Whether the log has been folded in at the moment of the
+    /// diagnosis is not a test's to depend on — it is a function of when the last connection to
+    /// that file happened to close, and that is not the same on every platform.
     fn settle(&self) {
         let repo = RepoId::discover(self.path()).expect("derive a repository id");
         if let Ok(store) = Store::open(&self.database(), &repo) {
@@ -87,18 +93,25 @@ impl Install {
         }
     }
 
-    /// A diagnosis with the index directory this install owns.
+    /// A diagnosis of the index this install owns.
     ///
-    /// The override is what makes the index location deterministic; without it `doctor` would
-    /// resolve to the real per-user cache, and a test that broke an index would break the
-    /// developer's actual one.
+    /// Names the file through [`diagnose_at`] rather than letting [`diagnose`] resolve it from
+    /// [`paths::set_root_override`]. That override is a `static`, and this helper used to set it
+    /// on every call, so every test in this binary was racing every other one for it — and the
+    /// loser was not the test that set it, it was whichever test resolved the root next. That one
+    /// got a **freshly created** index: a one-page database file and a log holding its entire
+    /// schema, which reports itself as an empty install.
     ///
-    /// Deliberately does **not** settle first. A checkpoint folds the log into the database, which
-    /// would *repair* a database file a test had just damaged — and a test that quietly undoes its
-    /// own damage is worse than no test. Tests that want a settled index ask for one.
+    /// Naming the file makes the store a test breaks and the store a check reads the same store by
+    /// construction. The one test that means to exercise root resolution still calls [`diagnose`],
+    /// and it holds the lock.
+    ///
+    /// Deliberately does **not** settle first, for the reason on [`Install::settle`]: a checkpoint
+    /// would fold the log into a database file a test had just damaged, and a test that quietly
+    /// undoes its own damage is worse than no test. Tests that want a settled index ask for one.
     fn diagnose(&self) -> Diagnosis {
-        paths::set_root_override(Some(self.index.clone()));
-        diagnose(self.path())
+        let repo = RepoId::discover(self.path()).expect("derive a repository id");
+        diagnose_at(self.path(), &self.database(), &repo)
     }
 
     /// Settle the index and then diagnose it, which is what a real caller does.
@@ -116,16 +129,60 @@ impl Install {
 
 impl Drop for Install {
     fn drop(&mut self) {
-        paths::set_root_override(None);
+        // Deliberately does not touch `paths::set_root_override`. Clearing a process-wide `static`
+        // from a `Drop` is the same hazard the helper above stopped having: whichever install is
+        // torn down last would clear the override a test that is still running depends on. The two
+        // tests that need the override hold [`with_root`]'s lock for as long as they use it.
         if let Some(parent) = self.index.parent() {
             let _ = fs::remove_dir_all(parent);
         }
     }
 }
 
+/// Serialises every use of the process-wide index-root override.
+///
+/// The override is a `static`, so an unsynchronised `set_root_override` is a race between tests
+/// rather than between a test and the store. `peek-cli`'s test fixture takes the same lock for the
+/// same reason, and for the same reason it is reentrant there and is not here: the only two tests
+/// in this file that need it need it once each, so a plain mutex cannot deadlock.
+static OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Run `body` with the engine pointed at `root`, holding the lock for the whole of it.
+///
+/// For the tests that mean to exercise root resolution. A test that already knows which file it
+/// wants should open that file — see `Install::diagnose`.
+///
+/// Scoped rather than returned as a guard because a guard would be a struct whose only field
+/// nothing reads, and this codebase suppresses no lints. The shape is the one `store::paths`'
+/// own tests use for the same job on the environment variable.
+fn with_root<T>(root: PathBuf, body: impl FnOnce() -> T) -> T {
+    let guard = OVERRIDE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    paths::set_root_override(Some(root));
+    let outcome = body();
+    paths::set_root_override(None);
+    drop(guard);
+    outcome
+}
+
 /// The findings of one check, so an assertion reads as a claim about that check alone.
 fn findings_of(diagnosis: &Diagnosis, check: Check) -> Vec<&super::Finding> {
     diagnosis.check(check)
+}
+
+/// The severity of the single finding one check produced.
+fn severity_of(diagnosis: &Diagnosis, check: Check) -> Severity {
+    let found = findings_of(diagnosis, check);
+    assert_eq!(found.len(), 1, "{check:?} produced {found:?}");
+    found[0].severity
+}
+
+/// The measurements a diagnosis of an openable index carries.
+fn measurements(diagnosis: &Diagnosis) -> crate::store::StoreStats {
+    diagnosis
+        .stats
+        .expect("an index that opened has measurements to report")
 }
 
 fn span() -> Span {
@@ -394,7 +451,15 @@ fn an_index_holding_rows_with_no_generation_is_reported_as_impossible() {
     drop(connection);
     drop(store);
 
-    let diagnosis = install.diagnose();
+    // Settled before diagnosing, and that is the whole point of this change. The row was written
+    // behind the store's back, so the check is only meaningful if the fact is in the database
+    // file the checks read and not only in frames the log has not given up. On an index this
+    // small everything written is in the log, and whether the log has been folded in by the time
+    // the diagnosis runs depends on when the last connection to the file happened to close —
+    // which is not the same on every platform. Its sibling, the test that also breaks the index
+    // behind the store's back, settles; this one did not, and so it was grading on a fact that
+    // was in the log rather than in the store.
+    let diagnosis = install.settled_diagnosis();
     let generation = findings_of(&diagnosis, Check::Generation);
     assert_eq!(generation.len(), 1, "{generation:?}");
     assert_eq!(
@@ -403,6 +468,145 @@ fn an_index_holding_rows_with_no_generation_is_reported_as_impossible() {
         "rows with no generation cannot have come from the write path: {}",
         diagnosis.report()
     );
+}
+
+#[test]
+fn a_diagnosis_is_of_the_index_this_install_built_and_not_of_wherever_the_root_points() {
+    // `set_root_override` is a `static`. A fixture that resolves its index through it is not
+    // testing its index, it is testing whichever of the tests running beside it resolved the root
+    // most recently — and when that is a root nobody has written to, `Store::open` *creates* an
+    // index there. A freshly created index is a one-page database file with a log holding its
+    // whole schema, and it reports itself as an empty install. That is the shape of the numbers a
+    // diagnosis of the wrong file produces, and it is why this asserts on rows and a generation
+    // rather than on the path: two independently computed spellings of a path can agree while the
+    // files they name are not the same, and on Linux a temporary directory and its canonical form
+    // are the same string, so a comparison between them proves nothing.
+    let install = Install::empty("own-index");
+    install.write("src/lib.rs", "fn a() {}\nfn main() { a(); }\n");
+    indexer::build_full(
+        &mut install.store(),
+        install.path(),
+        DiscoveryOptions::default(),
+    )
+    .expect("index the repository");
+
+    // Somewhere else entirely, pointed at deliberately rather than raced for.
+    let decoy = Install::empty("decoy");
+    let repo = RepoId::discover(install.path()).expect("derive a repository id");
+    with_root(decoy.index.clone(), || {
+        let diagnosis = install.diagnose();
+        let stats = measurements(&diagnosis);
+        assert!(
+            stats.entity_count > 0 && stats.generation > 0,
+            "the diagnosis must be of the index this test built; a freshly created one has \
+             generation 0 and no rows, which reports itself as an empty install: {}",
+            diagnosis.report()
+        );
+
+        // The direct evidence, and the assertion that would have caught it: the diagnosis created
+        // no index anywhere the process-wide root happened to point.
+        assert!(
+            !decoy.index.join(repo.as_str()).join("index.db").exists(),
+            "diagnosing must not open, and therefore create, an index at whatever the root points \
+             at; it read the store it was handed"
+        );
+    });
+}
+
+#[test]
+fn an_uncheckpointed_log_is_a_notice_and_a_checkpointed_one_is_a_pass() {
+    // The measurement, in the shape of a test.
+    //
+    // Both diagnoses below are of one store holding one set of rows at one generation. The only
+    // thing that differs is whether a checkpoint has folded the log into the file, and the only
+    // measurement that moves is the database file's size — because TRUNCATE is what grows it.
+    // That is the whole separation: if the log check's verdict follows the store, it cannot change
+    // here; if it follows the file size, it does.
+    //
+    // It used to follow the file size. `wal * 2 > file_size` is true for every store between
+    // creation and its first checkpoint, because until then the file holds one page and the log
+    // holds everything — which is a description of a healthy store, graded as a warning. The old
+    // verdict is not asserted anywhere here on purpose: a test that pins an arbitrary threshold
+    // is what keeps an arbitrary threshold alive.
+    let install = Install::empty("wal-frames");
+    install.write("src/lib.rs", "fn a() {}\nfn main() { a(); }\n");
+    let mut store = install.store();
+    indexer::build_full(&mut store, install.path(), DiscoveryOptions::default())
+        .expect("index the repository");
+
+    // `store` stays open, so nothing has folded the log into the file: everything written since
+    // the index was created is still in frames.
+    let waiting = install.diagnose();
+    let waiting_stats = measurements(&waiting);
+    assert!(
+        waiting_stats.wal_size_bytes > 0,
+        "the premise of this state, asserted rather than assumed: a build that has not been \
+         checkpointed leaves frames in the log, and {} bytes is what it left",
+        waiting_stats.wal_size_bytes
+    );
+
+    // Now the only thing that changes is the checkpoint, on the same connection, with the same
+    // rows underneath.
+    store.checkpoint().expect("fold the build into the file");
+    let settled = install.diagnose();
+    let settled_stats = measurements(&settled);
+
+    // The store is identical across the two diagnoses. Asserted, because it is the claim the rest
+    // of this test rests on: if the rows had moved, the comparison below would prove nothing.
+    assert_eq!(waiting_stats.entity_count, settled_stats.entity_count);
+    assert_eq!(waiting_stats.relation_count, settled_stats.relation_count);
+    assert_eq!(waiting_stats.generation, settled_stats.generation);
+    assert_eq!(waiting_stats.schema_version, settled_stats.schema_version);
+    assert_eq!(waiting_stats.orphan_relations, settled_stats.orphan_relations);
+
+    // The measurements that moved, and the one the old rule graded on.
+    assert_eq!(settled_stats.wal_size_bytes, 0, "TRUNCATE empties the log");
+    assert!(
+        settled_stats.file_size_bytes > waiting_stats.file_size_bytes,
+        "the checkpoint is what grew the database file: {} bytes became {}, so the file size \
+         measures checkpointing rather than the index",
+        waiting_stats.file_size_bytes, settled_stats.file_size_bytes
+    );
+
+    assert_eq!(
+        severity_of(&settled, Check::WalSize),
+        Severity::Pass,
+        "nothing waiting to be folded in: {}",
+        settled.report()
+    );
+    assert_eq!(
+        severity_of(&waiting, Check::WalSize),
+        Severity::Notice,
+        "frames waiting is work in the log, not a fault in the index: {}",
+        waiting.report()
+    );
+
+    let notice = findings_of(&waiting, Check::WalSize);
+    assert!(
+        notice[0].action.is_some(),
+        "a finding a reader cannot act on is a finding they will not act on: {:?}",
+        notice[0]
+    );
+    let graded_on = waiting_stats.wal_size_bytes.to_string();
+    assert!(
+        notice[0].summary.contains(&graded_on),
+        "the finding must carry the measurement it was graded on: {:?}",
+        notice[0]
+    );
+    assert!(
+        waiting.is_healthy(),
+        "a working index with committed frames in its log is a working index: {}",
+        waiting.report()
+    );
+    // Nothing else may have moved, or the comparison above is not measuring what it claims.
+    for check in [Check::Integrity, Check::Generation, Check::IndexLocation] {
+        assert_eq!(
+            severity_of(&waiting, check),
+            Severity::Pass,
+            "{check:?} moved between two diagnoses of one store: {}",
+            waiting.report()
+        );
+    }
 }
 
 #[test]
@@ -600,10 +804,11 @@ fn an_index_inside_the_repository_is_a_warning_with_a_way_out() {
     let mut store = Store::open(&inside.join("index.db"), &repo).expect("open the in-repo store");
     indexer::build_full(&mut store, install.path(), DiscoveryOptions::default())
         .expect("index into the repository");
-    drop(store);
-
-    paths::set_root_override(Some(inside.clone()));
-    let diagnosis = diagnose(install.path());
+    // Diagnosed while `store` is still open, and without the root override: this test is about
+    // where the index lives, which `check_index_location` reads off the store it was handed. The
+    // location is a property of the file, so the file is named here rather than resolved through
+    // a process-wide the test would then have to hold a lock for.
+    let diagnosis = diagnose_open(&store, install.path(), &repo);
     let location = findings_of(&diagnosis, Check::IndexLocation);
     assert_eq!(location.len(), 1, "{location:?}");
     assert_eq!(
@@ -627,8 +832,7 @@ fn a_weaker_durability_is_reported_as_a_warning() {
     let store = Store::open_with(&install.database(), &repo, Durability::Normal)
         .expect("open with a weaker guarantee");
 
-    paths::set_root_override(Some(install.index.clone()));
-    let diagnosis = super::diagnose_open(&store, install.path(), &repo);
+    let diagnosis = diagnose_open(&store, install.path(), &repo);
     let durability = findings_of(&diagnosis, Check::Durability);
     assert_eq!(durability.len(), 1, "{durability:?}");
     assert_eq!(durability[0].severity, Severity::Warn);
@@ -646,8 +850,10 @@ fn a_missing_repository_is_reported_as_a_failure_rather_than_an_empty_install() 
     // would convert a mistake into a clean bill of health.
     let install = Install::empty("missing-root");
     let missing = install.path().join("does-not-exist");
-    paths::set_root_override(Some(install.index.clone()));
-    let diagnosis = diagnose(&missing);
+    // One of the two tests that mean to exercise root resolution, and so one of the two that hold
+    // the override rather than naming the store. There is no store to name here: the path under
+    // test is the one that does not exist.
+    let diagnosis = with_root(install.index.clone(), || diagnose(&missing));
 
     assert!(!diagnosis.is_healthy(), "{}", diagnosis.report());
     let openable = findings_of(&diagnosis, Check::IndexOpenable);

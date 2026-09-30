@@ -263,20 +263,25 @@ impl Diagnosis {
 pub fn diagnose(root: &Path) -> Diagnosis {
     match open_for_diagnosis(root) {
         Ok((store, repo)) => diagnose_open(&store, root, &repo),
-        Err(error) => Diagnosis {
-            findings: vec![Finding::problem(
-                Check::IndexOpenable,
-                Severity::Fail,
-                "the index could not be opened",
-                format!("{error}"),
-                Some(
-                    "if the index is from an older or newer Peek, delete it and re-index; the \
-                     source is the only thing that cannot be rebuilt"
-                        .to_owned(),
-                ),
-            )],
-            stats: None,
-        },
+        Err(error) => not_an_index(error),
+    }
+}
+
+/// Diagnose the index at `path`, rather than at the one [`diagnose`] resolves.
+///
+/// The same checks, for a caller that already knows which file it means. Resolving a path a second
+/// time is only sound when the resolver is the same one that produced the path, and a caller that
+/// built or broke the file itself has no way to check that: the file it is working on and the file
+/// a check reads are then two different files, and every finding is about an index nobody is
+/// looking at. A test that breaks one specific index is the caller this exists for.
+///
+/// The unopenable case is part of the contract rather than an inconvenience, and it is why this is
+/// not `diagnose_open`: a path this caller named is still the path that has to be reported as not
+/// being an index, which needs the same finding [`diagnose`] reports when resolution itself fails.
+pub fn diagnose_at(root: &Path, path: &Path, repo: &crate::store::RepoId) -> Diagnosis {
+    match Store::open(path, repo) {
+        Ok(store) => diagnose_open(&store, root, repo),
+        Err(error) => not_an_index(error),
     }
 }
 
@@ -286,6 +291,29 @@ fn open_for_diagnosis(root: &Path) -> Result<(Store, crate::store::RepoId), Stor
     let path = paths::index_path(&repo)?;
     let store = Store::open(&path, &repo)?;
     Ok((store, repo))
+}
+
+/// The one diagnosis there is for an index that could not be opened.
+///
+/// Shared rather than written twice so that [`diagnose`] and [`diagnose_at`] cannot drift into
+/// disagreeing about what an unopenable index looks like — which would be a diagnostic with two
+/// answers to the same question, and the one that reports the milder answer is the one that gets
+/// read.
+fn not_an_index(error: StoreError) -> Diagnosis {
+    Diagnosis {
+        findings: vec![Finding::problem(
+            Check::IndexOpenable,
+            Severity::Fail,
+            "the index could not be opened",
+            format!("{error}"),
+            Some(
+                "if the index is from an older or newer Peek, delete it and re-index; the \
+                 source is the only thing that cannot be rebuilt"
+                    .to_owned(),
+            ),
+        )],
+        stats: None,
+    }
 }
 
 /// Diagnose an already-open store. Separate from [`diagnose`] so a caller that has a store — a
