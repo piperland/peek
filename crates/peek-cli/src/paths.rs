@@ -376,12 +376,12 @@ fn locate_within(root: &Path, given: &str) -> Result<Located, String> {
         ));
     }
 
-    let inside = match strip_base(&resolved_base, &location) {
-        Ok(inside) => inside,
-        // Unreachable: the line above is this test. Refused rather than asserted, because a panic
-        // inside a containment check is a worse answer than a refusal, and a change of order must
-        // not be able to produce one.
-        Err(_) => return Err(outside_the_repository(given, &spelled, &base)),
+    // `strip_base` answers an `Option` because that is exactly what it has: either the base was a
+    // prefix of the location and the remainder is the answer, or it was not and there is nothing to
+    // say. The line above already refused a location that is not under the base, so the `None` here
+    // is unreachable by construction rather than by assertion.
+    let Some(inside) = strip_base(&resolved_base, &location) else {
+        return Err(outside_the_repository(given, &spelled, &base));
     };
     Ok(Located {
         is_directory: location.is_dir(),
@@ -1212,7 +1212,10 @@ mod tests {
         assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
         let target = elsewhere.canonicalize().expect("canonicalise");
         assert!(
-            error.refusal.message.contains(&target.display().to_string()),
+            error
+                .refusal
+                .message
+                .contains(&target.display().to_string()),
             "the refusal must name where the link actually goes, since no component of the \
              spelling does: {}",
             error.refusal.message
@@ -1514,8 +1517,8 @@ mod tests {
         std::fs::write(&file, "fn a() {}\n").expect("write");
         let root = resolve_root(&directory, "status").expect("resolve the root");
 
-        let relative = relative_to(&root, "src/a.rs", "rm")
-            .expect("a relative path inside a resolved root");
+        let relative =
+            relative_to(&root, "src/a.rs", "rm").expect("a relative path inside a resolved root");
         assert_eq!(relative.path.as_str(), "src/a.rs");
 
         let absolute = relative_to(&root, file.to_str().expect("utf-8"), "rm")
