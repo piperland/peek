@@ -1,35 +1,59 @@
 //! Where the repository is, and which of its paths the index holds.
 //!
-//! # Path handling is a correctness property, not plumbing
+//! # The invariant
 //!
-//! Four cases have to behave differently, and each of them is a way to end up reading or writing
-//! the wrong tree:
+//! The question this module answers is: *what is Peek allowed to trust, when deciding whether a
+//! user-supplied path belongs to the selected repository, given that the path may not exist?*
 //!
-//! 1. **A relative path.** Resolved against the tree it belongs to, then canonicalised: a path
-//!    *inside* a root the command already named is relative to that root, and a path that *names*
-//!    the root is relative to the process's working directory, because the root is the one path
-//!    with nothing else it could be relative to.
-//! 2. **An absolute path.** Used as given, then canonicalised.
-//! 3. **A symlinked root.** Canonicalisation follows it, so a link and its target are one
-//!    repository and therefore one index. Two spellings of one directory must never produce two
-//!    caches; the user would see one of them go stale for no visible reason.
-//! 4. **A path outside the repository.** Refused, by name, with the resolved location in the
-//!    message.
+//! The answer is written out in full in `docs/path-trust.md`. In one sentence:
 //!
-//! Canonicalisation happens *before* every containment test, and the order matters. On Windows a
-//! path's case is whatever the caller typed, so `C:\Repo` and `c:\repo` are different strings
-//! that name the same directory; comparing them as typed would refuse a legitimate path. After
-//! `canonicalize` both sides carry the on-disk case and a component-wise comparison is exact.
+//! > Peek trusts the repository root to be where `canonicalize` said it was. For the path the
+//! > user supplied, Peek trusts only the base it was anchored to and the letters in it.
 //!
-//! # Why the comparison is component-wise and never a string prefix
+//! One function implements it — [`relative_to`], through [`locate_within`]. The four cases below
+//! are consequences of that one rule rather than four rules of their own, which is what they used
+//! to be.
 //!
-//! `/repo/src-old` is not inside `/repo/src`. A prefix comparison says it is, and that is exactly
-//! the mistake that would let one repository's index be removed by a command aimed at another's
-//! directory when two projects share a parent and a name. `strip_prefix` is component-wise, so it
-//! makes the same judgement `peek_core::store::paths::is_within` does, for the same reason.
+//! # Containment is decided before the filesystem is asked
+//!
+//! The order is the invariant, and it is the opposite of what this module used to do. A path that
+//! does not exist has no filesystem-resolved location, so a decision that asks for one first has
+//! no answer for exactly the case `peek rm` exists to serve: a file deleted since the last index,
+//! which must still be nameable. So:
+//!
+//! 1. **Anchor it.** A relative path is joined onto the *root*, never onto the working directory —
+//!    `--root` has already answered which tree, and a path inside that tree must not mean
+//!    different things depending on where the user is standing. The root is the single exception,
+//!    because it is the only path with no other candidate to be relative to.
+//! 2. **Normalise the spelling.** `.`, `//` and `..` collapse without asking the filesystem
+//!    anything, because a filesystem resolves `..` *after* following symlinks and can therefore
+//!    move further than `..` asks for. On Windows a path's case is whatever the caller typed, so
+//!    `C:\Repo` and `c:\repo` are different strings for one directory; the root arrives
+//!    canonical and carries the on-disk case, so every comparison this module makes internally is
+//!    between two on-disk spellings.
+//! 3. **Test containment on the spelling.** Component-wise, never a string prefix: `/repo/src-old`
+//!    is not inside `/repo/src`, and a prefix comparison is the mistake that would let one
+//!    repository's index be removed by a command aimed at another's directory. This step touches
+//!    no filesystem and therefore always produces an answer, including for a path that has never
+//!    existed.
+//! 4. **Then ask the filesystem, and only to make the answer stricter.** The deepest existing
+//!    prefix is resolved and re-tested, which is what catches a symlink pointing out of the tree.
+//!    A resolution may add a refusal and can never remove one. A filesystem that cannot answer
+//!    costs the refinement, not the answer.
+//! 5. **Trust what is left.** The resolved prefix is inside the root and the remaining components
+//!    are names. That trust is a real risk and is stated in the document, with the reason it is
+//!    acceptable here and would not be for a command that writes to the filesystem.
+//!
+//! # Why one function and not one per command
+//!
+//! The previous shape was `canonicalize()`, then canonicalize the parent, then give up with a
+//! filesystem error. That is three different notions of containment stacked in one function, which
+//! is why no contract could be written for it: the answer depended on which of the three happened
+//! to run. Every command that accepts a user path goes through [`relative_to`].
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 
 use peek_core::model::RepoPath;
 use peek_core::store::{RepoId, Store, StoreError, paths};
@@ -117,6 +141,22 @@ pub fn locate(given: &Path, command: &'static str) -> Result<Location, Failure> 
 /// nothing to be relative to except the CWD — whereas a path inside a root that has been named
 /// explicitly must not silently depend on where the user is standing.
 pub fn resolve_root(given: &Path, command: &'static str) -> Result<PathBuf, Failure> {
+    if cfg!(windows)
+        && let Some(spelling) = given.to_str()
+        && windows_drive_relative(spelling)
+    {
+        return Err(Failure::usage(
+            command,
+            Refusal::new(
+                exit::kind::NOT_A_REPOSITORY,
+                format!(
+                    "{spelling} names a location relative to whatever directory the current drive \
+                     happens to be reading, which this command cannot see. Write it as an \
+                     absolute path instead, with the drive and a separator between them"
+                ),
+            ),
+        ));
+    }
     let working = std::env::current_dir().map_err(|error| {
         Failure::usage(
             command,
@@ -200,67 +240,38 @@ pub struct Relative {
     pub is_directory: bool,
 }
 
+/// A path that has been placed and judged, and nothing more.
+///
+/// Deliberately small. The two failures this module was written to answer were both "the refusal
+/// was right for the wrong reason", and a test that can only see an exit code and a sentence
+/// cannot tell a contract from a filesystem error that happened to point the same way. So the
+/// decision is a value, the value carries the answer and the scope, and the reasoning reaches a
+/// reader through the messages below rather than through extra fields nothing reads.
+struct Located {
+    /// The path relative to the root, as the index knows it.
+    inside: PathBuf,
+    /// Whether a directory exists at that location now.
+    is_directory: bool,
+}
+
 /// Express `given` relative to `root`, refusing anything outside it.
 ///
-/// A path that no longer exists is still addressable: the canonical parent is resolved and the
-/// final component is re-attached, so `rm src/deleted.rs` works on a file the filesystem has
-/// already lost but the index still holds. That is the case a deletion creates, so refusing it
-/// would make the command useless exactly when it is needed.
+/// The one place containment is decided, and the only function a command needs. The decision
+/// itself is [`locate_within`]; this is the translation of its answer, or of its reason, into the
+/// CLI's refusal type.
+///
+/// A path that does not exist is still addressable — a file deleted since the last index has to be
+/// nameable by the command that repairs the index, and refusing it would make that command useless
+/// exactly when it is needed. That is why the decision is made on the spelling first and the
+/// filesystem is asked afterwards, and only to make the answer stricter.
 pub fn relative_to(root: &Path, given: &str, command: &'static str) -> Result<Relative, Failure> {
-    if given.is_empty() {
-        return Err(Failure::usage(
-            command,
-            Refusal::new(
-                exit::kind::OUTSIDE_REPOSITORY,
-                "the path is empty; name a file or directory inside the repository",
-            ),
-        ));
-    }
-    let as_path = Path::new(given);
-    let absolutised = absolutise(as_path, root).map_err(|detail| {
-        Failure::usage(
-            command,
-            Refusal::new(
-                exit::kind::OUTSIDE_REPOSITORY,
-                format!("cannot resolve {given}: {detail}"),
-            ),
-        )
-    })?;
-
-    // Resolve as much of the path as exists, so a deleted leaf is still addressable, and so a
-    // symlink is followed before the containment test rather than after.
-    let resolved = resolve_existing_prefix(&absolutised).map_err(|detail| {
-        Failure::usage(
-            command,
-            Refusal::new(
-                exit::kind::OUTSIDE_REPOSITORY,
-                format!("cannot resolve {given}: {detail}"),
-            ),
-        )
-    })?;
-
-    let inside = match resolved.strip_prefix(root) {
-        Ok(relative) => relative.to_path_buf(),
-        Err(_) => {
-            return Err(Failure::usage(
-                command,
-                Refusal::new(
-                    exit::kind::OUTSIDE_REPOSITORY,
-                    format!(
-                        "{} is not inside the repository at {}; this command will not touch \
-                         anything outside the tree it was pointed at",
-                        resolved.display(),
-                        root.display()
-                    ),
-                ),
-            ));
-        }
-    };
+    let located = locate_within(root, given)
+        .map_err(|reason| Failure::usage(command, Refusal::new(exit::kind::OUTSIDE_REPOSITORY, reason)))?;
     // `RepoPath::new` is the model's own validator: it rejects an empty path, a NUL byte, and any
-    // `..` that climbs above the root. A path that survived `strip_prefix` cannot contain a
+    // `..` that climbs above the root. A path that survived the containment test cannot contain a
     // leading `..`, so this is a shape check rather than a security check — the containment test
-    // above is the security check, and it already ran.
-    let path = RepoPath::new(inside.to_string_lossy().as_ref()).ok_or_else(|| {
+    // is the security check, and it already ran.
+    let path = RepoPath::new(located.inside.to_string_lossy().as_ref()).ok_or_else(|| {
         Failure::usage(
             command,
             Refusal::new(
@@ -272,31 +283,199 @@ pub fn relative_to(root: &Path, given: &str, command: &'static str) -> Result<Re
             ),
         )
     })?;
-    let is_directory = resolved.is_dir();
-    Ok(Relative { path, is_directory })
+    Ok(Relative {
+        path,
+        is_directory: located.is_directory,
+    })
 }
 
-/// Canonicalise `path`, or its deepest existing ancestor plus the remainder.
+/// Place `given` and decide whether it is inside `root`.
 ///
-/// The second case is the one that matters: after a deletion, the leaf is gone but its parent is
-/// not, and the command that repairs the index needs to name the leaf.
-fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
-    if let Ok(canonical) = path.canonicalize() {
-        return Ok(canonical);
+/// **Never reads the working directory**, so the same command line means the same thing however
+/// the user is standing, and **never requires the filesystem to have an answer**, so a path that
+/// has never existed is still classifiable. The refusals it returns are the whole sentence, and
+/// they name the repository as well as the path: a refusal that names only the offending path
+/// leaves a reader with nothing to act on.
+fn locate_within(root: &Path, given: &str) -> Result<Located, String> {
+    if given.is_empty() {
+        return Err("the path is empty; name a file or directory inside the repository".to_owned());
     }
-    let name = path.file_name().ok_or_else(|| {
-        format!(
-            "{} names a filesystem root, not a path in a repository",
-            path.display()
-        )
-    })?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|error| format!("cannot resolve {}: {error}", parent.display()))?;
-    Ok(canonical_parent.join(name))
+    if cfg!(windows) && windows_drive_relative(given) {
+        return Err(format!(
+            "{given} names a location relative to whatever directory the current drive happens to \
+             be reading, which this command cannot see, so it cannot be shown to be inside the \
+             repository at {}. Write it as an absolute path, with the drive and a separator \
+             between them",
+            root.display()
+        ));
+    }
+    // The root is a precondition, not an input to be interpreted. `resolve_root` canonicalises it,
+    // and a relative one here would mean the caller skipped that — at which point every
+    // filesystem answer below would be relative to the process's working directory, and the same
+    // command line would mean different things depending on where the user is standing.
+    if !root.is_absolute() {
+        return Err(format!(
+            "the repository root is {}, which is not an absolute path, so this command cannot \
+             tell what it is relative to. A root reaches this point only after it has been \
+             resolved and canonicalised",
+            root.display()
+        ));
+    }
+    let base = normalise_lexically(root);
+    let anchored = absolutise(Path::new(given), &base)?;
+
+    // **The gate, first and on the spelling.** Component-wise, with no filesystem involved, so it
+    // is available for a path that has never existed and for a volume that is not mounted. A
+    // refusal here means the path is not handed to the filesystem at all, so a wrong path costs no
+    // I/O — and, on Windows, a path on a share that is not answering is refused on the spelling
+    // rather than by waiting for the network to say no.
+    let spelled = normalise_lexically(&anchored);
+    if !spelled.starts_with(&base) {
+        return Err(outside_the_repository(given, &spelled, &base));
+    }
+
+    // **The refinement.** The deepest existing prefix is resolved so a symlink is followed *before*
+    // the containment test rather than after, and so the answer is the location the operating
+    // system would open. This can add a refusal; it cannot remove one, because the gate has
+    // already refused everything the refinement would have let through.
+    let location = resolve_location(&anchored);
+    if !location.starts_with(&base) {
+        return Err(format!(
+            "{spelled} is written as if it were inside the repository at {base}, but it reaches \
+             {location}, which is outside the tree. A symlink inside the repository points out of \
+             it, and this command will not follow one to a file the repository does not contain"
+        ));
+    }
+
+    let inside = match location.strip_prefix(&base) {
+        Ok(inside) => inside.to_path_buf(),
+        // Unreachable: the line above is this test. Refused rather than asserted, because a panic
+        // inside a containment check is a worse answer than a refusal, and a change of order must
+        // not be able to produce one.
+        Err(_) => return Err(outside_the_repository(given, &spelled, &base)),
+    };
+    Ok(Located {
+        is_directory: location.is_dir(),
+        inside,
+    })
+}
+
+/// Whether `text` is one of the Windows spellings whose meaning is relative to the current
+/// directory of a drive, which this process cannot see.
+///
+/// **A pure string judgement, so it is testable on any host.** Whether it is *acted on* is not: on
+/// Unix `C:notes.rs` is an ordinary filename that happens to contain a colon, and refusing it
+/// would take away a legal path. Only the call site is platform-specific, and that call site is
+/// one `cfg!`, so the logic is the part that gets tested.
+///
+/// `C:foo` and a bare `C:` are drive-relative; `C:\foo`, `C:/foo` and `\\server\share` are not.
+/// `foo:bar` is not either — a drive designator is exactly one letter, so a colon further along
+/// the name is a character in a name rather than a prefix.
+fn windows_drive_relative(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() < 2 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
+        return false;
+    }
+    // A separator after the colon is what makes the path absolute, and its absence is the whole
+    // difference between "the directory this drive happens to be reading" and "the root of it".
+    !matches!(bytes.get(2), Some(b'\\') | Some(b'/'))
+}
+
+/// Collapse `.`, `//` and `..` without asking the filesystem anything.
+///
+/// `Path::components` already drops `.` and repeated separators, so only `..` is left: pop the
+/// previous name, or do nothing at the filesystem root, which is what the filesystem does with a
+/// `..` that has nowhere left to climb.
+///
+/// **Lexically, and that is a decision rather than a shortcut.** A filesystem resolves `..` *after*
+/// following symlinks, so `<root>/link/..` is the parent of the link's target and not the parent
+/// of `link`. Both are inside the root or both are outside it as far as containment goes, but only
+/// one of them is the file the operating system would open — which is why [`resolve_location`]
+/// asks the filesystem about the *spelling* and this function's answer is only ever the gate.
+fn normalise_lexically(path: &Path) -> PathBuf {
+    let mut kept: Vec<Component<'_>> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(kept.last(), Some(Component::Normal(_))) {
+                    kept.pop();
+                } else if kept.is_empty() {
+                    // A relative path with nothing in front of it: the `..` is the whole of what is
+                    // known about where this is, and dropping it would move the path up a level.
+                    kept.push(component);
+                }
+                // Otherwise the last thing kept is the filesystem root, which `..` names again.
+            }
+            other => kept.push(other),
+        }
+    }
+    kept.into_iter().collect()
+}
+
+/// The location `path` reaches: its deepest existing prefix, resolved, with the names that follow
+/// it on the end.
+///
+/// **Walking up one component at a time is what makes a path addressable when its parent directory
+/// does not exist either.** The version this replaces tried the whole path, then stripped a single
+/// name and canonicalised the parent, which is the same walk truncated after one step — so
+/// `<root>/a/b/c.rs` with no `a` on disk was a filesystem error rather than a path. Every step
+/// past the first is what lets a nonexistent intermediate component be a name.
+///
+/// **On the spelling, not on the normalised path, and that is what makes the answer the right
+/// file.** Normalising first would turn `<root>/src/link/../a.rs` into `<root>/src/a.rs` and lose
+/// the link, so Peek would answer for a file that is not the one the operating system opens. The
+/// tail cannot reintroduce the same problem: the walk only stops where a component is *missing*,
+/// and a missing component has no symlink to follow, so there is nothing for a `..` in the tail to
+/// mean other than what it is read as here.
+///
+/// Falls back to the spelling when nothing on the path resolves, which is a statement about the
+/// filesystem — a volume that is not mounted, a share that is not answering — and not about the
+/// path.
+fn resolve_location(path: &Path) -> PathBuf {
+    let mut tail: Vec<OsString> = Vec::new();
+    let mut cursor = path.to_path_buf();
+    loop {
+        if let Ok(mut location) = cursor.canonicalize() {
+            for name in tail.iter().rev() {
+                location.push(name);
+            }
+            return normalise_lexically(&location);
+        }
+        // A filesystem root has no name to strip, and a volume that will not resolve has no parent
+        // left to climb to. Either way the walk ends without an answer.
+        let Some(name) = cursor.file_name().map(std::ffi::OsStr::to_os_string) else {
+            return normalise_lexically(path);
+        };
+        let Some(parent) = cursor.parent().map(Path::to_path_buf) else {
+            return normalise_lexically(path);
+        };
+        tail.push(name);
+        cursor = parent;
+    }
+}
+
+/// The refusal for a path that is not inside the repository, naming both places.
+///
+/// **The spelling and the repository, never the resolved location, and deliberately.** The
+/// resolved location is a filesystem fact, and this refusal is reached without asking the
+/// filesystem anything, so naming it here would be naming something this function never looked up.
+/// What it names is where the path *points*, which is enough to tell an escape from a spelling
+/// and is true without any `stat`.
+fn outside_the_repository(given: &str, spelled: &Path, root: &Path) -> String {
+    let mut message = format!(
+        "{} is not inside the repository at {}; this command will not touch anything outside the \
+         tree it was pointed at",
+        spelled.display(),
+        root.display()
+    );
+    // The spelling and where it points differ whenever `..` was involved, and a reader told only
+    // one of them cannot tell an escape from a spelling. Named once when they agree, twice when
+    // they do not.
+    if spelled.to_string_lossy() != given {
+        message.push_str(&format!(". {given} names {}", spelled.display()));
+    }
+    message
 }
 
 /// Every repository-relative path the index holds at least one row for.
@@ -364,10 +543,12 @@ pub fn open_store(location: &Location, command: &'static str) -> Result<Store, F
 
 #[cfg(test)]
 mod tests {
-    use super::{Relative, relative_to, resolve_root};
+    use super::{
+        Relative, normalise_lexically, relative_to, resolve_root, windows_drive_relative,
+    };
     use crate::args::{self, Command};
     use crate::exit::{EXIT_USAGE, kind};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     fn temp(label: &str) -> std::path::PathBuf {
         let unique = std::time::SystemTime::now()
@@ -1068,6 +1249,55 @@ mod tests {
             error.refusal.message
         );
     }
+
+    #[test]
+    fn lexical_normalisation_is_arithmetic_and_needs_no_filesystem() {
+        // The gate's own rules, on their own, including the two that are easy to get backwards: a
+        // leading `..` on a *relative* path is kept, because dropping it would move the path up a
+        // level, and a `..` at a filesystem root is dropped, because the filesystem agrees and
+        // keeping it would make `/..` look like an escape.
+        assert_eq!(normalise_lexically(Path::new("a/./b")), PathBuf::from("a/b"));
+        assert_eq!(normalise_lexically(Path::new("a//b")), PathBuf::from("a/b"));
+        assert_eq!(normalise_lexically(Path::new("a/b/../c")), PathBuf::from("a/c"));
+        assert_eq!(
+            normalise_lexically(Path::new("../a/../b")),
+            PathBuf::from("../b")
+        );
+        assert_eq!(normalise_lexically(Path::new(".")), PathBuf::from(""));
+        let root = PathBuf::from(std::path::MAIN_SEPARATOR_STR);
+        assert_eq!(normalise_lexically(&root.join("a/../..")), root);
+    }
+
+    #[test]
+    fn a_windows_drive_relative_spelling_is_recognised_as_a_string() {
+        // A pure classifier, so it is checked on whichever host runs the suite rather than only on
+        // the one where it has consequences. `C:foo` means "foo in whatever directory the C drive
+        // is reading", which is not the root and is not anything this process can see — so the
+        // difference between it and `C:\foo` is one separator, and that is the whole judgement.
+        for spelling in ["C:notes.rs", "c:", "Z:x"] {
+            assert!(
+                windows_drive_relative(spelling),
+                "{spelling:?} is drive-relative"
+            );
+        }
+        for spelling in [
+            "C:\\notes.rs",
+            "C:/notes.rs",
+            "c:\\",
+            "\\\\server\\share\\x.rs",
+            "//server/share/x.rs",
+            "notes.rs",
+            "foo:bar",
+            "C",
+            "",
+        ] {
+            assert!(
+                !windows_drive_relative(spelling),
+                "{spelling:?} is not drive-relative"
+            );
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn a_drive_relative_path_is_refused_rather_than_read_against_a_drive() {
