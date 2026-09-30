@@ -518,35 +518,84 @@ fn an_uncheckpointed_log_is_a_notice_and_a_checkpointed_one_is_a_pass() {
     // The measurement, in the shape of a test.
     //
     // Both diagnoses below are of one store holding one set of rows at one generation. The only
-    // thing that differs is whether a checkpoint has folded the log into the file, and the only
-    // measurement that moves is the database file's size — because TRUNCATE is what grows it.
-    // That is the whole separation: if the log check's verdict follows the store, it cannot change
-    // here; if it follows the file size, it does.
+    // thing that differs is whether a checkpoint has been able to fold the log into the file, and
+    // the only measurement that moves is the log's size. That is the whole separation: if the log
+    // check's verdict followed the store, it could not change here; if it follows the log, it
+    // does.
     //
     // It used to follow the file size. `wal * 2 > file_size` is true for every store between
     // creation and its first checkpoint, because until then the file holds one page and the log
     // holds everything — which is a description of a healthy store, graded as a warning. The old
     // verdict is not asserted anywhere here on purpose: a test that pins an arbitrary threshold
     // is what keeps an arbitrary threshold alive.
+    //
+    // The state this needs is a *refused* checkpoint, and it cannot be assumed. A build does not
+    // leave frames behind: `build_full` ends with a checkpoint (`indexer/mod.rs`, "Checkpoint
+    // **after** resolution, not before"), so a build leaves an empty log, and this test used to
+    // assert the post-build state twice and read zero. Holding the store open was the author's
+    // explanation and it is not the mechanism — `store`'s own tests measure a write leaving frames
+    // (`store/tests.rs`, "a write leaves frames behind for the next reader"), and what empties
+    // them is the build's own checkpoint.
+    //
+    // The product names what makes a checkpoint fail: a reader holds a snapshot. So that is what
+    // is built here, on a second connection to the same file, through the product's own API.
     let install = Install::empty("wal-frames");
     install.write("src/lib.rs", "fn a() {}\nfn main() { a(); }\n");
     let mut store = install.store();
+
+    // The store's busy timeout is five seconds, and a checkpoint that cannot take the log sits in
+    // SQLite's busy handler for all of it before reporting the refusal. This test wants the
+    // refusal, not the wait. Nothing here contends for a write lock — in WAL a reader and the
+    // writer do not exclude each other — so a short timeout cannot turn a real conflict into a
+    // spurious failure.
+    store
+        .conn()
+        .busy_timeout(std::time::Duration::from_millis(100))
+        .expect("shorten the busy timeout so a refused checkpoint returns promptly");
+
+    // A second connection to the same file: a reader, which is the state that pins a log. This is
+    // a `Store` and not a raw connection because "a reader holds a snapshot" is a state the
+    // product is documented to be in, and a test that reached past the product to fake it would
+    // be testing a state the product might not be able to enter.
+    let reader = install.store();
+
+    // `BEGIN DEFERRED` on its own pins nothing: SQLite takes the read lock on the first statement
+    // run inside the transaction, so a snapshot without this read is a transaction that looks
+    // like a reader and blocks nothing. The build's checkpoint would then succeed, and this
+    // premise would read zero again — which is the failure this test has already had once.
+    let snapshot = reader
+        .conn()
+        .unchecked_transaction()
+        .expect("begin a read transaction on the second connection");
+    let pinned: i64 = snapshot
+        .query_row("SELECT COUNT(*) FROM entity", [], |row| row.get(0))
+        .expect("read inside the transaction, so that it holds a snapshot");
+    assert_eq!(
+        pinned, 0,
+        "the reader is a snapshot of the store before the build, so its read mark sits behind \
+         every frame the build is about to commit, and a log cannot be restarted or truncated \
+         while a reader is still behind it"
+    );
+
     indexer::build_full(&mut store, install.path(), DiscoveryOptions::default())
         .expect("index the repository");
 
-    // `store` stays open, so nothing has folded the log into the file: everything written since
-    // the index was created is still in frames.
+    // The build committed every frame and then could not fold them, because the reader holds the
+    // log. A refused checkpoint is not a build failure: that is why `build_full` records the log's
+    // size instead of returning the refusal, and the frames stay exactly where they are.
     let waiting = install.diagnose();
     let waiting_stats = measurements(&waiting);
     assert!(
         waiting_stats.wal_size_bytes > 0,
-        "the premise of this state, asserted rather than assumed: a build that has not been \
-         checkpointed leaves frames in the log, and {} bytes is what it left",
+        "the premise of this state, asserted rather than assumed: a checkpoint a reader has \
+         refused leaves its frames in the log, and {} bytes is what it left",
         waiting_stats.wal_size_bytes
     );
 
-    // Now the only thing that changes is the checkpoint, on the same connection, with the same
-    // rows underneath.
+    // The reader goes, and only then does the log fold. Nothing else changes: same connection,
+    // same rows underneath, no write in between.
+    drop(snapshot);
+    drop(reader);
     store.checkpoint().expect("fold the build into the file");
     let settled = install.diagnose();
     let settled_stats = measurements(&settled);
@@ -564,10 +613,16 @@ fn an_uncheckpointed_log_is_a_notice_and_a_checkpointed_one_is_a_pass() {
 
     // The measurements that moved, and the one the old rule graded on.
     assert_eq!(settled_stats.wal_size_bytes, 0, "TRUNCATE empties the log");
+    // Folding a log in only ever adds pages to the database file; nothing a checkpoint does
+    // removes them. Asserted as far as it can be justified, which is non-decreasing. Whether the
+    // *refused* checkpoint above also copied its frames into the file before failing to truncate
+    // it is a question about SQLite's TRUNCATE mode, not about this check, and nothing in this
+    // suite measures it — so a strict growth here would be asserting a mechanism on the strength
+    // of an assumption, which is the defect this module exists to catch.
     assert!(
-        settled_stats.file_size_bytes > waiting_stats.file_size_bytes,
-        "the checkpoint is what grew the database file: {} bytes became {}, so the file size \
-         measures checkpointing rather than the index",
+        settled_stats.file_size_bytes >= waiting_stats.file_size_bytes,
+        "folding the log into the file adds pages to it and never removes them: {} bytes became \
+         {}, so the file size measures checkpointing rather than the index",
         waiting_stats.file_size_bytes,
         settled_stats.file_size_bytes
     );
