@@ -1477,15 +1477,15 @@ mod tests {
             "there is nothing under the root, and that has to be an answer rather than a panic"
         );
         assert!(
-            is_under(&above, &canonical),
+            is_under(above, &canonical),
             "the root is under its parent, which is the other direction and has to stay allowed"
         );
         assert!(
-            !is_under(&canonical, &above),
+            !is_under(&canonical, above),
             "a parent is not inside the tree it contains"
         );
         assert_eq!(
-            strip_base(&canonical, &above),
+            strip_base(&canonical, above),
             None,
             "and a path shorter than the base is not under it either, so the two cannot disagree"
         );
