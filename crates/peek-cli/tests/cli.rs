@@ -1408,6 +1408,109 @@ fn the_fixture_leaves_a_command_line_that_already_names_a_repository_alone() {
 }
 
 #[test]
+#[should_panic(expected = "the harness cannot tell which directory")]
+fn a_root_the_filesystem_will_not_locate_is_not_called_a_misdirected_command() {
+    // **A claim the check used to make without having established it.** The check could not
+    // locate a named root, and it answered by falling back to the spelling, comparing that with the
+    // fixture's canonical root, and then reporting that the command had not been pointed at the
+    // fixture. All it had observed was that it could not ask — and being unable to look something
+    // up is a fact about existence, which was being reported as a fact about location.
+    //
+    // Two different roots reach that state: one that names nothing at all, and one that names the
+    // fixture through a spelling the filesystem will not answer about whole. The message named the
+    // first, so the second reported a harness failure for a command pointed exactly where it was
+    // asked to point — which is how a test suite that was never wrong looked broken.
+    //
+    // **This fails on the old check and passes on this one, and it does so on every platform**,
+    // because the difference between the two is entirely what the harness is entitled to claim, and
+    // a claim is observable through the message. Asking about the misdirection instead of about the
+    // uncertainty is the assertion; the filesystem could not have told them apart either way.
+    let repository = Repository::small("harness-unlocated-root");
+    let nowhere = repository.root().join("never-written");
+
+    // The fixture's own precondition, asserted rather than assumed: a root the filesystem *can*
+    // locate is not the case under test, and a test that quietly became one would assert nothing.
+    assert!(
+        nowhere.canonicalize().is_err(),
+        "{} has to name nothing at all, or this is about a root the filesystem will locate and \
+         the message under test is never the one that is produced",
+        nowhere.display()
+    );
+
+    run(&repository, &["status", "--root", nowhere.to_str().expect("utf-8")]);
+}
+
+#[test]
+fn one_directory_named_through_a_climb_is_still_the_fixtures_root() {
+    // **Both spellings are derived from one canonical path, and that is the whole point.** The
+    // obvious way to build this pair is to take the machine's temporary directory and canonicalise
+    // it, which compares a path with itself wherever the two agree — and on a kernel they always
+    // agree, because `canonicalize` is `realpath` and `realpath` takes the climb off for you. A
+    // test written that way passes vacuously on the only platform it can be measured on, which is
+    // how the equivalent defect in the library's own resolution survived. This one builds the
+    // second spelling out of the first, so they differ by construction rather than by whatever the
+    // runner's temporary directory happens to look like.
+    let repository = Repository::small("harness-climbed-root");
+    let roundabout = repository.root().join("src").join("..");
+
+    // The spellings differ as paths, asserted rather than assumed, because that is the property
+    // the construction is for and it is the thing a hand-written fixture gets wrong.
+    assert_ne!(
+        roundabout,
+        repository.root().to_path_buf(),
+        "the two spellings have to differ as paths, or the check is handed the same string twice \
+         and cannot tell a directory from its own spelling"
+    );
+    // And they differ by exactly one climb over one directory the fixture really has. A climb over
+    // a name that does not exist names nothing at all, which is the other test.
+    assert!(
+        repository.root().join("src").is_dir(),
+        "the climb is spent on a directory that exists; over one that does not, the spelling names \
+         nothing and the check is right to refuse it"
+    );
+    assert_eq!(
+        roundabout.file_name(),
+        Some(std::ffi::OsStr::new("..")),
+        "the spelling has to end in the climb, or the round trip is not one"
+    );
+    assert_eq!(
+        roundabout.parent().and_then(|inside| inside.parent()),
+        Some(repository.root()),
+        "and the rest of it has to be the fixture's root reached through one directory, or the \
+         climb is being spent on the wrong name"
+    );
+
+    // **The check, on the case this fixture exists for.** Where the filesystem answers about the
+    // whole spelling at once — every kernel, and Windows for a spelling with no climb on it — this
+    // is `realpath` and both sides are one location. Where it will not answer, the check has to
+    // take the climb off itself, and **this test cannot reach that branch from a kernel**: there
+    // `canonicalize` never declines for a spelling that names a directory which exists, so there
+    // is nothing on this platform that reaches it. That branch exists for the platform whose path
+    // parser hands a verbatim spelling straight to the filesystem with the climb still written
+    // down, and the assertion above is what holds on every platform.
+    run(&repository, &["status", "--root", roundabout.to_str().expect("utf-8")]);
+}
+
+#[test]
+#[should_panic(expected = "the fixture did not point this command at its own repository")]
+fn a_directory_inside_the_fixture_is_not_the_fixtures_root() {
+    // **The other half of the contract, and the half a fix is most likely to break.** Reconciling
+    // two spellings of one directory is easy to do by comparing *less*: a containment test or a
+    // component-prefix test accepts `<root>/src` and every other subdirectory, and then the check
+    // no longer catches the one thing it exists to catch. So the directory is inside the fixture —
+    // it exists, the filesystem locates it without any trouble at all, and it is not the root.
+    let repository = Repository::small("harness-not-the-root");
+    let inside = repository.root().join("src");
+    assert!(
+        inside.is_dir(),
+        "the fixture has to contain a directory that is not its root, or this is about a path \
+         nothing can locate and the other test already covers it: {}",
+        inside.display()
+    );
+    run(&repository, &["status", "--root", inside.to_str().expect("utf-8")]);
+}
+
+#[test]
 fn a_command_line_the_parser_refuses_is_never_given_a_root() {
     // The four cases in `failure.rs` exist to assert on the refusal, and appending `--root` to
     // `--nonsense` would turn an `unknown_flag` into a `wrong_arity` — a test still passing, now

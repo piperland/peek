@@ -36,6 +36,14 @@
 //! checking a real behaviour against a directory that is not a fixture. [`run`] therefore names
 //! the repository on every command line, and checks afterwards that it did.
 //!
+//! **That check has three answers and used to have two.** A named root is the fixture's, a named
+//! root is not, and a root the filesystem will not resolve is neither — and the third was reported
+//! as the second. A test that spells its root as `<root>/src/..` is naming the fixture, so on a
+//! platform whose `canonicalize` cannot answer about that spelling whole the check failed in the
+//! harness for a command that was pointed exactly where it was asked to point. Both halves of the
+//! comparison now come from one function, and a root the filesystem declines to locate is named as
+//! unlocated rather than as misdirected.
+//!
 //! # The fixture's own surface
 //!
 //! A small, fixed Rust tree with one file per language feature that produces a relation the query
@@ -64,7 +72,7 @@
 // warning from a shared test helper is noise that hides a real one.
 #![allow(dead_code)]
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
@@ -506,6 +514,72 @@ fn command_line(argv: &[&str], root: &Path) -> Vec<std::ffi::OsString> {
     tokens
 }
 
+/// The directory `path` names, or why the filesystem would not say.
+///
+/// **The whole spelling is asked about first, because that is the authority and a kernel has
+/// nothing to be taught about `..`.** Where that answer comes back there is nothing left to
+/// reconcile, and where it does not the answer is not "somewhere else" — it is that the question
+/// was not answerable, and the only thing that can change that is the shape of the spelling.
+///
+/// **A trailing `.` or `..` is arithmetic on the name in front of it rather than a name of its
+/// own**, so the part in front is asked about instead and the arithmetic is spent on whatever comes
+/// back. That is the whole case on Windows: a verbatim (`\\?\`) spelling carries no `..` for the
+/// path parser to remove before the filesystem is asked, so `<root>/src/..` is a spelling the
+/// filesystem will only answer about once the climb has been taken off the front of it. One
+/// directory, two spellings, and the second one is not a different directory.
+///
+/// **The climb is spent on the *resolved* location, and that is what keeps this away from being
+/// the one-line fix.** Normalising the spelling lexically and comparing strings would answer
+/// `<root>` for `<root>/out/..`, where `out` is a link leaving the tree — so the harness would pass
+/// a command pointed at a directory that is not the fixture, which is the one failure this
+/// assertion exists to catch, and a fix that makes the check pass by comparing less is worse than
+/// the defect. So the head is *asked about* rather than assumed: a climb over a name that does not
+/// exist resolves nothing, and a climb over a link is spent on the link's target.
+///
+/// **A trailing `..` is all this can spend, and a `Path` is why.** `Path` does not expose a `.`
+/// that is not the first component, so a spelling with one hidden in the middle of itself is
+/// reported as unanswered. That is a refusal rather than a wrong answer, which is the right way
+/// round for a check whose job is to notice.
+fn location_of(path: &Path) -> Result<PathBuf, String> {
+    let unanswered = match path.canonicalize() {
+        Ok(location) => return Ok(location),
+        Err(error) => error,
+    };
+    let mut head = path.to_path_buf();
+    // What each step spent: `true` for a climb, `false` for a `.`, which moves nowhere. Held as a
+    // flag rather than as a component because `Component` borrows the head it was read off, and the
+    // head is reassigned on every turn.
+    let mut spent: Vec<bool> = Vec::new();
+    loop {
+        let climbs = match head.components().next_back() {
+            Some(Component::ParentDir) => true,
+            Some(Component::CurDir) => false,
+            _ => break,
+        };
+        let Some(parent) = head.parent().map(Path::to_path_buf) else {
+            break;
+        };
+        spent.push(climbs);
+        head = parent;
+        // Asked about, not assumed: a head that will not resolve leaves the spelling unanswered
+        // rather than handing back a location built out of names nothing has heard of.
+        let Ok(location) = head.canonicalize() else {
+            continue;
+        };
+        let mut answer = location;
+        for step in spent.iter().rev() {
+            if *step {
+                answer.pop();
+            }
+        }
+        return Ok(answer);
+    }
+    Err(format!(
+        "the filesystem will not resolve it as a whole ({unanswered}), and it does not end in a \
+         climb that can be taken off the front of it"
+    ))
+}
+
 /// Fail a run that is not pointed at `repository`.
 ///
 /// **The assertion the whole injection exists to make possible.** `--root` defaults to `.`, the
@@ -514,17 +588,33 @@ fn command_line(argv: &[&str], root: &Path) -> Vec<std::ffi::OsString> {
 /// missing flag it is. Checking it here means the next command shape, or the next test, cannot
 /// reintroduce that quietly: it would fail in the harness with the line that caused it.
 ///
-/// Canonicalised on both sides, because a test may legitimately name the same directory as
-/// `<root>/src/..` and the parser hands paths through verbatim by design.
+/// **Both sides are located by the filesystem, and both through one function**, because a spelling
+/// and a location are not comparable things: `canonicalize` answers in the extended-length form on
+/// Windows and expands a short name on the way to a directory, so a directory the filesystem named
+/// and a root the caller spelled are two strings and one place. That is what [`location_of`] is
+/// for, and the pair it replaces — the fixture's root canonicalised against the named root
+/// *uncanonicalised when the filesystem declined* — held one side that could not answer and one
+/// side that could, so a test spelling `<root>/src/..` compared its own spelling with a location
+/// and reported a harness failure for a command that was pointed at the fixture.
+///
+/// **"The filesystem would not say" is now its own outcome, and it is reported as that.** It used
+/// to be reported as "this command was not pointed at the fixture", which is a claim about a cause
+/// the harness had not established: all it had observed was that it could not look. Two roots can
+/// reach that state — a path that names nothing at all, and a spelling the filesystem will not
+/// answer as a whole — and the message named the first while the check could not tell them apart.
 fn assert_named_root(named: Option<&PathBuf>, repository: &Repository, argv: &[&str]) {
     let Some(named) = named else {
         return;
     };
-    let expected = repository
-        .root()
-        .canonicalize()
-        .expect("the fixture exists");
-    let actual = named.canonicalize().unwrap_or_else(|_| named.clone());
+    let expected = location_of(repository.root()).expect("the fixture's root resolves");
+    let actual = location_of(named).unwrap_or_else(|reason| {
+        panic!(
+            "the harness cannot tell which directory {named:?} names — {reason} — so it cannot \
+             check that this command pointed at the fixture, and it will not guess at one. A root \
+             the filesystem will not resolve is a fact about the filesystem, not about the command \
+             line. {argv:?}"
+        )
+    });
     assert_eq!(
         actual, expected,
         "the fixture did not point this command at its own repository, so it answered about \
