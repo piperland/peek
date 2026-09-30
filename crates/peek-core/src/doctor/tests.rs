@@ -120,6 +120,23 @@ impl Install {
         self.diagnose()
     }
 
+    /// The database file and the log beside it, measured directly.
+    ///
+    /// `stat` rather than [`Store::stats`], and that is the whole point of it: a claim about *what
+    /// the reported size means* cannot be evidenced by the reported size. A missing log is zero
+    /// bytes, the same rule [`crate::store::StoreStats`] applies.
+    fn sizes(&self) -> (u64, u64) {
+        let database = self.database();
+        let mut log = database.as_os_str().to_owned();
+        log.push("-wal");
+        (
+            fs::metadata(&database)
+                .expect("an index this test opened is a file on disk")
+                .len(),
+            fs::metadata(PathBuf::from(log)).map_or(0, |meta| meta.len()),
+        )
+    }
+
     /// A store opened against this install's index, for breaking it on purpose.
     fn store(&self) -> Store {
         let repo = RepoId::discover(self.path()).expect("derive a repository id");
@@ -519,9 +536,9 @@ fn an_uncheckpointed_log_is_a_notice_and_a_checkpointed_one_is_a_pass() {
     //
     // Both diagnoses below are of one store holding one set of rows at one generation. The only
     // thing that differs is whether a checkpoint has been able to fold the log into the file, and
-    // the only measurement that moves is the log's size. That is the whole separation: if the log
+    // the measurement that moves is the log's size. That is the whole separation: if the log
     // check's verdict followed the store, it could not change here; if it follows the log, it
-    // does.
+    // does. The file's size moves too, and the second half of this test measures what that means.
     //
     // It used to follow the file size. `wal * 2 > file_size` is true for every store between
     // creation and its first checkpoint, because until then the file holds one page and the log
@@ -577,12 +594,18 @@ fn an_uncheckpointed_log_is_a_notice_and_a_checkpointed_one_is_a_pass() {
          while a reader is still behind it"
     );
 
+    // The file and the log are measured before the build, because the question is what the build's
+    // refused checkpoint did to them and there is nothing to compare that against without a
+    // reading from before. Nothing else can grow the file: in WAL every committed page goes to the
+    // log.
+    let (before_build, before_log) = install.sizes();
     indexer::build_full(&mut store, install.path(), DiscoveryOptions::default())
         .expect("index the repository");
 
     // The build committed every frame and then could not fold them, because the reader holds the
     // log. A refused checkpoint is not a build failure: that is why `build_full` records the log's
     // size instead of returning the refusal, and the frames stay exactly where they are.
+    let (after_refused, refused_log) = install.sizes();
     let waiting = install.diagnose();
     let waiting_stats = measurements(&waiting);
     assert!(
@@ -599,6 +622,57 @@ fn an_uncheckpointed_log_is_a_notice_and_a_checkpointed_one_is_a_pass() {
     store.checkpoint().expect("fold the build into the file");
     let settled = install.diagnose();
     let settled_stats = measurements(&settled);
+    let (after_settled, settled_log) = install.sizes();
+
+    // The measured question, and the measurement that answers it.
+    //
+    // Three readings of the database file across a refused and then a completed checkpoint, because
+    // two readings of the evidence fitted what was known before: a refused checkpoint changes
+    // nothing and only a completed one grows the file, or a refused one copies and a completed one
+    // has nothing left to move. **Neither is what SQLite does**, and asserting either would have put
+    // a mechanism into this suite on the strength of a plausible story. It does both, and that is
+    // the finding:
+    //
+    // - The refused checkpoint **grew** the file. It copies the frames it is allowed to copy before
+    //   it tries to reset the log, and it is refused only at the reset, so a checkpoint that fails
+    //   still changes the file.
+    // - The completed checkpoint grew it **again**, because the reader's snapshot sat behind the
+    //   build's own frames and those were not among the ones the refused checkpoint could copy.
+    //
+    // So the file's size counts *pages copied*: not checkpoints completed, and not work outstanding.
+    // Nothing else can move these numbers — in WAL every committed page goes to the log and only a
+    // checkpoint copies pages out of it — so each delta belongs to one checkpoint rather than to
+    // the build in between.
+    assert!(
+        after_refused > before_build,
+        "a checkpoint a reader refused still copied pages into the file: {} bytes before the build, \
+         {} bytes after, so the file grows on a checkpoint that did not complete and 'what has been \
+         checkpointed' cannot mean 'checkpoint that completed'",
+        before_build,
+        after_refused
+    );
+    assert!(
+        after_settled > after_refused,
+        "and a completed one still had frames to copy: {} bytes after the refused checkpoint, {} \
+         bytes after the completed one. The frames the reader held behind could not be copied until \
+         it was gone, so completing a checkpoint is not the same as having nothing left to do",
+        after_refused,
+        after_settled
+    );
+    // The overlap, which is what the check's text rests on and why the two sizes are not a ratio of
+    // anything. Taken with the first assertion this is measured rather than argued: the refused
+    // checkpoint added pages to the file while the log lost none of the frames it had, so the two
+    // files were holding the same pages at the same time.
+    assert!(
+        refused_log >= before_log,
+        "the log holds every frame it had while the file gained {} bytes out of them: {} bytes \
+         before the refused checkpoint, {} bytes after. A frame copied into the file stays in the \
+         log, so the two sizes overlap rather than partitioning the index",
+        after_refused - before_build,
+        before_log,
+        refused_log
+    );
+    assert_eq!(settled_log, 0, "and TRUNCATE is what empties it");
 
     // The store is identical across the two diagnoses. Asserted, because it is the claim the rest
     // of this test rests on: if the rows had moved, the comparison below would prove nothing.
@@ -613,14 +687,17 @@ fn an_uncheckpointed_log_is_a_notice_and_a_checkpointed_one_is_a_pass() {
 
     // The measurements that moved, and the one the old rule graded on.
     assert_eq!(settled_stats.wal_size_bytes, 0, "TRUNCATE empties the log");
-    // Folding a log in only ever adds pages to the database file; nothing a checkpoint does
-    // removes them. Asserted as far as it can be justified, which is non-decreasing. Whether the
-    // *refused* checkpoint above also copied its frames into the file before failing to truncate
-    // it is a question about SQLite's TRUNCATE mode, not about this check, and nothing in this
-    // suite measures it — so a strict growth here would be asserting a mechanism on the strength
-    // of an assumption, which is the defect this module exists to catch.
+    // Strict growth, restored. It had been weakened to non-decreasing because the two mechanisms that
+    // fitted could not be told apart, and the assertions above now tell them apart: a refused
+    // checkpoint grows the file *and* a completed one grows it again. So the two reported sizes
+    // moving apart is measured rather than assumed, and this comparison is on the numbers the
+    // diagnosis itself carries, because those are the pair a reader is shown.
+    //
+    // The `>=` it replaced could not fail: a size is not negative and nothing here removes pages,
+    // so it stood for a mechanism without testing one. An assertion that survives either answer is
+    // not a weak assertion, it is a missing one.
     assert!(
-        settled_stats.file_size_bytes >= waiting_stats.file_size_bytes,
+        settled_stats.file_size_bytes > waiting_stats.file_size_bytes,
         "folding the log into the file adds pages to it and never removes them: {} bytes became \
          {}, so the file size measures checkpointing rather than the index",
         waiting_stats.file_size_bytes,

@@ -74,6 +74,14 @@ pub fn run(location: Option<&Location>, command: &'static str) -> Result<Outcome
             "this did not read a byte of source, so it says nothing about whether the code still \
              looks the way this index says it does"
                 .to_owned(),
+            // Measured, not assumed: a checkpoint a reader refuses still copies the frames it may
+            // into the database file, so the two sizes this prints can count the same page twice.
+            // `peek doctor`'s wal check measures it across a refused and a completed checkpoint.
+            "this did not compare the two file sizes against each other. They are not a partition \
+             of the index: the database file holds the pages a checkpoint has copied and the log \
+             holds every frame still in it, copied or not, so dividing one by the other measures \
+             how much has been copied rather than what the index costs"
+                .to_owned(),
         ],
     };
 

@@ -901,9 +901,11 @@ pub struct Counts {
     pub candidate_count: u64,
     /// Relations naming a target that is not in the index.
     pub orphan_relations: u64,
-    /// The main database file's size on disk.
+    /// The main database file's size on disk: the pages a checkpoint has copied into it.
     pub file_size_bytes: u64,
-    /// The write-ahead log's size.
+    /// The write-ahead log's size: every frame still in it, including frames the database file
+    /// already holds. The two overlap rather than partitioning the index, so their quotient is
+    /// not a measure of the index.
     pub wal_size_bytes: u64,
 }
 

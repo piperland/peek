@@ -781,6 +781,10 @@ fn status_states_what_it_did_not_do() {
         "integrity check",
         "did not compare the index against the working tree",
         "did not read a byte of source",
+        // The two file sizes it does print can count the same page twice, so it has to say that
+        // it did not divide them: a status report that prints the pair and stays silent about it
+        // is the confident wrong answer this list exists to prevent.
+        "did not compare the two file sizes",
     ] {
         assert!(
             joined.contains(expected),

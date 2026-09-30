@@ -40,11 +40,15 @@ pub struct StoreStats {
     pub schema_version: u32,
     /// The commit counter at the time of the call.
     pub generation: u64,
-    /// Size of the main database file on disk, in bytes. The write-ahead log is reported
-    /// separately because it is a different file with a different lifetime.
+    /// Size of the main database file on disk, in bytes: the pages a checkpoint has copied into
+    /// it. The write-ahead log is reported separately because it is a different file with a
+    /// different lifetime, and the two **overlap**: a frame copied into the file stays in the
+    /// log until a checkpoint empties it, so neither number is the other's complement.
     pub file_size_bytes: u64,
-    /// Size of the `-wal` file. Non-zero means frames are waiting to be checkpointed into the
-    /// main file; [`Store::checkpoint`] returns it to zero.
+    /// Size of the `-wal` file: every frame still in the log, including frames that are already
+    /// in the main file. Non-zero means a checkpoint has not emptied it;
+    /// [`Store::checkpoint`] returns it to zero. A checkpoint a reader refuses still copies the
+    /// frames it may, so this counts frames rather than work outstanding.
     pub wal_size_bytes: u64,
     /// Rows in `entity`.
     pub entity_count: u64,

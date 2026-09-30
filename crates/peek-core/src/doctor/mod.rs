@@ -104,7 +104,7 @@ pub enum Check {
     PendingWork,
     /// Relations with more than one candidate, which is uncertainty stored rather than lost.
     Ambiguity,
-    /// Committed frames still waiting in the write-ahead log.
+    /// Committed frames still in the write-ahead log, some of which may already be in the file.
     WalSize,
     /// Where the index lives, and that it is not inside the repository.
     IndexLocation,
@@ -643,10 +643,12 @@ fn check_ambiguity(stats: &StoreStats) -> Finding {
 ///
 /// Exactly one thing, and it is worth being precise about which.
 ///
-/// A `-wal` file of `n` bytes means `n` bytes of committed transactions have not been folded into
-/// the database file yet. That is a real measurement and it has one consequence a reader can act
-/// on: **a reader that opens the store now has to read those frames before it sees current state**,
-/// and the index is occupying a second file while it does.
+/// A `-wal` file of `n` bytes means the log is holding `n` bytes of committed transactions, and
+/// some of them may already be in the database file: a checkpoint copies frames out of the log
+/// *before* it tries to empty it, so one that fails at the emptying leaves both a bigger file and
+/// a log that still has everything it had. That is a real measurement and it has one consequence a
+/// reader can act on: **a reader that opens the store now has to read those frames before it sees
+/// current state**, and the index is occupying a second file while it does.
 ///
 /// That second file is why the number is reported rather than left implicit, and it is also why it
 /// is not graded harder. This build never sets `wal_autocheckpoint`, so nothing folds the log in on
@@ -656,17 +658,21 @@ fn check_ambiguity(stats: &StoreStats) -> Finding {
 ///
 /// # What a log size cannot tell a reader
 ///
-/// - **Not the ratio of the log to the database.** `file_size_bytes` counts only what has been
-///   checkpointed, so it is a lower bound on the index, while `wal_size_bytes` is whatever has not
-///   been yet. Their quotient is a statement about *when the last checkpoint ran* and about
-///   nothing else. Between creation and its first checkpoint, every store in existence has a
-///   one-page database file and a log holding its entire contents, so "the log is bigger than the
-///   database" is the normal state of a healthy store rather than a symptom of an unhealthy one.
-/// - **Not why the log has not been folded in.** A reader holding a snapshot is the usual reason
+/// - **Not the ratio of the log to the database.** The two sizes are not a partition of the
+///   index, so their quotient is a statement about how much has been copied and about nothing
+///   else. Measured, in `an_uncheckpointed_log_is_a_notice_and_a_checkpointed_one_is_a_pass`: a
+///   checkpoint a reader refuses still copies every frame it is allowed to copy before it fails
+///   at the reset, so the file grows while the log keeps every frame it already held. The same
+///   page can be in both files at once, which makes `file_size_bytes` a lower bound on the
+///   index and `wal_size_bytes` an over-count of what is not yet in it. Between creation and
+///   its first checkpoint, every store in existence has a one-page database file and a log
+///   holding its entire contents, so "the log is bigger than the database" is the normal state
+///   of a healthy store rather than a symptom of an unhealthy one.
+/// - **Not why the log has not been emptied.** A reader holding a snapshot is the usual reason
 ///   and there are others, and a size cannot tell them apart. This check used to name that cause in
 ///   its action, which is how a guess came to be printed as a finding.
-/// - **Not that the index is oversized.** A log the size of the index is a second copy of *recent
-///   work*, not a second copy of the index, and it disappears at the next checkpoint.
+/// - **Not that the index is oversized.** A log as large as the database is a file of *recent page
+///   versions*, not a second index, and a checkpoint that completes empties it.
 /// - **Not anything about correctness or durability.** Uncheckpointed frames are what write-ahead
 ///   logging is for.
 ///
@@ -696,13 +702,14 @@ fn check_wal_size(stats: &StoreStats) -> Finding {
             Check::WalSize,
             Severity::Notice,
             format!(
-                "{} bytes of committed frames are waiting to be folded into the database",
+                "{} bytes of committed frames are still in the write-ahead log",
                 stats.wal_size_bytes
             ),
             format!(
-                "the database file is {} bytes. That pair is not a measure of size: the file \
-                 holds only what has been checkpointed, so the comparison says when the last \
-                 checkpoint ran and not what the index costs. A reader opening now does read \
+                "the database file is {} bytes. That pair is not a measure of size: the two are \
+                 not a partition of the index, because a frame copied into the file stays in the \
+                 log, so the same page can be in both at once. The comparison says how much has \
+                 been copied so far, not what the index costs. A reader opening now does read \
                  those frames before it sees current state. Nothing is wrong with the index",
                 stats.file_size_bytes
             ),
