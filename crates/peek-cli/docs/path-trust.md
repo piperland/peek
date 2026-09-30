@@ -6,14 +6,15 @@ This is the answer to one question:
 > that path may not exist, what is Peek allowed to treat as evidence?
 
 It governs `crates/peek-cli/src/paths.rs`, and the one function there that implements it is
-`contain`. Nothing else in the crate decides containment.
+`relative_to`, through `locate_within`. Nothing else in the crate decides containment.
 
 ## The invariant, stated
 
 > **Peek trusts the repository root to be where `canonicalize` said it was. For the path the user
-> supplied, Peek trusts only the base it was anchored to and the letters in it. Peek asks the
-> filesystem about that path for exactly one reason — to follow a symlink out of the tree — and a
-> filesystem that cannot answer is never treated as a refusal and never treated as a permission.**
+> supplied, Peek trusts the base it was anchored to and the letters in it, and asks the filesystem
+> for exactly two reasons — to follow a symlink out of the tree, and to say whether a spelling that
+> reads as outside is one directory under another name. A filesystem that cannot answer is never
+> treated as a permission.**
 
 Broken into the four claims that are actually testable:
 
@@ -23,10 +24,16 @@ Broken into the four claims that are actually testable:
    with no other candidate to be relative to.
 2. **Containment is decidable without the filesystem.** A path that does not exist is still
    classifiable. Being unable to look something up is a fact about *existence*, and must never be
-   promoted into a fact about *location*.
-3. **A resolution may only make the answer stricter.** Lexical containment is necessary but not
-   sufficient: a symlink inside the tree that points out of it is lexically inside and physically
-   outside. The filesystem is consulted for exactly that, and its answer can only add refusals.
+   promoted into a fact about *location*. This is why the refusal at step 3 is still reached without
+   any I/O — a share that is not answering costs no round trip — even though step 4 may go on to ask
+   about a spelling it has already refused.
+3. **A resolution may add a refusal, and may remove one it produced itself — but only ever by naming
+   a location.** Lexical containment is necessary but not sufficient: a symlink inside the tree that
+   points out of it is lexically inside and physically outside, which only the filesystem can see.
+   It is equally not sufficient on its own, because letters are not always a location. So the
+   filesystem is consulted once, and its answer is believed when it is a location. A walk that
+   resolved nothing answers with the spelling it was handed, which is the very thing the lexical
+   test already rejected, so **a resolution cannot overturn a refusal by declining to answer**.
 4. **A missing tail is trusted as a name, and that trust is a risk, not a proof.** Resolving
    `<root>/a/b/c.rs` when only `<root>/a` exists means trusting that `b` and `c.rs` are plain names
    under a directory whose real location has been verified. See *The risk accepted* below.
@@ -79,38 +86,68 @@ Given a root that has already been canonicalized, and a path the user typed:
    and makes step 3 fail, rather than being silently dropped. Separators are the platform's own:
    `\` is a separator on Windows and an ordinary filename character on Unix, and treating it as a
    separator on Unix would take away a legal path.
-3. **Test lexical containment, and refuse here if it fails.** Component-wise prefix against the
-   root. Not a string prefix: `<parent>/repo-old` is not inside `<parent>/repo`. This step never
-   touches the filesystem, so it always produces an answer — including for a path nothing has ever
-   heard of, a volume that is not mounted, and a share that is not answering. **A refusal here
-   means the path is never handed to the filesystem at all.**
-4. **If the path got this far, resolve its deepest existing prefix** and test that too. A location
-   outside the root means a symlink pointed out of the tree: refused, with the resolved location
-   named. This step may add a refusal and can never remove one, because step 3 has already refused
-   everything it would have let through.
-5. **What is left is trusted.** The answer is the *resolved* location, not the spelling, so a
-   symlink and the directory it points at are one path and the index holds it under one name. The
-   missing components are names under a directory whose real location step 4 verified.
+3. **Test lexical containment.** Component-wise prefix against the root. Not a string prefix:
+   `<parent>/repo-old` is not inside `<parent>/repo`. This step never touches the filesystem, so it
+   always produces an answer — including for a path nothing has ever heard of, a volume that is not
+   mounted, and a share that is not answering.
+4. **Put a refusal to the filesystem, once, where the filesystem can settle it.** A refusal at step 3
+   is a statement about spelling, and **a directory can have more than one spelling.** The root is
+   canonical and a path typed in full is not, so two spellings of one location is the ordinary state
+   of affairs rather than an accident:
+   - on Windows, `canonicalize` answers `\\?\C:\repo` where the caller wrote `C:\repo` — a prefix
+     difference, read as the bare prefix it stands for by the component comparison — and it *also*
+     expands a short name on the way to a directory, so `C:\Users\RUNNER~1\repo` is
+     `\\?\C:\Users\runneradmin\repo`;
+   - on macOS there is no prefix at all and `/var` is a link to `/private/var`, so every temporary
+     directory is two spellings of one place.
 
-Steps 3 and 4 are both necessary and neither is sufficient alone. That is the whole content of the
+   Those are settled by asking, and **not** by deciding that two spellings are equal when they are
+   not: a *name* carries a location, so only the filesystem can say that `RUNNER~1` and
+   `runneradmin` are one directory. The question is asked only where it can mean anything — the
+   spelling climbs nowhere, and the volume is the root's own — so **a path that climbs or sits on
+   another volume is still refused here, without any I/O at all**, which is what keeps an unanswering
+   share from costing a network round trip. And the answer can only overturn a refusal by naming a
+   location: a walk that resolves nothing falls back to the spelling, which is what step 3 already
+   tested.
+5. **Resolve the deepest existing prefix and test that too.** A location outside the root is refused,
+   with the resolved location named. This step catches a symlink that pointed out of the tree, and it
+   is the only step that can see one: the link is invisible to a comparison of letters. This step may
+   add a refusal, and may turn step 4's refusal back into an answer.
+6. **What is left is trusted.** The answer is the *resolved* location, not the spelling, so a
+   symlink and the directory it points at are one path and the index holds it under one name. The
+   missing components are names under a directory whose real location step 5 verified.
+
+Steps 3 and 5 are both necessary and neither is sufficient alone. That is the whole content of the
 design, and it is why the two failures this document was written for were failures: the old
-implementation had step 4 where step 3 should have been, so a path that had never existed was
-answered by the filesystem instead of by the contract.
+implementation had step 5 where step 3 should have been, so a path that had never existed was
+answered by the filesystem instead of by the contract. Step 4 exists because step 3 is a *necessary*
+condition only: it is a comparison of letters, and letters are not always a location.
 
 ### Why the answer is the resolved location, not the spelling
 
 `<root>/src/link/../a.rs`, where `link` is a symlink to `<root>/real`. To a reader of the spelling,
-`link/..` is `src`, so the path names `src/a.rs`. The operating system follows the link first and
-then climbs, so it opens `<root>/a.rs`. The repository contains both files, so containment cannot
-separate the two candidates and only the filesystem can — and it is the index, not the user, that
-decides which spelling a file is stored under.
+`link/..` is `src`, so the path names `src/a.rs`. A kernel follows the link first and then climbs,
+so it opens `<root>/a.rs`. The repository contains both files, so containment cannot separate the two
+candidates and only the filesystem can — and it is the index, not the user, that decides which
+spelling a file is stored under.
 
 So the gate reads the spelling and the answer reads the resolution. Normalizing the spelling and
 stopping there would remove the wrong file's rows and report success: two files, both inside the
 root, and no check with anything to say about either. The tail cannot reintroduce the same
-ambiguity, because the walk in step 4 only stops where a component is *missing*, and a missing
+ambiguity, because the walk in step 5 only stops where a component is *missing*, and a missing
 component has no symlink to follow — so there is nothing for a `..` in the tail to mean other than
 what it is read as.
+
+**The answer is not the same file on every platform, and that is not a defect to be smoothed over.**
+A kernel resolves `..` after following the link, so the spelling above names `<root>/a.rs`. Windows is
+given a DOS path, and the DOS path parser removes `.` and `..` while it converts the path — before the
+filesystem is asked anything — so the link is never followed and the same spelling names
+`<root>/src/a.rs`. Peek's contract is the location the operating system would open, and Windows would
+open `src\a.rs`, so `src\a.rs` is the answer there and `a.rs` is the answer on a kernel. A test that
+wrote one of those down as the expectation for both would be asserting a platform's resolution rather
+than the contract, so the test asks the filesystem which file the spelling opens and requires the
+answer to be that file. The consequence for a caller is the same one *mixed separators* already
+records: the two platforms judge an identically spelled path differently, and that is correct.
 
 
 ## Cases, and what each one means
@@ -122,25 +159,61 @@ what it is read as.
 | **repository root** | anchored to the working directory. The one path with no other candidate. Canonicalized in full, because it must exist. |
 | **current working directory** | read once, in `resolve_root`, for the root only. A path *within* a named root never consults it — and neither does a drive-relative spelling, which is refused rather than resolved against a per-drive working directory. |
 | **lexical normalization** | `.`, `//` and `..` are resolved by the tool, in the tool, against the root. The user does not do it, and the filesystem does not get to reinterpret it. |
-| **`..` traversal** | resolved lexically for the gate. Filesystem `..` follows symlinks and can move *further* than `..` asks for; lexical `..` moves exactly one component. A climb that leaves the root is refused at step 3, without touching the filesystem. |
-| **symlinked parents** | caught at step 4, because the deepest existing prefix is resolved and re-tested. Only ever adds a refusal. |
+| **`..` traversal** | resolved lexically for the gate. A climb that leaves the root is refused at step 3 and is **not** put to the filesystem: the refusal is about what the path asked for, not about where it landed, so nothing is opened. A climb that stays inside is an ordinary path, and when the middle of it does not exist the arithmetic is the only thing available. |
+| **symlinked parents** | caught at step 5, because the deepest existing prefix is resolved and re-tested. Adds a refusal. |
+| **one directory, two spellings** | the reason step 4 exists. A root that is canonical and a path typed in full that is not are two spellings of one location on Windows (the prefix, and a short name the filesystem expands) and on macOS (`/var` for `/private/var`). Settled by asking the filesystem, never by folding names in a comparison — a name carries a location. |
+| **a path through a link that names the repository** | answered as the repository. The link is a second name for the root, the filesystem resolves it there, and the index holds the file under the name the walk found. |
 | **nonexistent final component** | normal. Addressable, and the reason `rm` works on a deleted file. |
 | **nonexistent intermediate component** | normal, and the case the old code could not reach at all. The walk goes up until something resolves, and the unresolvable tail is names under it. |
 | **Windows drive letters** | `C:\foo` is absolute and used as given. `C:foo` and a bare `C:` are drive-relative and **refused**: they name whatever directory that drive is currently reading, which is process-global state the user did not name and which `canonicalize` would consult silently. |
-| **UNC paths** | absolute. `\\server\share` is compared as a path, not as a network location. A drive-letter root cannot contain one, and the gate says so before the filesystem is touched — so a share that is not answering costs no network round trip. |
+| **UNC paths** | absolute. `\\server\share` is compared as a path, not as a network location. A drive-letter root cannot contain one, and the volume comparison at step 4 says so before the filesystem is touched — so a share that is not answering costs no network round trip. |
 | **mixed separators** | the platform decides. On Windows `..\..\x` and `../../x` are the same traversal. On Unix a backslash is a character in a name, and treating it as a separator would refuse a legal file. The consequence is that the two platforms judge an identically-spelled path differently, and that is correct: the string means different things on each. |
+| **`..` after a symlink** | the platform decides, for the same reason as mixed separators. A kernel follows the link and then climbs; Windows removes the `..` from the DOS path before the filesystem is asked, so the link is never followed. The answer is the file each platform would open. |
 | **case-insensitive filesystems** | the root arrives canonical, so it carries the on-disk case. A user who types `C:\Repo` against a root of `C:\repo` is refused, loudly, rather than being guessed at — and every comparison the tool makes internally is between two on-disk spellings. See *What is not decided here*. |
 | **worktrees** | a linked worktree has its own root and therefore its own `RepoId` and its own index, keyed on the git common directory. A path into a sibling worktree is outside the root and is refused by the same rule as any other path outside. |
 
 ## What is not decided here
 
+**How far the one-directory-two-spellings rule reaches.** This is the question the prefix opened and
+it is not finished, because the prefix is the *smallest* of the differences and the only one a
+comparison is allowed to settle on its own.
+
+What **is** decided: a verbatim prefix is not a location, so the component comparison reads
+`\\?\C:\repo` as the `C:\repo` it stands for. On Windows that is necessary rather than convenient —
+`canonicalize` answers in the extended-length form, so the root `resolve_root` hands on and a path
+typed in full differ in their first component and in nothing else, and comparing them as strings
+refused **every** path inside the repository with a message blaming a symlink for it, which is a
+second thing that is not true.
+
+What **is not** decided, and cannot be decided the same way, is everything *below* the prefix,
+because a name carries a location and only the filesystem can say whether two of them are one
+directory. `canonicalize` expands a short name on the way to a directory, so
+`C:\Users\RUNNER~1\repo` and `\\?\C:\Users\runneradmin\repo` differ in a component that means
+something; on macOS there is no prefix at all and `/var` is a link to `/private/var`, so every
+temporary directory is two spellings of one place. Those are put to the filesystem at step 4 — **not**
+by deciding in a comparison that two names are equal, which would silently widen containment to any
+pair of paths that happened to be written alike. There is no decision here about which names to fold
+because the answer is not a property of the spelling, and a rule that tried to be one would be a rule
+about a machine rather than about containment.
+
 **Case-insensitive containment.** On Windows and macOS, `src/Foo.rs` and `src/foo.rs` are one file,
-and a user who typed the wrong case has named a file that is inside the repository. The current code
-refuses that, because the root is canonical and the argument is not, and the comparison is exact.
-Making it accept the wrong case needs a per-filesystem answer to "does this filesystem fold case",
-which is a different question from containment and is not answered here. **This is a false refusal,
-not an escape, and it is unchanged by this document.** It is recorded so that a future change to it
-knows what it is changing.
+and a user who typed the wrong case has named a file that is inside the repository. **A path typed
+with the wrong case carries no `..` and sits on the root's own volume, so step 4 puts it to the
+filesystem and the filesystem answers for it — this is now correct by accident of where the step is,
+and that is not a reason to rely on it.** It depends on `canonicalize` handing back the on-disk case,
+which it does, rather than on anything this document decides. The comparison itself is still exact, so
+a root and a path that disagree about case and are not both resolvable are still refused. **This is a
+false refusal, not an escape**, and it is not made worse by anything above.
+
+**A climb that hides a link from the walk.** The walk at step 5 stops at the deepest component that
+resolves, and it cannot resolve past a component that does not exist. So for
+`<root>/never/../link/x.rs` where `never` is absent, the walk reaches `<root>`, rebuilds the tail and
+hands back `<root>/link/x.rs` with `link` **unfollowed** — while the answer is reported as inside the
+root. No operating system can open that path at all, so there is no "file it would open" for the
+answer to be wrong about, but the index would hold `link/x.rs` and a link pointing out of the tree
+would go unexamined. This is the trusted-ancestor assumption below, taken one level further than
+*The risk accepted* states, and it is recorded rather than fixed because the fix is not a containment
+question: it is a question about whether a path nothing can open should be nameable at all.
 
 **Whether a missing component is a directory.** `is_directory` is false for anything that is not a
 directory right now, which includes a directory that has not been created yet. `peek rm src/new`
@@ -168,7 +241,7 @@ check and before the caller acts, defeats the check. Peek accepts this because:
   party who could simply write the file it points at.
 
 **This argument holds for `peek rm` and would not hold for a command that unlinked or wrote.** If a
-future command uses `contain` to guard a filesystem write, it must re-resolve at the moment of the
+future command uses `relative_to` to guard a filesystem write, it must re-resolve at the moment of the
 write, and this document says so rather than leaving the reuse to look free.
 
 ## What a caller observes

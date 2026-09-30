@@ -1368,7 +1368,11 @@ mod tests {
         // path it was given. `never` is absent, which is what makes the tail unresolvable and sends
         // a kernel's `realpath` down this branch at all.
         let climbed = alias.join("src/never/../also-never.rs");
-        let expected = root.canonicalize().expect("canonicalise").join("src").join("also-never.rs");
+        let expected = root
+            .canonicalize()
+            .expect("canonicalise")
+            .join("src")
+            .join("also-never.rs");
 
         // **The fixture's own precondition, asserted rather than assumed**: a spelling read purely
         // lexically is *not* the answer, so this cannot pass by handing the path straight back.
@@ -1440,7 +1444,9 @@ mod tests {
         let _other = Cleanup(elsewhere.clone());
         let link = root.join("link");
         if !make_directory_symlink(&elsewhere, &link) {
-            skipped_without_a_symlink("a directory link out of the tree under a path that resolves");
+            skipped_without_a_symlink(
+                "a directory link out of the tree under a path that resolves",
+            );
             return;
         }
         let file = link.join("a.rs");
@@ -1529,7 +1535,8 @@ mod tests {
             return;
         }
         let spelling = root.join("src/link/../a.rs");
-        let opened = std::fs::read_to_string(&spelling).expect("the filesystem opens this spelling");
+        let opened =
+            std::fs::read_to_string(&spelling).expect("the filesystem opens this spelling");
 
         let found = relative_to(&root, spelling.to_str().expect("utf-8"), "rm")
             .expect("the climb stays inside the root");
@@ -1589,8 +1596,12 @@ mod tests {
              nothing about a refusal being overturned"
         );
 
-        let found = relative_to(&canonical_root, through_the_alias.to_str().expect("utf-8"), "rm")
-            .expect("one directory under two names is inside the repository");
+        let found = relative_to(
+            &canonical_root,
+            through_the_alias.to_str().expect("utf-8"),
+            "rm",
+        )
+        .expect("one directory under two names is inside the repository");
         assert_eq!(
             found.path.as_str(),
             "src/a.rs",
