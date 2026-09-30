@@ -345,9 +345,12 @@ fn locate_within(root: &Path, given: &str) -> Result<Located, String> {
     let location = resolve_location(&anchored);
     if !location.starts_with(&base) {
         return Err(format!(
-            "{spelled} is written as if it were inside the repository at {base}, but it reaches \
-             {location}, which is outside the tree. A symlink inside the repository points out of \
-             it, and this command will not follow one to a file the repository does not contain"
+            "{} is written as if it were inside the repository at {}, but it reaches {}, which is \
+             outside the tree. A symlink inside the repository points out of it, and this command \
+             will not follow one to a file the repository does not contain",
+            spelled.display(),
+            base.display(),
+            location.display()
         ));
     }
 
