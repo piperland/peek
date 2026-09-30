@@ -25,7 +25,8 @@
 //! |---|---|
 //! | "it says no symbols for my file" | [`Check::PendingWork`], [`Check::UnsupportedFiles`] |
 //! | "the index is from before I changed something" | [`Check::SchemaVersion`] |
-//! | "it is slow" | [`Check::WalSize`], [`Check::Ambiguity`] |
+//! | "it is slow" | [`Check::Ambiguity`] |
+//! | "there is committed work not yet folded into the index" | [`Check::WalSize`] |
 //! | "is my data safe if the power goes out" | [`Check::Durability`] |
 //! | "where is it storing my code" | [`Check::IndexLocation`] |
 //! | "an edge points at nothing" | [`Check::OrphanEdges`] |
@@ -103,7 +104,7 @@ pub enum Check {
     PendingWork,
     /// Relations with more than one candidate, which is uncertainty stored rather than lost.
     Ambiguity,
-    /// Size of the write-ahead log relative to the database.
+    /// Committed frames still waiting in the write-ahead log.
     WalSize,
     /// Where the index lives, and that it is not inside the repository.
     IndexLocation,
@@ -608,30 +609,89 @@ fn check_ambiguity(stats: &StoreStats) -> Finding {
     )
 }
 
+/// Whether committed frames are still waiting in the write-ahead log.
+///
+/// # What a log size can tell a reader
+///
+/// Exactly one thing, and it is worth being precise about which.
+///
+/// A `-wal` file of `n` bytes means `n` bytes of committed transactions have not been folded into
+/// the database file yet. That is a real measurement and it has one consequence a reader can act
+/// on: **a reader that opens the store now has to read those frames before it sees current state**,
+/// and the index is occupying a second file while it does.
+///
+/// That second file is why the number is reported rather than left implicit, and it is also why it
+/// is not graded harder. This build never sets `wal_autocheckpoint`, so nothing folds the log in on
+/// a timer; SQLite folds it in when the last connection to the file closes. The frames are
+/// therefore free for a command that exits and *not* free for a process that stays open, and which
+/// of the two the reader is looking at is not in the measurement.
+///
+/// # What a log size cannot tell a reader
+///
+/// - **Not the ratio of the log to the database.** `file_size_bytes` counts only what has been
+///   checkpointed, so it is a lower bound on the index, while `wal_size_bytes` is whatever has not
+///   been yet. Their quotient is a statement about *when the last checkpoint ran* and about
+///   nothing else. Between creation and its first checkpoint, every store in existence has a
+///   one-page database file and a log holding its entire contents, so "the log is bigger than the
+///   database" is the normal state of a healthy store rather than a symptom of an unhealthy one.
+/// - **Not why the log has not been folded in.** A reader holding a snapshot is the usual reason
+///   and there are others, and a size cannot tell them apart. This check used to name that cause in
+///   its action, which is how a guess came to be printed as a finding.
+/// - **Not that the index is oversized.** A log the size of the index is a second copy of *recent
+///   work*, not a second copy of the index, and it disappears at the next checkpoint.
+/// - **Not anything about correctness or durability.** Uncheckpointed frames are what write-ahead
+///   logging is for.
+///
+/// # Why there is no warning
+///
+/// `Severity::Warn` is a claim that something is costing the user *and* that the measurement
+/// identifies what. The first half is not decidable from one observation: an uncheckpointed log is
+/// every store's state between commits and the next checkpoint, so any byte threshold is a claim
+/// about a workload that is not measured here. The second half is not true of a size at all. So a
+/// non-empty log is a [`Severity::Notice`]: the index is working, there is committed work in the
+/// log, and here is what folds it in. A threshold nobody can justify would be a worse check than
+/// none, because a reader learns to ignore the number and then ignores it when it is right.
+///
+/// # What that costs
+///
+/// A log that really has doubled the index on disk is now a notice where it was a warning. It
+/// happened: indexing `rust-lang/regex` left 30,479,792 bytes of log against a 30,199,808 byte
+/// database before the indexer was taught to checkpoint, and that is exactly the case the old
+/// threshold was the right shape for. It is still reported — the byte count is the first thing the
+/// finding says, and it is measured rather than estimated — but it is no longer escalated on a
+/// number that says as much about the last checkpoint as about the index. A check that escalates
+/// on a number it cannot interpret is a check whose escalations get ignored, and this one ignored
+/// it on every store that had not been checkpointed yet, which is most of them.
 fn check_wal_size(stats: &StoreStats) -> Finding {
-    // A log as large as the database means a second full copy of the index on disk. It is a
-    // symptom with a cause, and the cause is usually that nothing has checkpointed — which is
-    // worth telling the user rather than silently fixing, because a caller that checkpoints on
-    // every commit would turn a refresh into a disk storm.
-    if stats.file_size_bytes > 0 && stats.wal_size_bytes * 2 > stats.file_size_bytes {
+    if stats.wal_size_bytes > 0 {
         return Finding::problem(
             Check::WalSize,
-            Severity::Warn,
+            Severity::Notice,
             format!(
-                "the write-ahead log is {} bytes against a {} byte database",
-                stats.wal_size_bytes, stats.file_size_bytes
+                "{} bytes of committed frames are waiting to be folded into the database",
+                stats.wal_size_bytes
             ),
-            "the log holds committed transactions that have not been folded back into the \
-             database, so the index currently costs about twice what it should on disk. A reader \
-             holding a snapshot is what prevents the checkpoint, and that is not a fault"
-                .to_owned(),
-            Some("close other readers, or checkpoint when the watcher goes idle".to_owned()),
+            format!(
+                "the database file is {} bytes. That pair is not a measure of size: the file \
+                 holds only what has been checkpointed, so the comparison says when the last \
+                 checkpoint ran and not what the index costs. A reader opening now does read \
+                 those frames before it sees current state. Nothing is wrong with the index",
+                stats.file_size_bytes
+            ),
+            Some(
+                "a one-shot command folds these in when it exits; a long-running \
+ process has to fold them in itself, and this build does that after indexing"
+                    .to_owned(),
+            ),
         );
     }
     Finding::pass(
         Check::WalSize,
-        format!("the write-ahead log is {} bytes", stats.wal_size_bytes),
-        format!("against a {} byte database", stats.file_size_bytes),
+        "no committed frames are waiting to be folded into the database",
+        format!(
+            "the log is empty, against a {} byte database",
+            stats.file_size_bytes
+        ),
     )
 }
 
