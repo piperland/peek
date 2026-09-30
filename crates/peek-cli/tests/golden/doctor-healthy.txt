@@ -18,8 +18,8 @@
         no relation is waiting on the resolver
 [pass] no relation is ambiguous
         every decided edge names exactly one target
-[pass] the write-ahead log is 0 bytes
-        against a 61440 byte database
+[pass] no committed frames are waiting to be folded into the database
+        the log is empty, against a 61440 byte database
 [pass] every file in the repository was indexable
         4 files yielded, none refused
 
