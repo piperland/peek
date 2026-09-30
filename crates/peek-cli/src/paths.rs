@@ -14,7 +14,7 @@
 //! are consequences of that one rule rather than four rules of their own, which is what they used
 //! to be.
 //!
-//! # Containment is decided before the filesystem is asked
+//! # Containment is decided on the spelling, before the filesystem is asked
 //!
 //! The order is the invariant, and it is the opposite of what this module used to do. A path that
 //! does not exist has no filesystem-resolved location, so a decision that asks for one first has
@@ -26,9 +26,11 @@
 //!    different things depending on where the user is standing. The root is the single exception,
 //!    because it is the only path with no other candidate to be relative to.
 //! 2. **Normalise the spelling.** `.`, `//` and `..` collapse without asking the filesystem
-//!    anything, because a filesystem resolves `..` *after* following symlinks and can therefore
-//!    move further than `..` asks for. On Windows a path's case is whatever the caller typed, so
-//!    `C:\Repo` and `c:\repo` are different strings for one directory; the root arrives
+//!    anything, and they collapse *lexically* because the platforms disagree about what `..` means:
+//!    a kernel resolves it after following a link, so it can move further than it asks for, while
+//!    Windows takes it off a DOS path before the filesystem is asked anything. Arithmetic here is
+//!    the one reading both platforms share. On Windows a path's case is whatever the caller typed,
+//!    so `C:\Repo` and `c:\repo` are different strings for one directory; the root arrives
 //!    canonical and carries the on-disk case, so every comparison this module makes internally is
 //!    between two on-disk spellings.
 //! 3. **Test containment on the spelling.** Component-wise, never a string prefix: `/repo/src-old`
@@ -36,26 +38,45 @@
 //!    repository's index be removed by a command aimed at another's directory. This step touches
 //!    no filesystem and therefore always produces an answer, including for a path that has never
 //!    existed.
-//! 4. **Then ask the filesystem, and only to make the answer stricter.** The deepest existing
-//!    prefix is resolved and re-tested, which is what catches a symlink pointing out of the tree.
-//!    A resolution may add a refusal and can never remove one. A filesystem that cannot answer
-//!    costs the refinement, not the answer.
+//! 4. **Then ask the filesystem, and only to settle what the spelling cannot.** The deepest
+//!    existing prefix is resolved and re-tested, which is what catches a symlink pointing out of
+//!    the tree, and which also settles whether a spelling that read as outside is one directory
+//!    under another name. A resolution can add a refusal, and it can turn one refusal back into an
+//!    answer; what it cannot do is answer for a path that climbs or sits on another volume, so
+//!    those are refused without any I/O at all. A filesystem that cannot answer costs the
+//!    refinement, not the answer.
 //! 5. **Trust what is left.** The resolved prefix is inside the root and the remaining components
 //!    are names. That trust is a real risk and is stated in the document, with the reason it is
 //!    acceptable here and would not be for a command that writes to the filesystem.
 //!
-//! # Containment is decided on components, never on a spelling
+//! # A directory can be named more than one way
 //!
-//! On Windows `canonicalize` answers in the extended-length spelling, `\\?\C:\repo`, so a location
-//! the filesystem named and a root the caller spelled can be one directory and still fail a string
-//! comparison: `\\?\C:\repo` and `C:\repo` differ in their first component and in nothing else.
-//! `Path::starts_with` calls that a different directory, and the consequence is not a subtle one —
-//! **every path inside the repository is refused, and the message blames a symlink for it**, which
-//! is a second thing that is not true.
+//! **Step 3 is a necessary condition, not a sufficient one, and the reason is a fact about paths
+//! rather than about this module: letters are not always a location.** The same directory has more
+//! than one spelling, and on both platforms that are not different from CI the differences fall on
+//! the two different sides of the prefix question.
 //!
-//! So both comparisons go through [`is_under`], which compares components and reads a verbatim
-//! prefix as the bare prefix it stands for. Everything else about it is `Path::starts_with`, which
-//! is why on Unix — where a path has no prefix component at all — it cannot answer differently.
+//! **On Windows** `canonicalize` answers in the extended-length spelling, `\\?\C:\repo`, so a
+//! location the filesystem named and a root the caller spelled can be one directory and still fail
+//! a comparison: they differ in their first component and in nothing else.
+//! [`is_under`] reads a verbatim prefix as the bare prefix it stands for, which settles that half.
+//! It cannot settle the other half, and the other half is ordinary: `canonicalize` also expands a
+//! short name on the way to a directory, so `C:\Users\RUNNER~1\repo` is `\\?\C:\Users\runneradmin\repo`
+//! — one directory whose two spellings differ in a component that *does* carry a location.
+//!
+//! **On macOS** there is no prefix to differ and the same trouble arrives by another road: `/var` is
+//! a link to `/private/var`, so every temporary directory is two spellings of one place.
+//!
+//! Neither is an edge case. The root [`resolve_root`] hands on is canonical and a path typed in full
+//! is not, so two spellings of one location is the **ordinary** state of affairs on both, not
+//! something a test had to arrange — and a gate that reads them as two directories refuses a path
+//! that is inside the repository and blames a symlink for it, which is a second thing that is not
+//! true.
+//!
+//! So step 4 is allowed to answer a refusal, where step 3 could not have been wrong about one.
+//! It is asked exactly once, and only for a path that climbs nowhere and sits on the root's own
+//! volume; and it can only ever answer with something it resolved, because a walk that names no
+//! part of a path falls back to the spelling and therefore says what step 3 said.
 //!
 //! # Why one function and not one per command
 //!
@@ -342,19 +363,34 @@ fn locate_within(root: &Path, given: &str) -> Result<Located, String> {
     let anchored = absolutise(Path::new(given), &base)?;
 
     // **The gate, first and on the spelling.** Component-wise, with no filesystem involved, so it
-    // is available for a path that has never existed and for a volume that is not mounted. A
-    // refusal here means the path is not handed to the filesystem at all, so a wrong path costs no
-    // I/O — and, on Windows, a path on a share that is not answering is refused on the spelling
-    // rather than by waiting for the network to say no.
+    // is available for a path that has never existed and for a volume that is not mounted.
     let spelled = normalise_lexically(&anchored);
-    if !is_under(&base, &spelled) {
+    let on_the_spelling = is_under(&base, &spelled);
+
+    // **And a refusal here is a decision about arithmetic, which has two kinds.** One is final: a
+    // path that climbs, or one on another volume, is out of this tree by the spelling alone, so it
+    // is refused here and never handed to the filesystem at all — which is what keeps a share
+    // that is not answering from costing a network round trip, and a wrong path from costing I/O.
+    //
+    // The other is not final, because **letters are not always a location: a directory can be
+    // named more than one way, and on both affected platforms the ways differ without differing in
+    // place.** `canonicalize` answers in the extended-length spelling on Windows *and* expands a
+    // short name on the way to a directory, so a caller who wrote `C:\Users\RUNNER~1\repo` is
+    // holding the directory the root names as `\\?\C:\Users\runneradmin\repo`; and on macOS `/var`
+    // is a link to `/private/var`, so every temporary directory is two spellings of one place. The
+    // root [`resolve_root`] hands on is canonical and a path typed in full is not, so those are two
+    // spellings of one location by default rather than by accident. The prefix exception in
+    // [`same_component`] settles the first half of that and cannot settle the rest, because a
+    // *name* does carry a location — so a refusal is put to the filesystem exactly once, here,
+    // where the spelling could not have climbed out and the volume is the root's own.
+    let worth_asking = on_the_spelling || (same_volume(&base, &spelled) && !climbs(&anchored));
+    if !worth_asking {
         return Err(outside_the_repository(given, &spelled, &base));
     }
 
     // **The refinement.** The deepest existing prefix is resolved so a symlink is followed *before*
     // the containment test rather than after, and so the answer is the location the operating
-    // system would open. This can add a refusal; it cannot remove one, because the gate has
-    // already refused everything the refinement would have let through.
+    // system would open.
     let location = resolve_location(&anchored);
     // The root is compared in the spelling the same function gives it, for the same reason the
     // comparison is component-wise: `canonicalize` answers in the extended-length form on Windows
@@ -362,18 +398,32 @@ fn locate_within(root: &Path, given: &str) -> Result<Located, String> {
     // location the filesystem named would be compared as two directories where there is one. Both
     // sides now come from one function and cannot disagree about spelling.
     //
-    // This removes refusals and never adds one: `anchored` was built by joining onto this same
-    // `base`, so the root's resolution and the path's resolution walk the same links.
+    // **Nor can they disagree about which kind of answer they are holding**, and that is a separate
+    // fault this comparison had. A walk that gave up part-way used to answer with the path's own
+    // spelling while the root's walk answered with a location, so one directory was compared with
+    // itself in two forms — and on a runner whose temporary directory is a link (`/var` for
+    // `/private/var`) that reads as the path being outside the tree and says a symlink sent it
+    // there. The walk now spends a `..` instead of stopping on it, which is what leaves a location
+    // on both sides or a spelling on both sides.
     let resolved_base = resolve_location(&base);
-    if !is_under(&resolved_base, &location) {
-        return Err(format!(
-            "{} is written as if it were inside the repository at {}, but it reaches {}, which is \
-             outside the tree. A symlink inside the repository points out of it, and this command \
-             will not follow one to a file the repository does not contain",
-            spelled.display(),
-            base.display(),
-            location.display()
-        ));
+    let on_the_disk = is_under(&resolved_base, &location);
+    if !on_the_disk {
+        // Two refusals, and which one is said depends on what the spelling claimed rather than on
+        // how the refusal was reached. A spelling that read as inside and resolves outside is a
+        // link that left the tree, and that is what the message has to name: the spelling is
+        // inside and the location is not, so only one of them can be quoted and only one of them
+        // is a location.
+        if on_the_spelling {
+            return Err(format!(
+                "{} is written as if it were inside the repository at {}, but it reaches {}, which \
+                 is outside the tree. A symlink inside the repository points out of it, and this \
+                 command will not follow one to a file the repository does not contain",
+                spelled.display(),
+                base.display(),
+                location.display()
+            ));
+        }
+        return Err(outside_the_repository(given, &spelled, &base));
     }
 
     // `strip_base` answers an `Option` because that is exactly what it has: either the base was a
@@ -403,10 +453,15 @@ fn locate_within(root: &Path, given: &str) -> Result<Located, String> {
 /// including one the user named with a full absolute path — and the refinement's message would say
 /// a symlink sent it out of the tree.
 ///
-/// **It reads a spelling being different as a location being different.** Case is still exact, on
-/// purpose: `docs/path-trust.md` records refusing `C:\Repo` against a root of `C:\repo` as a false
-/// refusal it is choosing not to fix, and folding case here would quietly fix it in one direction
-/// only.
+/// **The prefix is the only exception, and that is the limit of what a comparison can do.** The
+/// next difference on the same platform is a *name* — a short name the filesystem expands — and on
+/// macOS it is a link in the middle of the path (`/var` for `/private/var`). A name carries a
+/// location, so there is nothing here to fold: those are settled by asking the filesystem, in
+/// [`locate_within`], and not by deciding that two spellings are equal when they are not.
+///
+/// **Case is still exact, on purpose**: `docs/path-trust.md` records refusing `C:\Repo` against a
+/// root of `C:\repo` as a false refusal it is choosing not to fix, and folding case here would
+/// quietly fix it in one direction only.
 fn is_under(base: &Path, path: &Path) -> bool {
     let mut components = path.components();
     for component in base.components() {
@@ -475,6 +530,44 @@ fn same_component(left: &Component<'_>, right: &Component<'_>) -> bool {
     }
 }
 
+/// Whether `base` and `spelled` name the same volume: the component that says *where* a path is,
+/// as against the names underneath it that say *which directory on it*.
+///
+/// **The volume is the one part of a path with no second spelling to reconcile.** Every component
+/// below it can be an alias for somewhere else — a short name the filesystem expands, a directory
+/// that is itself a link — so the filesystem is the only authority on those and this function is
+/// only the one place that says so without asking. A prefix has two spellings and no two places
+/// (`\\?\C:` and `C:`), which is what [`same_component`] reads, and which is what lets a path typed
+/// in full reach this at all.
+///
+/// **This is what keeps a wrong path costing no I/O.** A share asked about against a drive-letter
+/// root is two volumes, so `\\no-such-share\x.rs` is refused on the spelling and the network is
+/// never asked; the same goes for a path that climbs, which is arithmetic and needs nothing.
+fn same_volume(base: &Path, spelled: &Path) -> bool {
+    match (base.components().next(), spelled.components().next()) {
+        (Some(base), Some(spelled)) => same_component(&base, &spelled),
+        // Both are absolute by the time they arrive, so a missing first component is not reachable
+        // and is not this function's to decide. The containment tests answer either way.
+        _ => true,
+    }
+}
+
+/// Whether `path` spells a `..` anywhere.
+///
+/// **The only way out that arithmetic can see, and the one refusal the filesystem does not get to
+/// overturn.** A spelling without one cannot have climbed out of the root: every component is a
+/// name under it, and resolution can only rewrite a name to what it points at, which the test on
+/// the resolved location has already answered. So the question is left to the filesystem only where
+/// the spelling had no climb to disagree with — and kept away from it where it did, because there
+/// the refusal is a statement about what the path asked for rather than about where it landed.
+///
+/// Read off the spelling *as given*, not off the normalised path: normalisation has already spent
+/// a `..` on the name before it, and spent it correctly.
+fn climbs(path: &Path) -> bool {
+    path.components()
+        .any(|component| component == Component::ParentDir)
+}
+
 /// Whether `text` is one of the Windows spellings whose meaning is relative to the current
 /// directory of a drive, which this process cannot see.
 ///
@@ -502,11 +595,14 @@ fn windows_drive_relative(text: &str) -> bool {
 /// previous name, or do nothing at the filesystem root, which is what the filesystem does with a
 /// `..` that has nowhere left to climb.
 ///
-/// **Lexically, and that is a decision rather than a shortcut.** A filesystem resolves `..` *after*
-/// following symlinks, so `<root>/link/..` is the parent of the link's target and not the parent
-/// of `link`. Both are inside the root or both are outside it as far as containment goes, but only
-/// one of them is the file the operating system would open — which is why [`resolve_location`]
-/// asks the filesystem about the *spelling* and this function's answer is only ever the gate.
+/// **Lexically, and that is a decision rather than a shortcut.** The platforms do not agree about
+/// what `..` means behind a link. A kernel resolves it *after* following the link, so
+/// `<root>/src/link/..` is the parent of the link's target and not the parent of `link`; Windows is
+/// given a DOS path and takes the `..` off it before the filesystem is asked, so it arrives here
+/// already collapsed. Only arithmetic is a reading both platforms share, and either way both
+/// candidates are inside the root or both are outside it as far as containment goes — which is why
+/// [`resolve_location`] asks the filesystem about the *spelling* and this function's answer is only
+/// ever the gate.
 fn normalise_lexically(path: &Path) -> PathBuf {
     let mut kept: Vec<Component<'_>> = Vec::new();
     for component in path.components() {
@@ -539,14 +635,37 @@ fn normalise_lexically(path: &Path) -> PathBuf {
 ///
 /// **On the spelling, not on the normalised path, and that is what makes the answer the right
 /// file.** Normalising first would turn `<root>/src/link/../a.rs` into `<root>/src/a.rs` and lose
-/// the link, so Peek would answer for a file that is not the one the operating system opens. The
-/// tail cannot reintroduce the same problem: the walk only stops where a component is *missing*,
-/// and a missing component has no symlink to follow, so there is nothing for a `..` in the tail to
-/// mean other than what it is read as here.
+/// the link — and on a kernel, where the filesystem resolves the link and then climbs, that is a
+/// different file from the one it opens. Which file it is differs by platform, and that is the
+/// platform's to decide rather than this module's: on Windows the `..` comes off the DOS path
+/// before the filesystem is asked, so the link is never followed and the answer is `src\a.rs`
+/// there. Either way the answer is the location the operating system would open, which is what this
+/// walk is asked for. The tail cannot reintroduce the same problem: the walk only stops where a
+/// component is *missing*, and a missing component has no symlink to follow, so there is nothing for
+/// a `..` in the tail to mean other than what it is read as here.
+///
+/// **A `..` is climbed past rather than spent, because it is arithmetic and not a name.** On a
+/// kernel `realpath` needs every component to exist, so `<root>/src/never/../also-never.rs` has no
+/// resolvable prefix and the walk would otherwise stop on the `..` and answer with the spelling —
+/// which is a different *kind* of answer from the one the root gets, and the two cannot be compared.
+/// Pushing the `..` onto the tail lets `normalise_lexically` spend it against the name in front of
+/// it, so the walk reaches `<root>/src` and answers `<root>/src/also-never.rs`. On Windows the same
+/// path resolves on the first try instead, because the DOS path parser has already taken the `..`
+/// off it, so this branch is never reached there and Windows keeps the answer it had.
 ///
 /// Falls back to the spelling when nothing on the path resolves, which is a statement about the
 /// filesystem — a volume that is not mounted, a share that is not answering — and not about the
-/// path.
+/// path. **The fallback is now the same kind of answer on both sides**: a walk that resolves nothing
+/// here stops at a filesystem root or a volume prefix, and the root — which is a prefix of every
+/// anchored path — reaches one of those no later than the path does, so the two are either both
+/// locations or both spellings.
+///
+/// **That is what makes it safe for the caller to let an answer overturn a refusal.** A walk that
+/// resolved something answers with a location the filesystem named; a walk that named nothing
+/// answers with the spelling it was handed, which is the very thing the gate had already tested and
+/// rejected. So a resolution can turn a refusal into an answer only by producing one, and when it
+/// cannot answer it says exactly what the gate said — which is also why no answer here depends on
+/// which of the two spellings of a directory the caller happened to type.
 fn resolve_location(path: &Path) -> PathBuf {
     let mut tail: Vec<OsString> = Vec::new();
     let mut cursor = path.to_path_buf();
@@ -557,8 +676,35 @@ fn resolve_location(path: &Path) -> PathBuf {
             }
             return normalise_lexically(&location);
         }
-        // A filesystem root has no name to strip, and a volume that will not resolve has no parent
-        // left to climb to. Either way the walk ends without an answer.
+        // **A `..` is arithmetic rather than a name, and this walk has to climb past one without
+        // spending it.** `file_name` answers `None` for a path that ends in `..`, and reading that
+        // as *there is no name left to strip* ends the walk on the spot — with the spelling the
+        // walk was handed, which is not a location and has never been asked about anything.
+        //
+        // That is not a corner of the contract. `<root>/src/never/../also-never.rs` has no existing
+        // prefix below `src`, so a kernel's `realpath` cannot resolve anything on the path, and the
+        // walk stopped there — returning `<root>/src/also-never.rs`, still spelled `/var/...`, to be
+        // compared against a root that *had* resolved to `/private/var/...`. One side a location and
+        // the other a spelling of the same place, which is the comparison this module must never
+        // make: `peek-core`'s discovery walk hit the same trap and answered it by having both sides
+        // come from `canonicalize`.
+        //
+        // So the `..` goes onto the tail rather than being dropped: `normalise_lexically` below
+        // spends it against the name in front of it, which is exactly what it does to the rest of
+        // the path, and the walk carries on to the parts above. `<root>/src/never/../also-never.rs`
+        // then resolves against `<root>/src` and comes back as `<root>/src/also-never.rs` — a
+        // location, from a path no kernel would open.
+        if cursor.components().next_back() == Some(Component::ParentDir) {
+            let Some(parent) = cursor.parent().map(Path::to_path_buf) else {
+                return normalise_lexically(path);
+            };
+            tail.push(Component::ParentDir.as_os_str().to_os_string());
+            cursor = parent;
+            continue;
+        }
+        // **Only now is the walk out of road.** `file_name` answering `None` means a filesystem
+        // root or a volume prefix and nothing else, which is what the comment on this branch used to
+        // claim while the `..` case reached it as well.
         let Some(name) = cursor.file_name().map(std::ffi::OsStr::to_os_string) else {
             return normalise_lexically(path);
         };
@@ -659,8 +805,8 @@ pub fn open_store(location: &Location, command: &'static str) -> Result<Store, F
 #[cfg(test)]
 mod tests {
     use super::{
-        Relative, is_under, normalise_lexically, relative_to, resolve_root, strip_base,
-        windows_drive_relative,
+        Relative, climbs, is_under, normalise_lexically, relative_to, resolve_location,
+        resolve_root, same_volume, strip_base, windows_drive_relative,
     };
     use crate::args::{self, Command};
     use crate::exit::{EXIT_USAGE, kind};
@@ -986,8 +1132,8 @@ mod tests {
         std::os::windows::fs::symlink_file(target, link).is_ok()
     }
 
-    /// Say on stderr that a symlink could not be created, so a caller can return rather than go on
-    /// to assert nothing.
+    /// Say on stderr which assertions a link this environment refused to create prevented, so a
+    /// caller can return rather than go on to assert nothing.
     ///
     /// Windows grants symlink creation to an elevated process or one in Developer Mode, so a test
     /// that needs a link can be *unrunnable* rather than failing, and `#[ignore]` cannot say which:
@@ -999,10 +1145,14 @@ mod tests {
     /// having checked something it did not, and nothing in the output says otherwise. The reason
     /// goes to stderr, which the harness prints for a failing run and `--nocapture` always prints —
     /// the same bar `peek-core`'s discovery tests set.
-    fn skipped_without_a_symlink() {
+    ///
+    /// **Named, not generic**, because a bare "skipping" cannot be attributed to a test from a log
+    /// line, and a skipped run that says which claims did not run is the difference between a gap
+    /// somebody can look for and a gap nobody can.
+    fn skipped_without_a_symlink(claim: &str) {
         eprintln!(
-            "skipping: this environment cannot create symlinks, so the assertions below did not \
-             run (on Windows that needs Developer Mode or an elevated process)"
+            "skipping: this environment cannot create symlinks, so the assertions about {claim} \
+             did not run (on Windows that needs Developer Mode or an elevated process)"
         );
     }
 
@@ -1019,7 +1169,7 @@ mod tests {
         std::fs::write(&file, "fn a() {}\n").expect("write");
         let link = root.join("link.rs");
         if !make_symlink(&file, &link) {
-            skipped_without_a_symlink();
+            skipped_without_a_symlink("a file link out of the tree");
             return;
         }
         let error = relative_to(&root, link.to_str().expect("utf-8"), "rm").expect_err("refused");
@@ -1187,6 +1337,61 @@ mod tests {
     }
 
     #[test]
+    fn a_climb_the_walk_cannot_resolve_still_answers_with_a_location() {
+        // **The walk's own contract, on the one shape that broke it, and checked here rather than
+        // through `relative_to` because the two failures it caused were indistinguishable from the
+        // outside.**
+        //
+        // A walk that cannot resolve anything used to answer with the path's own spelling, while the
+        // root's walk answered with a location. One directory compared with itself in two forms is
+        // a comparison with no answer, and where the platform spells a temporary directory two ways
+        // — `/var` for the caller, `/private/var` for the resolver — it reads as the path being
+        // outside the tree and blames a symlink for it. That is a second thing which is not true.
+        //
+        // **A link rather than the platform's own alias, so the case is not left to the machine.**
+        // On a runner whose temporary directory is already a link this happens with no fixture at
+        // all; on one where it is not, nothing happens and the property goes untested. Reaching the
+        // repository through a link makes one directory two spellings on every platform, including
+        // the one that needs it least — which is the point, because a test that only bites where the
+        // bug already bites is not a test.
+        let parent = temp("walk-climb");
+        let _guard = Cleanup(parent.clone());
+        let root = parent.join("repo");
+        std::fs::create_dir_all(root.join("src")).expect("create the repository");
+        let alias = parent.join("alias");
+        if !make_directory_symlink(&root, &alias) {
+            skipped_without_a_symlink("a climb above a component that cannot be resolved");
+            return;
+        }
+
+        // **The climb is left written down**, so the walk has to spend it rather than hand back the
+        // path it was given. `never` is absent, which is what makes the tail unresolvable and sends
+        // a kernel's `realpath` down this branch at all.
+        let climbed = alias.join("src/never/../also-never.rs");
+        let expected = root.canonicalize().expect("canonicalise").join("src").join("also-never.rs");
+
+        // **The fixture's own precondition, asserted rather than assumed**: a spelling read purely
+        // lexically is *not* the answer, so this cannot pass by handing the path straight back.
+        assert_ne!(
+            normalise_lexically(&climbed),
+            expected,
+            "the spelling and the location have to differ here, or this asserts nothing about the \
+             walk having resolved anything: {} and {}",
+            normalise_lexically(&climbed).display(),
+            expected.display()
+        );
+
+        assert_eq!(
+            resolve_location(&climbed),
+            expected,
+            "the walk spends the `..` against the name in front of it and carries on to the parts \
+             above, so a climb that blocks resolution still answers with the location the \
+             filesystem named -- {}",
+            climbed.display()
+        );
+    }
+
+    #[test]
     fn a_symlinked_directory_does_not_let_a_nonexistent_leaf_out_of_the_repository() {
         // **The discrimination between the two notions that survive.** Lexically,
         // `<root>/link/gone.rs` is inside the root: every component of the spelling is a name
@@ -1203,7 +1408,7 @@ mod tests {
         let _other = Cleanup(elsewhere.clone());
         let link = root.join("link");
         if !make_directory_symlink(&elsewhere, &link) {
-            skipped_without_a_symlink();
+            skipped_without_a_symlink("a directory link out of the tree with a missing leaf");
             return;
         }
         let escaped = root.join("link/gone.rs");
@@ -1235,7 +1440,7 @@ mod tests {
         let _other = Cleanup(elsewhere.clone());
         let link = root.join("link");
         if !make_directory_symlink(&elsewhere, &link) {
-            skipped_without_a_symlink();
+            skipped_without_a_symlink("a directory link out of the tree under a path that resolves");
             return;
         }
         let file = link.join("a.rs");
@@ -1261,7 +1466,7 @@ mod tests {
         std::fs::create_dir_all(root.join("real")).expect("create the directory the link names");
         let link = root.join("alias");
         if !make_directory_symlink(&root.join("real"), &link) {
-            skipped_without_a_symlink();
+            skipped_without_a_symlink("a directory link that stays inside the tree");
             return;
         }
         let found = relative_to(&root, "alias/gone.rs", "rm")
@@ -1274,33 +1479,123 @@ mod tests {
         );
     }
 
+    /// What a fixture writes into a file, so a test can tell which of two files it opened.
+    ///
+    /// The contents have to differ or the question has no answer, and `&str` rather than a
+    /// `&[u8]` so that a test can match on them as patterns rather than carrying a table of
+    /// filenames to compare the answer against.
+    const AT_THE_ROOT: &str = "the file at the root of the repository";
+    const UNDER_SRC: &str = "the file under src";
+
     #[test]
     fn a_climb_through_a_symlink_names_the_file_the_filesystem_would_open() {
         // Where lexical normalisation and the filesystem disagree about which *file* this is.
-        // `<root>/src/link/..` is `<root>/src` to a reader of the spelling and `<root>` to the
-        // operating system, so the two candidate answers are `src/a.rs` and `a.rs`. The repository
-        // contains both, so containment cannot separate them and only the filesystem can — and the
-        // index holds the file under the name the walk found, which is the resolved one. An
-        // implementation that normalised first and stopped there would remove the wrong file's
-        // rows and report success.
+        // `<root>/src/link/..` is `<root>/src` to a reader of the spelling, so the two candidate
+        // answers are `src/a.rs` and `a.rs`. The repository contains both, so containment cannot
+        // separate them and only the filesystem can — and the index holds a file under the name the
+        // walk found, so an implementation that normalised first and stopped there would remove the
+        // wrong file's rows and report success.
+        //
+        // **Both files are created, and that is the fixture doing its job.** A fixture holding only
+        // one of them would be asserting that a spelling is refused rather than that a file is
+        // named, which is a different claim and a much weaker one.
+        //
+        // **The expected answer is read off the filesystem rather than written down, and that is
+        // what makes this a test on every platform instead of on one.** The two platforms do not
+        // agree about what `link/..` means, and an answer written down as `a.rs` is a statement
+        // about the platform the author was on:
+        //
+        // - A kernel resolves `..` *after* following the link, so the climb is from the link's
+        //   target and the spelling names `a.rs`. Measured on Linux and the documented behaviour
+        //   of `realpath`, which is what `canonicalize` calls.
+        // - Windows is given a DOS path, and the DOS path parser removes `.` and `..` while it
+        //   converts the path — before the filesystem is asked anything. The link is therefore
+        //   never followed and the spelling names `src\a.rs`. Measured: opening
+        //   `src\link\..\a.rs` on Windows returns the contents of `src\a.rs`.
+        //
+        // So rather than assert one platform's resolution on all of them, this asks which file the
+        // spelling opens, and requires the answer to be that file. That is the contract — the
+        // *location the operating system would open* — stated in the only terms every platform can
+        // be held to, and it still fails on a change that stopped following the link.
         let root = temp("trust-climb-link");
         let _guard = Cleanup(root.clone());
         std::fs::create_dir_all(root.join("src")).expect("create src");
         std::fs::create_dir_all(root.join("real")).expect("create the directory the link names");
-        std::fs::write(root.join("a.rs"), "fn a() {}\n").expect("write");
+        std::fs::write(root.join("a.rs"), AT_THE_ROOT).expect("write");
+        std::fs::write(root.join("src/a.rs"), UNDER_SRC).expect("write");
         let link = root.join("src/link");
         if !make_directory_symlink(&root.join("real"), &link) {
-            skipped_without_a_symlink();
+            skipped_without_a_symlink("a climb through a directory link");
             return;
         }
         let spelling = root.join("src/link/../a.rs");
+        let opened = std::fs::read_to_string(&spelling).expect("the filesystem opens this spelling");
+
         let found = relative_to(&root, spelling.to_str().expect("utf-8"), "rm")
             .expect("the climb stays inside the root");
         assert_eq!(
             found.path.as_str(),
-            "a.rs",
-            "the filesystem resolves the link before the `..`, so this is the file it would \
-             open and the only one the index can hold rows for"
+            match opened.as_str() {
+                AT_THE_ROOT => "a.rs",
+                UNDER_SRC => "src/a.rs",
+                other => panic!(
+                    "the spelling opened a file neither fixture holds, so this test cannot say \
+                     which one it names: {other:?}"
+                ),
+            },
+            "the answer is the file this platform's filesystem opens for the spelling, and it is \
+             not the same file on each: a kernel follows the link and then climbs, while Windows \
+             takes the `..` off the DOS path before the filesystem is asked"
+        );
+    }
+
+    #[test]
+    fn a_path_reached_through_a_link_to_the_root_is_still_inside_it() {
+        // **The alias case, made measurable instead of inherited.** A directory reached under a
+        // second name is one directory, and the path the user typed is a real path to a file the
+        // repository holds — so refusing it is the same false refusal as the prefix case, arrived
+        // at by a name rather than by a prefix.
+        //
+        // This is the shape both platforms arrive in without help: on macOS a temporary directory is
+        // `/var/...` for the caller and `/private/var/...` for the resolver because `/var` is a
+        // link, and on Windows a profile with a short name is `RUNNER~1` for the caller and
+        // `runneradmin` for the resolver. Neither can be relied on to be present on any given
+        // runner, so a test that waited for one would assert nothing on the machines that lack it.
+        // Arranging one makes the property checked everywhere, and it is a link between two
+        // directories rather than anything to do with how the runner spells its own paths.
+        //
+        // **The link is outside the root on purpose**: inside it, the spelling would already read
+        // as inside and this would be the case
+        // `a_nonexistent_file_under_a_symlinked_parent_that_stays_inside_is_addressable` covers.
+        // What is being asserted is that a refusal on the spelling goes to the filesystem before it
+        // is believed — and that the refusal which is *not* put to the filesystem is a path that
+        // climbs, which is the other test.
+        let parent = temp("trust-alias-root");
+        let _guard = Cleanup(parent.clone());
+        let root = parent.join("repo");
+        std::fs::create_dir_all(root.join("src")).expect("create the repository");
+        std::fs::write(root.join("src/a.rs"), "fn a() {}\n").expect("write");
+        let alias = parent.join("by-another-name");
+        if !make_directory_symlink(&root, &alias) {
+            skipped_without_a_symlink("a path reached through a link to the root");
+            return;
+        }
+
+        let canonical_root = root.canonicalize().expect("canonicalise the repository");
+        let through_the_alias = alias.join("src/a.rs");
+        assert!(
+            !is_under(&canonical_root, &through_the_alias),
+            "the fixture's own precondition: the spelling has to read as outside, or this asserts \
+             nothing about a refusal being overturned"
+        );
+
+        let found = relative_to(&canonical_root, through_the_alias.to_str().expect("utf-8"), "rm")
+            .expect("one directory under two names is inside the repository");
+        assert_eq!(
+            found.path.as_str(),
+            "src/a.rs",
+            "the answer is the location the filesystem opens, which is in this tree; the index \
+             cannot hold the alias as a path of its own, because the walk never goes through it"
         );
     }
 
@@ -1426,18 +1721,105 @@ mod tests {
     }
 
     #[test]
-    fn containment_is_decided_on_components_rather_than_on_a_spelling() {
-        // The judgement every answer in this module rests on, exercised on the platform's own
-        // spelling of one directory. On Windows `canonicalize` answers `\\?\C:\repo` where the
-        // caller spelled `C:\repo`, so the two spellings are the ordinary state of affairs there
-        // rather than an edge case, and a string comparison refuses every path inside the
-        // repository in exchange — with a message that blames a symlink for it.
+    fn the_question_of_which_paths_the_filesystem_is_asked_about_is_arithmetic() {
+        // The two preconditions that decide whether a refusal on the spelling is final, and they
+        // are pure string judgements, so they are checked on whichever host runs the suite rather
+        // than only on the ones where they have consequences.
         //
-        // **The verbatim half cannot be reached on a host whose paths carry no prefix**, because
-        // `canonicalize` hands back the one spelling on both sides and the comparison is never
-        // asked about two. So on Unix this asserts that the walk agrees with `Path::starts_with`,
-        // and the Windows spelling is covered by the tests above that go through `relative_to`: a
-        // helper that is only testable on one platform is not a test.
+        // **A `..` is read off the spelling as given, not off the normalised path**, and that is the
+        // half that is easy to get backwards: normalisation has already spent the climb on the name
+        // before it, so `a/b/../c` reads as no climb and `a/../..` reads as one that goes nowhere —
+        // which is a different question from whether it climbs *out*, and is not this function's.
+        assert!(climbs(Path::new("a/../b")), "a climb anywhere is a climb");
+        assert!(climbs(Path::new("a/b/../../c")));
+        assert!(climbs(Path::new("a/..")));
+        assert!(
+            !climbs(Path::new("a/b/c")),
+            "a path with no `..` in it cannot have climbed out of anything"
+        );
+        assert!(!climbs(Path::new("")), "an empty path climbs nowhere");
+        assert!(
+            !climbs(Path::new("a/..b/c")),
+            "`..b` is a name that begins with two dots, not a climb, and reading it as one would \
+             refuse a legitimate directory"
+        );
+
+        // **Same volume means the same first component**, which on a path that has a prefix is the
+        // prefix and on one that has not is the root directory. Both spellings of one prefix agree
+        // here, and that is what lets a path typed in full reach the filesystem at all.
+        let root = PathBuf::from(std::path::MAIN_SEPARATOR_STR);
+        let repository = root.join("repo");
+        assert!(
+            same_volume(&repository, &repository.join("src/a.rs")),
+            "a path inside the repository is on the repository's volume"
+        );
+        assert!(
+            same_volume(&repository, &root),
+            "the root itself is on its own volume, whatever else is under it"
+        );
+        assert!(
+            !same_volume(Path::new("C:\\repo"), Path::new("D:\\repo\\a.rs")),
+            "two paths whose first components differ are two volumes: on Windows two drive letters \
+             whatever else the spellings share, and on Unix two different first names. \
+             `locate_within` only ever passes absolute paths, where the first component on Unix is \
+             the root directory and always agrees — so what this pins here is the walk rather than \
+             a case it can reach"
+        );
+    }
+
+    /// The path `canonical` names, spelled without the verbatim prefix — the one spelling
+    /// difference that carries no location.
+    ///
+    /// **Both spellings are derived from one canonical path on purpose, and that is the whole
+    /// point of it.** Reaching for one directory two ways and assuming the two spellings differ in
+    /// their prefix and nothing else makes the assertion a claim about the machine the suite runs
+    /// on, and it is false on both platforms CI runs. A Windows profile with a short name differs in
+    /// a *component* as well as in the prefix (`RUNNER~1` against `runneradmin`), and a macOS
+    /// temporary directory differs by `/var` against `/private/var`. Neither difference is the
+    /// prefix, and neither is something the prefix exception is for — so a fixture that inherited
+    /// either of them failed for a second reason, and the failure read as a bug in the walk rather
+    /// than as the fact that the fixture was wrong.
+    ///
+    /// Deriving both from one canonical path makes them differ in the prefix by construction, and
+    /// the test below then holds on a machine with a short-named profile or a symlinked temporary
+    /// directory as well as on one without. The *other* differences are not waved away — they are
+    /// what `locate_within` settles by asking the filesystem, and what
+    /// `a_path_reached_through_a_link_to_the_root_is_still_inside_it` asserts on every platform.
+    fn without_the_verbatim_prefix(canonical: &Path) -> PathBuf {
+        let verbatim = canonical.to_string_lossy();
+        if let Some(share) = verbatim.strip_prefix(r"\\?\UNC\") {
+            // A share's verbatim spelling is a UNC path with a prefix in the middle of it, so
+            // taking the prefix off is not the same operation as on a drive.
+            PathBuf::from(format!(r"\\{share}"))
+        } else if let Some(bare) = verbatim.strip_prefix(r"\\?\") {
+            PathBuf::from(bare)
+        } else {
+            // Nothing to take off: a path with no prefix component, where the canonical spelling is
+            // the only spelling there is, and the pair under test is the path against itself.
+            canonical.to_path_buf()
+        }
+    }
+
+    #[test]
+    fn containment_is_decided_on_components_rather_than_on_a_spelling() {
+        // The judgement every answer in this module rests on, exercised on two spellings of one
+        // directory. On Windows `canonicalize` answers `\\?\C:\repo` where the caller spelled
+        // `C:\repo`, so the two spellings are the ordinary state of affairs there rather than an
+        // edge case, and a string comparison refuses every path inside the repository in exchange
+        // — with a message that blames a symlink for it.
+        //
+        // **The pair is built by this test rather than taken from the machine**, because the machine
+        // does not reliably have one. A path with a short name in it, or under a directory that is
+        // itself a link, differs from its canonical form in a component that carries a location,
+        // and that is not what the exception below is for — so a fixture that inherited such a
+        // difference would be asserting something else and failing for a second reason. See
+        // [`without_the_verbatim_prefix`].
+        //
+        // **On a host whose paths carry no prefix there is no second spelling to hand out**, so the
+        // pair is the path against itself and what is asserted is the walk's self-consistency plus
+        // the boundaries below. The verbatim spelling is then covered by the tests that go through
+        // `relative_to`, which reach it wherever the platform can: a helper that can only be
+        // exercised on one platform is not a test.
         //
         // Nothing here touches the disk beyond creating the fixture. Both functions are judgements
         // about two spellings, and a test that needs them to exist is testing the filesystem.
@@ -1445,26 +1827,85 @@ mod tests {
         let _guard = Cleanup(directory.clone());
         std::fs::create_dir_all(directory.join("src")).expect("create src");
         let canonical = directory.canonicalize().expect("canonicalise");
-        let inside = canonical.join("src/a.rs");
+        let spelled = without_the_verbatim_prefix(&canonical);
+        let named = canonical.join("src").join("a.rs");
+        let spelled_inside = spelled.join("src").join("a.rs");
         let above = canonical.parent().expect("a temp directory has a parent");
         // `/x/repo` and `/x/repo-old`, which is the shape the gate exists to refuse.
         let repo = above.join("repo");
         let repo_old = above.join("repo-old/a.rs");
 
-        // **The one the defect turned on**: a location the filesystem named against a root the
-        // caller spelled, which is one directory in two spellings.
+        // **The fixture's own precondition, asserted rather than assumed**: past the first component
+        // the two spellings are the same components, so everything below is about the prefix and
+        // about nothing else.
         assert!(
-            is_under(&directory, &inside),
+            canonical
+                .components()
+                .zip(spelled.components())
+                .skip(1)
+                .all(|(named, spelled)| named == spelled),
+            "the two spellings must differ in the prefix alone, or this test is about the \
+             machine's spelling rather than about the prefix: {} and {}",
+            canonical.display(),
+            spelled.display()
+        );
+
+        // **The one the defect turned on**, in both directions, because `same_component` is
+        // symmetric and a caller that got one direction wrong would not be caught by the other: a
+        // location the filesystem named against a root the caller spelled, and the same pair the
+        // other way round, which is the direction the gate actually asks in.
+        assert!(
+            is_under(&spelled, &named),
             "a location and a root that name one directory in two spellings are still one \
              directory, not two: {} and {}",
-            directory.display(),
-            inside.display()
+            spelled.display(),
+            named.display()
         );
         assert_eq!(
-            strip_base(&directory, &inside),
+            strip_base(&spelled, &named),
             Some(PathBuf::from("src").join("a.rs")),
             "and stripping the spelled base from the named location has to leave the same path \
              the index holds"
+        );
+        assert!(
+            is_under(&canonical, &spelled_inside),
+            "the other direction is the gate's own: a root the filesystem named against a path \
+             typed in full, which is the pair `resolve_root` and a typed argument actually produce"
+        );
+        assert_eq!(
+            strip_base(&canonical, &spelled_inside),
+            Some(PathBuf::from("src").join("a.rs")),
+            "and the strip has to leave the same path in that direction too, or the walk and the \
+             test disagree about which side is the base"
+        );
+
+        // **What the exception is not.** A verbatim prefix carries no location, so it is read as
+        // the bare prefix it stands for; a *name* carries one, so it is compared as written. This
+        // is the boundary a reader is most likely to widen by accident, and it is the same boundary
+        // `docs/path-trust.md` draws for case: an answer about the wrong case is a false refusal,
+        // which is a different thing from an escape and is a separate decision.
+        //
+        // **Two names differing in nothing but case, on purpose.** On Windows and macOS these are
+        // one directory, so a reader who has just been shown the prefix folded has every reason to
+        // expect this folded too. It is not, and the comparison is a comparison of spellings: which
+        // is exactly why the file does not have to exist for this to be an answer, and why the
+        // refusal it produces is recorded in `docs/path-trust.md` as a decision rather than an
+        // oversight.
+        let upper_case = above.join("Repo");
+        let lower_case = above.join("repo");
+        assert!(
+            !is_under(&upper_case, &lower_case.join("a.rs")),
+            "case is still exact: the prefix is the only spelling difference that carries no \
+             location, and folding case here would quietly fix one false refusal in one direction \
+             only -- {} and {}",
+            upper_case.display(),
+            lower_case.display()
+        );
+        assert_eq!(
+            strip_base(&upper_case, &lower_case.join("a.rs")),
+            None,
+            "and the two cannot disagree about it, or the strip would hand back a path under a \
+             base the gate refused"
         );
 
         assert!(
@@ -1504,12 +1945,29 @@ mod tests {
     #[test]
     fn the_root_the_resolver_hands_on_answers_for_a_path_the_user_typed_in_full() {
         // The production shape, which no other test here had: a root that has been through
-        // `resolve_root`, and so carries the filesystem's own spelling of itself, asked about
-        // a path written out in full. On Windows those are one directory and two strings — the
-        // resolved root is `\\?\C:\repo` where the user wrote `C:\repo` — and comparing them as
-        // strings refuses a path that is inside the repository and names a symlink as the reason.
-        // Both spellings are asserted because both are command lines someone can run, and they
-        // name one file.
+        // `resolve_root`, and so carries the filesystem's own spelling of itself, asked about a path
+        // written out in full. Those are one directory and two spellings on every platform that has
+        // more than one spelling for a place, and **the differences are not the same one**:
+        //
+        // - On Windows the prefix, which `same_component` reads, *and* a name, which it must not:
+        //   `canonicalize` expands a short name on the way to a directory, so a root of
+        //   `\\?\C:\Users\runneradmin\repo` is the directory a caller wrote
+        //   `C:\Users\RUNNER~1\repo`.
+        // - On macOS no prefix at all, and `/var` is a link to `/private/var`, so a temporary
+        //   directory is `/var/folders/...` for the caller and `/private/var/folders/...` for the
+        //   resolver.
+        //
+        // Comparing either pair as strings refuses a path that is inside the repository, and the
+        // refusal names a symlink, which is a second thing that is not true. What answers now is
+        // the filesystem, asked once — and only because this path climbs nowhere and sits on the
+        // root's own volume.
+        //
+        // Both spellings are asserted because both are command lines someone can run, and they name
+        // one file. **Where the runner's own paths carry no second spelling the two are the same
+        // string and this asserts the part that holds everywhere** — that a root and a path built
+        // from it answer for one file. The aliasing is not left to that, though:
+        // `a_path_reached_through_a_link_to_the_root_is_still_inside_it` asserts it on every
+        // platform.
         let directory = temp("resolved-root");
         let _guard = Cleanup(directory.clone());
         std::fs::create_dir_all(directory.join("src")).expect("create src");
