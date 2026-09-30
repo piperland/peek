@@ -265,8 +265,12 @@ struct Located {
 /// exactly when it is needed. That is why the decision is made on the spelling first and the
 /// filesystem is asked afterwards, and only to make the answer stricter.
 pub fn relative_to(root: &Path, given: &str, command: &'static str) -> Result<Relative, Failure> {
-    let located = locate_within(root, given)
-        .map_err(|reason| Failure::usage(command, Refusal::new(exit::kind::OUTSIDE_REPOSITORY, reason)))?;
+    let located = locate_within(root, given).map_err(|reason| {
+        Failure::usage(
+            command,
+            Refusal::new(exit::kind::OUTSIDE_REPOSITORY, reason),
+        )
+    })?;
     // `RepoPath::new` is the model's own validator: it rejects an empty path, a NUL byte, and any
     // `..` that climbs above the root. A path that survived the containment test cannot contain a
     // leading `..`, so this is a shape check rather than a security check — the containment test
@@ -543,9 +547,7 @@ pub fn open_store(location: &Location, command: &'static str) -> Result<Store, F
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Relative, normalise_lexically, relative_to, resolve_root, windows_drive_relative,
-    };
+    use super::{Relative, normalise_lexically, relative_to, resolve_root, windows_drive_relative};
     use crate::args::{self, Command};
     use crate::exit::{EXIT_USAGE, kind};
     use std::path::{Path, PathBuf};
@@ -999,7 +1001,10 @@ mod tests {
             .expect_err("a climb out of the root is refused whether or not the target exists");
         assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
         assert!(
-            error.refusal.message.contains(&canonical_root.display().to_string()),
+            error
+                .refusal
+                .message
+                .contains(&canonical_root.display().to_string()),
             "the refusal must name the repository it refused to leave: {}",
             error.refusal.message
         );
@@ -1029,7 +1034,10 @@ mod tests {
         let found = relative_to(&root, absent.to_str().expect("utf-8"), "rm")
             .expect("a path below a directory that does not exist is nameable");
         assert_eq!(found.path.as_str(), "src/never/created.rs");
-        assert!(!found.is_directory, "nothing is there, so it is not a directory");
+        assert!(
+            !found.is_directory,
+            "nothing is there, so it is not a directory"
+        );
     }
 
     #[test]
@@ -1069,7 +1077,10 @@ mod tests {
             assert_eq!(error.refusal.kind.as_str(), kind::OUTSIDE_REPOSITORY);
             let target = elsewhere.canonicalize().expect("canonicalise");
             assert!(
-                error.refusal.message.contains(&target.display().to_string()),
+                error
+                    .refusal
+                    .message
+                    .contains(&target.display().to_string()),
                 "the refusal must name where the link actually goes, since no component of the \
                  spelling does: {}",
                 error.refusal.message
@@ -1256,9 +1267,15 @@ mod tests {
         // leading `..` on a *relative* path is kept, because dropping it would move the path up a
         // level, and a `..` at a filesystem root is dropped, because the filesystem agrees and
         // keeping it would make `/..` look like an escape.
-        assert_eq!(normalise_lexically(Path::new("a/./b")), PathBuf::from("a/b"));
+        assert_eq!(
+            normalise_lexically(Path::new("a/./b")),
+            PathBuf::from("a/b")
+        );
         assert_eq!(normalise_lexically(Path::new("a//b")), PathBuf::from("a/b"));
-        assert_eq!(normalise_lexically(Path::new("a/b/../c")), PathBuf::from("a/c"));
+        assert_eq!(
+            normalise_lexically(Path::new("a/b/../c")),
+            PathBuf::from("a/c")
+        );
         assert_eq!(
             normalise_lexically(Path::new("../a/../b")),
             PathBuf::from("../b")
