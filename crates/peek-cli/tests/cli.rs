@@ -1471,10 +1471,19 @@ fn one_directory_named_through_a_climb_is_still_the_fixtures_root() {
         "the climb is spent on a directory that exists; over one that does not, the spelling names \
          nothing and the check is right to refuse it"
     );
+    // The spelling ends in the climb. `Path::file_name` answers `None` for a trailing `..`,
+    // because `..` is not a normal component — so "ends in the climb" is asserted as the
+    // string ending, and `file_name() == None` is the *consequence* worth pinning too, since
+    // that is the fact the resolution path actually has to cope with.
     assert_eq!(
         roundabout.file_name(),
-        Some(std::ffi::OsStr::new("..")),
-        "the spelling has to end in the climb, or the round trip is not one"
+        None,
+        "a trailing `..` is not a file name, and code that assumed otherwise is the bug this test \
+         exists beside"
+    );
+    assert!(
+        roundabout.to_string_lossy().ends_with(".."),
+        "the spelling has to end in the climb, or the round trip is not one: {roundabout:?}"
     );
     assert_eq!(
         roundabout.parent().and_then(|inside| inside.parent()),
