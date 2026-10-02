@@ -1391,7 +1391,21 @@ fn the_fixture_leaves_a_command_line_that_already_names_a_repository_alone() {
     // command rather than by counting tokens, so a new spelling of the flag does not defeat it.
     let repository = Repository::small("harness-already-named");
     run(&repository, &["index", repository.root_str()]);
-    let roundabout = format!("{}/src/..", repository.root_str());
+    // **Derived from the root spelled as a person would write it, not from `canonicalize`'s
+    // answer.** On Windows that answer carries a `\\?\` prefix, and a verbatim spelling is handed
+    // to the filesystem exactly as written, so the climb below is never taken off it and the
+    // spelling names nothing at all — for the command as much as for the harness, which means the
+    // test would be asserting on a refusal rather than on the round trip it is for.
+    let roundabout = format!("{}/src/..", repository.spelled_str());
+    // The spelling has to be a climb, asserted rather than assumed: one built the other way round
+    // comes out as the root it climbs to, and a command line that names the repository plainly is
+    // not the case under test.
+    assert_ne!(
+        roundabout,
+        repository.root_str(),
+        "the roundabout spelling has to differ from the root it climbs back to, or nothing here \
+         is a round trip"
+    );
     let status = run(&repository, &["status", "--root", &roundabout]);
     assert_eq!(
         status.output.status,
@@ -1454,19 +1468,35 @@ fn one_directory_named_through_a_climb_is_still_the_fixtures_root() {
     // it, which compares a path with itself wherever the two agree — and on a kernel they always
     // agree, because `canonicalize` is `realpath` and `realpath` takes the climb off for you. A
     // test written that way passes vacuously on the only platform it can be measured on, which is
-    // how the equivalent defect in the library's own resolution survived. This one builds the
-    // second spelling out of the first, so they differ by construction rather than by whatever the
+    // how the equivalent defect in the library's own resolution survived. This one writes the climb
+    // onto the end, so the two spellings differ by construction rather than by whatever the
     // runner's temporary directory happens to look like.
+    //
+    // **Written, not joined.** `Path::join` is not a faithful way to spell a climb: `std` removes
+    // `.` and `..` from anything pushed onto a verbatim path, so joining `..` onto a canonical
+    // Windows root pops the directory in front of it and hands back the root unchanged, which
+    // made this test's own precondition untrue on one platform. A string is the only spelling a
+    // climb survives in.
     let repository = Repository::small("harness-climbed-root");
-    let roundabout = repository.root().join("src").join("..");
+    let roundabout = format!("{}/src/..", repository.spelled_str());
+    let roundabout_path = Path::new(&roundabout);
 
     // The spellings differ as paths, asserted rather than assumed, because that is the property
-    // the construction is for and it is the thing a hand-written fixture gets wrong.
+    // the construction is for and it is the thing a hand-written fixture gets wrong. The harness
+    // compares against the canonical root, so that is the one named first; the second says the
+    // difference is the climb and not merely a prefix, which is the only difference there should be
+    // between two spellings of the directory a person would have written.
     assert_ne!(
-        roundabout,
-        repository.root().to_path_buf(),
+        roundabout_path,
+        repository.root(),
         "the two spellings have to differ as paths, or the check is handed the same string twice \
          and cannot tell a directory from its own spelling"
+    );
+    assert_ne!(
+        roundabout_path,
+        repository.spelled(),
+        "and it has to differ from the plain spelling of that same root by the climb alone, or a \
+         prefix is doing the work this test exists to check"
     );
     // And they differ by exactly one climb over one directory the fixture really has. A climb over
     // a name that does not exist names nothing at all, which is the other test.
@@ -1480,18 +1510,18 @@ fn one_directory_named_through_a_climb_is_still_the_fixtures_root() {
     // string ending, and `file_name() == None` is the *consequence* worth pinning too, since
     // that is the fact the resolution path actually has to cope with.
     assert_eq!(
-        roundabout.file_name(),
+        roundabout_path.file_name(),
         None,
         "a trailing `..` is not a file name, and code that assumed otherwise is the bug this test \
          exists beside"
     );
     assert!(
-        roundabout.to_string_lossy().ends_with(".."),
+        roundabout.ends_with(".."),
         "the spelling has to end in the climb, or the round trip is not one: {roundabout:?}"
     );
     assert_eq!(
-        roundabout.parent().and_then(|inside| inside.parent()),
-        Some(repository.root()),
+        roundabout_path.parent().and_then(|inside| inside.parent()),
+        Some(repository.spelled()),
         "and the rest of it has to be the fixture's root reached through one directory, or the \
          climb is being spent on the wrong name"
     );
@@ -1501,13 +1531,44 @@ fn one_directory_named_through_a_climb_is_still_the_fixtures_root() {
     // is `realpath` and both sides are one location. Where it will not answer, the check has to
     // take the climb off itself, and **this test cannot reach that branch from a kernel**: there
     // `canonicalize` never declines for a spelling that names a directory which exists, so there
-    // is nothing on this platform that reaches it. That branch exists for the platform whose path
-    // parser hands a verbatim spelling straight to the filesystem with the climb still written
-    // down, and the assertion above is what holds on every platform.
+    // is nothing on this platform that reaches it. That branch is covered where it can be reached,
+    // on the spelling whose climb `canonicalize` does decline to answer.
     run(
         &repository,
-        &["status", "--root", roundabout.to_str().expect("utf-8")],
+        &["status", "--root", roundabout_path.to_str().expect("utf-8")],
     );
+}
+
+/// **The branch the test above cannot reach, so it is named here rather than left untested.**
+///
+/// Gated to Windows because it is unreachable anywhere else, and not for the sake of tidiness:
+/// `canonicalize` is `realpath` on a kernel, it takes the climb off the spelling before anything
+/// looks at it, and it declines only for a path that does not exist — where the climb could not
+/// have been spent anyway. On Windows the root is a verbatim `\\?\` path, a verbatim path reaches
+/// the filesystem with its climb still written down, and this is the spelling that the filesystem
+/// therefore refuses.
+#[cfg(windows)]
+#[test]
+fn a_climb_on_a_spelling_the_filesystem_will_not_read_is_still_spent() {
+    let repository = Repository::small("harness-verbatim-climb");
+    // Built from `canonicalize`'s own answer rather than from the person's spelling, because it is
+    // the verbatim form the filesystem will not resolve — the defect, not the workaround.
+    let climb = format!("{}/src/..", repository.root_str());
+
+    // **The precondition, asserted rather than assumed: this spelling is one the filesystem
+    // declines as a whole.** Without it the command below could succeed because the whole thing
+    // resolved and the check never had to take a climb off anything, which is the case the other
+    // test already covers and this one exists to be different from.
+    assert!(
+        Path::new(&climb).canonicalize().is_err(),
+        "the spelling has to be one `canonicalize` will not answer as a whole, or the check below \
+         is not taking the climb off anything: {climb:?}"
+    );
+
+    // **And the climb is spent, not answered with the head.** `\\?\C:\...\repo/src/..` is `repo`, so
+    // a check that took the climb off and handed back `repo/src` would report this command as
+    // misdirected and fail here. Reaching the end of this test is the claim.
+    run(&repository, &["status", "--root", &climb]);
 }
 
 #[test]

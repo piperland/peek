@@ -671,12 +671,16 @@ fn a_symlinked_root_and_its_target_reach_the_same_index() {
     // through a symlink so the property is tested on every platform; a real symlink is tested
     // separately in `paths`'s own unit tests, which are gated on the platform allowing one.
     let direct = run(&repository, &["status", "--root", repository.root_str()]);
+    // Spelled as a person would write it rather than as `canonicalize` answers it: on Windows the
+    // answer carries a `\\?\` prefix, and a verbatim path is handed to the filesystem exactly as
+    // written, so a climb written after it names nothing at all and the two spellings would not be
+    // two spellings of anything.
     let roundabout = run(
         &repository,
         &[
             "status",
             "--root",
-            &format!("{}/src/..", repository.root_str()),
+            &format!("{}/src/..", repository.spelled_str()),
         ],
     );
     assert_eq!(

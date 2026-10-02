@@ -44,6 +44,16 @@
 //! comparison now come from one function, and a root the filesystem declines to locate is named as
 //! unlocated rather than as misdirected.
 //!
+//! # Why there are two spellings of a repository's root
+//!
+//! **A test that spells its root through a climb has to write the root the way a person would,
+//! and that is not `canonicalize`'s answer.** On Windows the canonical answer carries a `\\?\`
+//! prefix, a verbatim path reaches the filesystem exactly as written, and so nothing ever takes a
+//! `..` off one: a climb written after it names nothing at all, for the command exactly as for the
+//! harness. [`Repository::spelled`] is that other spelling, and on Unix it *is*
+//! [`Repository::root`] — so a test building a pair of spellings out of it builds one on every
+//! platform instead of inheriting whatever the runner's temporary directory happens to look like.
+//!
 //! # The fixture's own surface
 //!
 //! A small, fixed Rust tree with one file per language feature that produces a relation the query
@@ -72,7 +82,7 @@
 // warning from a shared test helper is noise that hides a real one.
 #![allow(dead_code)]
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
@@ -146,6 +156,8 @@ pub fn render(value: u64) -> u64 {
 /// One test's repository and the index directory it is allowed to use.
 pub struct Repository {
     root: PathBuf,
+    /// The same directory, spelled the way a person would write it. See [`Repository::spelled`].
+    spelled: PathBuf,
     index_root: PathBuf,
 }
 
@@ -316,13 +328,46 @@ impl Repository {
             .join("cache")
             .canonicalize()
             .expect("canonicalise the index root");
-        Self { root, index_root }
+        let spelled = without_the_verbatim_prefix(&root);
+        Self {
+            root,
+            spelled,
+            index_root,
+        }
     }
 
     /// The repository root.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The repository root without the extended-length prefix `canonicalize` puts on it.
+    ///
+    /// **A second spelling of one directory, and it exists because the first cannot carry a
+    /// climb.** On Windows `canonicalize` answers `\\?\C:\repo`, and a verbatim spelling is handed
+    /// to the filesystem exactly as written — `std` returns one straight out of its own
+    /// path-length handling with no normalisation pass over it — so nothing ever takes a `..` off
+    /// it. A climb written after the canonical spelling therefore names nothing at all, and both
+    /// the harness and the command it runs are right to say the filesystem could not answer. This
+    /// is the spelling a person would have written, and the filesystem reads it the way it was
+    /// written.
+    ///
+    /// **The two are the same directory and it is the canonical one the engine answers with.**
+    /// Naming a root this way is not a different repository: the two canonicalise to one location,
+    /// so the identity, the index and every comparison against [`Self::root`] agree.
+    ///
+    /// On Unix there is no prefix and this is [`Self::root`], so a test that builds its spellings
+    /// from it is building them from the same string on every platform.
+    #[must_use]
+    pub fn spelled(&self) -> &Path {
+        &self.spelled
+    }
+
+    /// [`Self::spelled`] as a string, for a command line.
+    #[must_use]
+    pub fn spelled_str(&self) -> &str {
+        self.spelled.to_str().expect("a temporary path is UTF-8")
     }
 
     /// The repository root as a string, for a command line.
@@ -405,6 +450,41 @@ impl Drop for Repository {
             .map_or_else(|| self.index_root.clone(), Path::to_path_buf);
         let _ = std::fs::remove_dir_all(&base);
     }
+}
+
+/// `canonicalize`'s answer with the extended-length prefix taken off it.
+///
+/// The same operation `peek_cli::paths` does for its own containment tests, for the same reason:
+/// a prefix difference carries no location, so it is the one difference two spellings of one
+/// directory may be built to have — and the one that makes a climb written after them resolvable.
+///
+/// **`\\?\UNC\server\share` is a separate case rather than four bytes off the front.** A share's
+/// verbatim spelling has the prefix in the *middle* of it, so taking it off is not the same
+/// operation there as it is on a drive, and doing it the drive way would spell a directory called
+/// `UNC`.
+///
+/// A path that is not UTF-8 keeps its prefix. Substituting replacement characters would hand back a
+/// *different* directory, and a spelling that names the wrong place is worse than a spelling the
+/// filesystem will not read.
+fn without_the_verbatim_prefix(root: &Path) -> PathBuf {
+    // Unix has no prefix component, so there is nothing to take off and `canonicalize`'s answer is
+    // the only spelling there is — a pair a test builds from it is the path against itself, which
+    // is the state this function exists to end.
+    if !cfg!(windows) {
+        return root.to_path_buf();
+    }
+    let Some(verbatim) = root.to_str() else {
+        return root.to_path_buf();
+    };
+    if let Some(share) = verbatim.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{share}"));
+    }
+    if let Some(bare) = verbatim.strip_prefix(r"\\?\") {
+        return PathBuf::from(bare);
+    }
+    // Nothing to take off: a path with no prefix component, which the canonical spelling is the
+    // only spelling of.
+    root.to_path_buf()
 }
 
 /// What a run produced: the output, and the progress narration the sink collected.
@@ -540,6 +620,14 @@ fn command_line(argv: &[&str], root: &Path) -> Vec<std::ffi::OsString> {
 /// that is not the first component, so a spelling with one hidden in the middle of itself is
 /// reported as unanswered. That is a refusal rather than a wrong answer, which is the right way
 /// round for a check whose job is to notice.
+///
+/// **The peel reads the spelling rather than `Path::components`, because for one spelling the two
+/// disagree and the spelling is the one that is right.** `std` splits a verbatim (`\\?\`) path on
+/// `\` alone — it assumes such a path is already normalised, and has nothing to normalise it with —
+/// so in `\\?\C:\repo/src/..` the tail `repo/src/..` arrives as **one name**, and the climb at the
+/// end of it is not a component at all. `components().next_back()` answers `Normal`, the peel stops
+/// on a spelling that plainly ends in a climb, and the harness reports that it cannot tell what the
+/// directory is. [`peel`] asks the question of the spelling itself, where the answer is visible.
 fn location_of(path: &Path) -> Result<PathBuf, String> {
     let unanswered = match path.canonicalize() {
         Ok(location) => return Ok(location),
@@ -547,16 +635,11 @@ fn location_of(path: &Path) -> Result<PathBuf, String> {
     };
     let mut head = path.to_path_buf();
     // What each step spent: `true` for a climb, `false` for a `.`, which moves nowhere. Held as a
-    // flag rather than as a component because `Component` borrows the head it was read off, and the
-    // head is reassigned on every turn.
+    // flag rather than as a component because a `Component` borrows the head it was read off, and
+    // the head is reassigned on every turn.
     let mut spent: Vec<bool> = Vec::new();
     loop {
-        let climbs = match head.components().next_back() {
-            Some(Component::ParentDir) => true,
-            Some(Component::CurDir) => false,
-            _ => break,
-        };
-        let Some(parent) = head.parent().map(Path::to_path_buf) else {
+        let Some((climbs, parent)) = peel(&head) else {
             break;
         };
         spent.push(climbs);
@@ -578,6 +661,66 @@ fn location_of(path: &Path) -> Result<PathBuf, String> {
         "the filesystem will not resolve it as a whole ({unanswered}), and it does not end in a \
          climb that can be taken off the front of it"
     ))
+}
+
+/// `path` with one trailing `.` or `..` taken off the front of it, and what taking it cost.
+///
+/// **`None` means the spelling does not end in arithmetic**, which is the common case: a trailing
+/// name is a name. The caller answers with what the filesystem said and stops, so a spelling that
+/// ends in an ordinary name is one the filesystem was supposed to have resolved on its own.
+///
+/// **A spelling that is not UTF-8 is a spelling this cannot take a climb off, and that is a
+/// refusal.** The cut is on a character boundary because a `&str` has to be one, and a path this
+/// cannot cut is a path it will not guess at. Both sides of the comparison are the fixture's own
+/// directory, which the fixture already requires to be UTF-8 to put on a command line at all, so
+/// this costs nothing the harness could otherwise have answered.
+fn peel(path: &Path) -> Option<(bool, PathBuf)> {
+    let text = path.to_str()?;
+    // Separators on the end are not part of the name that follows them, so they are set aside
+    // before the last name is read and kept on the head rather than lost with it.
+    let trimmed = text.trim_end_matches(is_name_separator);
+    let cut = trimmed.rfind(is_name_separator).map_or(0, |at| at + 1);
+    let (head, name) = trimmed.split_at(cut);
+    let climbs = match name {
+        ".." => true,
+        "." => false,
+        _ => return None,
+    };
+    let head = platform_separators(head.trim_end_matches(is_name_separator));
+    Some((climbs, PathBuf::from(head)))
+}
+
+/// `text` with every `/` written as the platform's own separator.
+///
+/// **Windows only, and it is a robustness measure rather than a tidy-up.** `/` cannot be part of a
+/// name on Windows, so a `/` in a spelling separates two names and nothing else, and the two
+/// spellings below name the same directory. A verbatim path reaches the filesystem exactly as
+/// written, though, so whether that filesystem reads a `/` inside one at all is a question this
+/// need not depend on: writing the separator the platform uses takes the question away, and a head
+/// the filesystem is certainly going to read is worth more than the two bytes saved.
+///
+/// On Unix a backslash is an ordinary character in a name and this does nothing at all, which is
+/// what keeps the peel there byte-for-byte what `Path::parent` would have returned.
+fn platform_separators(text: &str) -> String {
+    if cfg!(windows) {
+        text.replace('/', std::path::MAIN_SEPARATOR_STR)
+    } else {
+        text.to_owned()
+    }
+}
+
+/// Whether `character` ends one name and begins the next.
+///
+/// **`/` on Unix, where a backslash is an ordinary character in a name**, and both separators on
+/// Windows, which is what the filesystem's own path parser does with a path it is free to
+/// normalise. The verbatim spelling is the case that has to be reasoned about rather than read
+/// off: there `std` will not treat `/` as a separator, and this has to anyway — not as a guess
+/// about what was meant, but because a Windows name may not contain `/` at all. That is why a
+/// verbatim spelling carrying one is refused with "the filename, directory name, or volume label
+/// syntax is incorrect" rather than reported as a missing file: it cannot be a name, so the only
+/// reading left is that `/` separates one.
+fn is_name_separator(character: char) -> bool {
+    character == '/' || (cfg!(windows) && character == '\\')
 }
 
 /// Fail a run that is not pointed at `repository`.
