@@ -638,10 +638,9 @@ fn location_of(path: &Path) -> Result<PathBuf, String> {
     // flag rather than as a component because a `Component` borrows the head it was read off, and
     // the head is reassigned on every turn.
     let mut spent: Vec<bool> = Vec::new();
-    loop {
-        let Some((climbs, parent)) = peel(&head) else {
-            break;
-        };
+    // `while let` rather than `loop { let Some(..) else { break } }`: the loop's whole
+    // continuation condition *is* the peel succeeding, so saying it twice invites the two to drift.
+    while let Some((climbs, parent)) = peel(&head) {
         spent.push(climbs);
         head = parent;
         // Asked about, not assumed: a head that will not resolve leaves the spelling unanswered
