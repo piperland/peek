@@ -334,7 +334,7 @@ fn a_path_the_backend_named_by_the_resolved_root_is_a_change_inside_the_root() {
     let (root, resolved_root) = named_and_resolved_roots();
     let reported = resolved_root.join("src/ui.rs");
 
-    let as_reported = plan_batch(&root, &[reported.clone()], rust_only);
+    let as_reported = plan_batch(&root, std::slice::from_ref(&reported), rust_only);
     assert!(
         as_reported.reindex.is_empty(),
         "the planner cannot place a path it was handed under another spelling: {as_reported:?}"
@@ -378,7 +378,7 @@ fn a_path_under_neither_spelling_stays_where_it_is_for_the_planner_to_count() {
     let (root, resolved_root) = named_and_resolved_roots();
     let elsewhere = PathBuf::from("/private/var/folders/pe/other-repository/src/lib.rs");
     assert_eq!(under_root(&root, &resolved_root, &elsewhere), elsewhere);
-    let plan = plan_batch(&root, &[elsewhere.clone()], rust_only);
+    let plan = plan_batch(&root, std::slice::from_ref(&elsewhere), rust_only);
     assert_eq!(plan.outside_root, vec![elsewhere], "{plan:?}");
     assert!(plan.reindex.is_empty());
 }
