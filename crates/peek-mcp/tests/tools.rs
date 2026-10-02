@@ -2342,8 +2342,13 @@ pub fn decorate() -> u32 {
             json!("path"),
             "and a bare function name resolves to a declaration, not to a file path: {found}"
         );
+        // The identity fields sit directly on `target` — `kind`, `ordinal`, `path`,
+        // `qualified_name`. An earlier version of this asserted `target.entity.id.path`, which this
+        // shape does not have, so the lookup returned null and the assertion failed on a *refresh
+        // that had demonstrably applied*. Reading a field that is absent proves nothing about the
+        // file; reading the one that is present proves what it says.
         assert_eq!(
-            found["target"]["entity"]["id"]["path"],
+            found["target"]["path"],
             json!("src/ui.rs"),
             "whose repository-relative identity is the file that changed, and not a path some \
              refresh could not place under this root: {found}"
