@@ -183,6 +183,32 @@ pub fn locate(given: &Path, command: &'static str) -> Result<Location, Failure> 
 /// a statement about the tree. The distinction is that the root has no other candidate — there is
 /// nothing to be relative to except the CWD — whereas a path inside a root that has been named
 /// explicitly must not silently depend on where the user is standing.
+/// Whether `text` is one of the Windows spellings whose meaning is relative to the current /// directory of a drive, which this process cannot see.
+///
+/// **A pure string judgement, so it is testable on any host.** Whether it is *acted on* is not: on
+/// Unix `C:notes.rs` is an ordinary filename that happens to contain a colon, and refusing it
+/// would take away a legal path. Only the call site is platform-specific, and that call site is
+/// one `cfg!`, so the logic is the part that gets tested.
+///
+/// `C:foo` and a bare `C:` are drive-relative; `C:\foo`, `C:/foo` and `\\server\share` are not.
+/// `foo:bar` is not either ΓÇö a drive designator is exactly one letter, so a colon further along
+/// the name is a character in a name rather than a prefix.
+fn windows_drive_relative(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() < 2 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
+        return false;
+    }
+    // A separator after the colon is what makes the path absolute, and its absence is the whole
+    // difference between "the directory this drive happens to be reading" and "the root of it".
+    !matches!(bytes.get(2), Some(b'\\') | Some(b'/'))
+}
+
+/// Collapse `.`, `//` and `..` without asking the filesystem anything.
+///
+/// `Path::components` already drops `.` and repeated separators, so only `..` is left: pop the
+/// previous name, or do nothing at the filesystem root, which is what the filesystem does with a
+/// `..` that has nowhere left to climb.
+///
 pub fn resolve_root(given: &Path, command: &'static str) -> Result<PathBuf, Failure> {
     if cfg!(windows)
         && let Some(spelling) = given.to_str()

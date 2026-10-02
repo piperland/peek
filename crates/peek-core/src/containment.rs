@@ -716,7 +716,7 @@ mod tests {
         assert_eq!(relative_path(&upper_case, &miscased), None, "case is exact");
 
         assert_eq!(relative_path(&canonical, &canonical), Some(nothing));
-        assert_eq!(relative_path(&above, &canonical), Some(under_the_root));
+        assert_eq!(relative_path(above, &canonical), Some(under_the_root));
         assert_eq!(relative_path(&canonical, above), None, "outside the tree");
         assert_eq!(relative_path(&repo, &repo_old), None, "a shared prefix");
     }
