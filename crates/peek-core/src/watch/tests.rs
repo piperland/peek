@@ -8,15 +8,18 @@
 //! - a rename is a delete and a create, and needs no special case
 //! - an event for a file we do not index must not cost a transaction
 //! - a path from outside the root means the *watcher* is misconfigured, not that the file changed
+//! - a path the operating system named by the *resolved* root is a change inside it
 //! - a batch open at shutdown is a batch whose changes are not in the index
 //!
-//! Nothing here sleeps. The debouncer is driven by an injected `Instant`, so these are
-//! deterministic and fast, which is the only reason to trust them.
+//! Nothing here sleeps, with one deliberate exception: the last test needs a real filesystem event,
+//! because the disagreement about how a backend spells the root only exists between an operating
+//! system and a watcher. Every other test drives the debouncer with an injected `Instant`, so they
+//! are deterministic and fast, which is the only reason to trust them.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::{Action, Debouncer, plan_batch};
+use super::{Action, Debouncer, plan_batch, under_root};
 
 /// A root, and paths under it, for the planner's `starts_with` to work against.
 fn root() -> PathBuf {
@@ -307,4 +310,144 @@ fn the_quiet_period_is_a_parameter_and_not_a_constant() {
         elapsed < patient.quiet_for() && elapsed <= Duration::from_millis(100),
         "the elapsed quiet time is observable and short: {elapsed:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// How a path is spelled on its way off an operating system
+// ---------------------------------------------------------------------------
+
+/// The root as a caller on macOS names it, and the same directory as FSEvents names it.
+fn named_and_resolved_roots() -> (PathBuf, PathBuf) {
+    (PathBuf::from("/var/folders/pe/peek"), PathBuf::from("/private/var/folders/pe/peek"))
+}
+
+#[test]
+fn a_path_the_backend_named_by_the_resolved_root_is_a_change_inside_the_root() {
+    // The shape macOS produces. The caller named the root through a symlink, the backend reported
+    // the directory it had actually opened, and every event in a burst then failed a lexical
+    // comparison. The planner is right to count a path it cannot place as arriving from outside —
+    // it is handed a string and decides nothing else — which is exactly why the restating has to
+    // happen before the planning rather than inside it.
+    let (root, resolved_root) = named_and_resolved_roots();
+    let reported = resolved_root.join("src/ui.rs");
+
+    let as_reported = plan_batch(&root, &[reported.clone()], rust_only);
+    assert!(
+        as_reported.reindex.is_empty(),
+        "the planner cannot place a path it was handed under another spelling: {as_reported:?}"
+    );
+    assert_eq!(
+        as_reported.outside_root,
+        vec![reported.clone()],
+        "and it is counted rather than dropped, which is why a watcher that re-indexes nothing on \
+         such a platform reports no failure at all"
+    );
+
+    let restated = under_root(&root, &resolved_root, &reported);
+    assert_eq!(
+        restated,
+        root.join("src/ui.rs"),
+        "the same file, named the way the caller named the root"
+    );
+    let plan = plan_batch(&root, &[restated], rust_only);
+    assert_eq!(plan.reindex, vec![root.join("src/ui.rs")], "{plan:?}");
+    assert!(
+        plan.outside_root.is_empty(),
+        "and the batch a watcher applies names a path its own root can strip: {plan:?}"
+    );
+}
+
+#[test]
+fn a_path_the_backend_named_in_the_callers_spelling_is_left_exactly_as_it_arrived() {
+    // The Linux shape, and the reason the restating is a special case rather than a replacement:
+    // `inotify` reports paths under the name it was registered with, so there is nothing to fix and
+    // a rewrite here would be a rewrite invented out of nothing.
+    let (root, resolved_root) = named_and_resolved_roots();
+    let reported = root.join("src/ui.rs");
+    assert_eq!(under_root(&root, &resolved_root, &reported), reported);
+}
+
+#[test]
+fn a_path_under_neither_spelling_stays_where_it_is_for_the_planner_to_count() {
+    // The direction that matters: a path that really is somewhere else must not be reshaped into
+    // something that looks like it is inside the root. A sibling directory that happens to share
+    // the resolved root's parent is exactly the case a careless prefix strip would get wrong.
+    let (root, resolved_root) = named_and_resolved_roots();
+    let elsewhere = PathBuf::from("/private/var/folders/pe/other-repository/src/lib.rs");
+    assert_eq!(under_root(&root, &resolved_root, &elsewhere), elsewhere);
+    let plan = plan_batch(&root, &[elsewhere.clone()], rust_only);
+    assert_eq!(plan.outside_root, vec![elsewhere], "{plan:?}");
+    assert!(plan.reindex.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_watch_on_a_root_named_through_a_link_still_applies_the_change() {
+    // The same disagreement, with a real operating system in the middle rather than two strings.
+    // `inotify` reports the name it was given, so on Linux this passes with or without the
+    // restating; FSEvents resolves the root before it reports anything, so on macOS it is the one
+    // test in this suite that can fail without it. The root is reached through a link for the same
+    // reason every macOS fixture's is: the temporary directory is `/var/folders/...`, and `/var` is
+    // a symlink to `/private/var`.
+    let tree = scratch("root-through-a-link");
+    let link = tree.join("link");
+    let real = tree.join("repository");
+    std::fs::create_dir_all(&real).expect("a directory to watch");
+    let linked = std::os::unix::fs::symlink(&real, &link);
+    linked.expect("a link to reach the repository through");
+
+    let options = super::native::WatchOptions {
+        quiet_for: Duration::from_millis(20),
+        ..super::native::WatchOptions::default()
+    };
+    let mut watch = super::native::Watch::start(&link, options).expect("a watch to start");
+    let wrote = std::fs::write(real.join("added.rs"), "pub fn added() -> u32 { 1 }\n");
+    wrote.expect("a file to change");
+
+    // Poll for the batch rather than sleeping for it: the deadline is the ceiling, not the wait.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut reindexed: Vec<PathBuf> = Vec::new();
+    let mut outside: Vec<PathBuf> = Vec::new();
+    while std::time::Instant::now() < deadline {
+        watch.poll();
+        if let Some(batch) = watch.take_batch(std::time::Instant::now()) {
+            reindexed.extend(batch.plan.reindex);
+            outside.extend(batch.plan.outside_root);
+            if !reindexed.is_empty() {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(
+        !outside.is_empty() || !reindexed.is_empty(),
+        "the file was written and the watch saw nothing at all within five seconds"
+    );
+    assert!(
+        outside.is_empty(),
+        "a change inside the watched directory is not a change from outside it: {outside:?}"
+    );
+    assert_eq!(
+        reindexed,
+        vec![link.join("added.rs")],
+        "and the path handed out is named the way the caller named the root, because that is what \
+         `indexer::refresh` strips it against: {reindexed:?}"
+    );
+    assert!(
+        reindexed[0].is_file(),
+        "and it names the file that changed, not a path nothing exists at: {}",
+        reindexed[0].display()
+    );
+
+    let _ = std::fs::remove_dir_all(&tree);
+}
+
+/// A scratch directory of this process's own, so a second run finds none of the first one's.
+#[cfg(unix)]
+fn scratch(label: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("peek-watch-{label}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).expect("a scratch directory");
+    path
 }
