@@ -34,6 +34,7 @@
 //! |---|---|
 //! | [`crate::indexer::refresh`] | lexical | The key it derives has to be the key the discovery walk derived. Discovery names a file by the path it was walked under and does not resolve a symlink before doing so, so resolving here would key a followed link by its target and make an incremental build disagree with a full one about the same repository. |
 //! | [`crate::watch::plan_batch`] | lexical | It is a pure function over paths an operating system reported, and it has to stay one: it runs on every batch, its whole suite runs without a filesystem, and a path that reads as outside is counted rather than looked up. |
+//! | the MCP server's `index` refresh | lexical | The same rule one boundary earlier, and the difference is the consequence rather than the rule: the caller named these paths, so one that is outside the root is a **refusal** and the whole request is refused, where the engine counts it as a skip. Judged before the join, because `Path::join` with an absolute argument returns that argument and the root is gone by the time anything could be compared. |
 //! | [`crate::doctor`]'s index-location check | located | Both arguments are independent filesystem locations — the file a store was opened at, and a root somebody else resolved — so they can be two spellings of one directory. The question is about a place, not about a name. |
 //! | the CLI's `relative_to` | both, in that order | A user may name a path that does not exist, so the gate has to be answerable without a filesystem, and a link out of the tree has to be caught, so the answer is the located one. `docs/path-trust.md` gives the order and the reasons. |
 //!
@@ -213,6 +214,43 @@ pub fn climbs(path: &Path) -> bool {
         .any(|component| component == Component::ParentDir)
 }
 
+/// Whether `text` is one of the Windows spellings whose meaning is relative to the current
+/// directory of a drive, which this process cannot see.
+///
+/// **A pure string judgement, so it is testable on any host.** Whether it is *acted on* is not: on
+/// Unix `C:notes.rs` is an ordinary filename that happens to contain a colon, and refusing it
+/// would take away a legal path. Only the call sites are platform-specific, and each of them is
+/// one `cfg!`, so the logic is the part that gets tested.
+///
+/// `C:foo` and a bare `C:` are drive-relative; `C:\foo`, `C:/foo` and `\\server\share` are not.
+/// `foo:bar` is not either — a drive designator is exactly one letter, so a colon further along
+/// the name is a character in a name rather than a prefix.
+///
+/// # Why it lives here rather than beside the caller that needed it first
+///
+/// It is a question about what a *spelling* means, which is this module's subject: a path whose
+/// location depends on process state the caller never named cannot be shown to be inside a root by
+/// asking the filesystem, because the filesystem will resolve it against whatever that drive
+/// happens to be reading. The CLI needs the answer twice — once when it resolves a root, once when
+/// it places a path inside one — and the MCP server needs it once more at the boundary where a
+/// caller-supplied string becomes a path the engine is asked to read. One judgement, three call
+/// sites; a copy per call site is three places to keep in step for two characters of spelling.
+///
+/// **The judgement is shared and the consequence is not, deliberately.** `resolve_root` is being
+/// asked for a root and this is not one; the CLI's containment gate is placing a path and this
+/// cannot be shown to be one; the MCP boundary is placing a path and refuses the whole request.
+/// Each caller says so in its own words, because the words are about what that surface did.
+#[must_use]
+pub fn windows_drive_relative(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() < 2 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
+        return false;
+    }
+    // A separator after the colon is what makes the path absolute, and its absence is the whole
+    // difference between "the directory this drive happens to be reading" and "the root of it".
+    !matches!(bytes.get(2), Some(b'\\') | Some(b'/'))
+}
+
 /// Collapse `.`, `//` and `..` without asking the filesystem anything.
 ///
 /// `Path::components` already drops `.` and repeated separators, so only `..` is left: pop the
@@ -346,6 +384,7 @@ pub fn resolve_location(path: &Path) -> PathBuf {
 mod tests {
     use super::{
         climbs, contains, normalise_lexically, relative_path, resolve_location, same_volume,
+        windows_drive_relative,
     };
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -594,6 +633,37 @@ mod tests {
              ever passes absolute paths, where the first component on Unix is the root directory \
              and always agrees — so what this pins here is the walk rather than a case it can reach"
         );
+    }
+
+    #[test]
+    fn a_windows_drive_relative_spelling_is_recognised_as_a_string() {
+        // A pure classifier, so it is checked on whichever host runs the suite rather than only on
+        // the one where it has consequences. `C:foo` means "foo in whatever directory the C drive is
+        // reading", which is not a location this process can name and not the root — so the whole
+        // judgement is one separator, and a host that never sees a drive letter is still the host
+        // that has to agree about where that separator goes.
+        for spelling in ["C:notes.rs", "c:", "Z:x"] {
+            assert!(
+                windows_drive_relative(spelling),
+                "{spelling:?} is drive-relative"
+            );
+        }
+        for spelling in [
+            "C:\\notes.rs",
+            "C:/notes.rs",
+            "c:\\",
+            "\\\\server\\share\\x.rs",
+            "//server/share/x.rs",
+            "notes.rs",
+            "foo:bar",
+            "C",
+            "",
+        ] {
+            assert!(
+                !windows_drive_relative(spelling),
+                "{spelling:?} is not drive-relative"
+            );
+        }
     }
 
     /// The path `canonical` names, spelled without the verbatim prefix — the one spelling

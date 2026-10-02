@@ -176,6 +176,16 @@ reported as a successful file; it is now counted as skipped with the reason *out
 root*, and the name of the path is in the report. Over MCP, `index` in `refresh` mode with an
 absolute path in `paths` is the shape that reached it.
 
+**The skip is the engine's answer and it is not the right answer for a caller who typed the path.**
+A skip means "I looked and declined to act on this one", which is right for a watcher: the batch
+came from the operating system and one unreadable file must not stop the rest. A caller's array is a
+request, and a request is honoured in full or refused in full. So the MCP `index` boundary judges
+each path before handing it to the engine — the same lexical rule, asked in the same order against
+the same value — and **refuses the whole request** with `outcome: refused` when any entry fails, in
+the sentences above. `Path::join` discards the base when the argument is absolute, so the judgement
+has to be made *on the join's result*: a gate that ran before the join would be judging the
+spelling rather than the file that will be read.
+
 ## Cases, and what each one means
 
 | case | rule |

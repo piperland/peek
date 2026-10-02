@@ -97,6 +97,7 @@ use std::path::{Path, PathBuf};
 
 use peek_core::containment::{
     climbs, normalise_lexically, relative_path, resolve_location, same_volume,
+    windows_drive_relative,
 };
 use peek_core::model::RepoPath;
 use peek_core::store::{RepoId, Store, StoreError, paths};
@@ -183,32 +184,12 @@ pub fn locate(given: &Path, command: &'static str) -> Result<Location, Failure> 
 /// a statement about the tree. The distinction is that the root has no other candidate — there is
 /// nothing to be relative to except the CWD — whereas a path inside a root that has been named
 /// explicitly must not silently depend on where the user is standing.
-/// Whether `text` is one of the Windows spellings whose meaning is relative to the current /// directory of a drive, which this process cannot see.
 ///
-/// **A pure string judgement, so it is testable on any host.** Whether it is *acted on* is not: on
-/// Unix `C:notes.rs` is an ordinary filename that happens to contain a colon, and refusing it
-/// would take away a legal path. Only the call site is platform-specific, and that call site is
-/// one `cfg!`, so the logic is the part that gets tested.
-///
-/// `C:foo` and a bare `C:` are drive-relative; `C:\foo`, `C:/foo` and `\\server\share` are not.
-/// `foo:bar` is not either ΓÇö a drive designator is exactly one letter, so a colon further along
-/// the name is a character in a name rather than a prefix.
-fn windows_drive_relative(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    if bytes.len() < 2 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
-        return false;
-    }
-    // A separator after the colon is what makes the path absolute, and its absence is the whole
-    // difference between "the directory this drive happens to be reading" and "the root of it".
-    !matches!(bytes.get(2), Some(b'\\') | Some(b'/'))
-}
-
-/// Collapse `.`, `//` and `..` without asking the filesystem anything.
-///
-/// `Path::components` already drops `.` and repeated separators, so only `..` is left: pop the
-/// previous name, or do nothing at the filesystem root, which is what the filesystem does with a
-/// `..` that has nowhere left to climb.
-///
+/// **A drive-relative spelling is refused here**, before anything is resolved: `C:foo` names a
+/// directory on a drive that this process cannot see, so it is not a root and cannot be turned
+/// into one. The judgement is [`peek_core::containment`]'s, because the MCP server's `index`
+/// boundary answers the same question about the same two characters, and the call site is the only
+/// part that is platform-specific.
 pub fn resolve_root(given: &Path, command: &'static str) -> Result<PathBuf, Failure> {
     if cfg!(windows)
         && let Some(spelling) = given.to_str()
@@ -560,7 +541,7 @@ pub fn open_store(location: &Location, command: &'static str) -> Result<Store, F
 
 #[cfg(test)]
 mod tests {
-    use super::{Relative, relative_to, resolve_root, windows_drive_relative};
+    use super::{Relative, relative_to, resolve_root};
     use crate::args::{self, Command};
     use crate::exit::{EXIT_USAGE, kind};
     use peek_core::containment::relative_path;
@@ -1444,35 +1425,10 @@ mod tests {
         assert_eq!(absolute.path.as_str(), "src/a.rs");
     }
 
-    #[test]
-    fn a_windows_drive_relative_spelling_is_recognised_as_a_string() {
-        // A pure classifier, so it is checked on whichever host runs the suite rather than only on
-        // the one where it has consequences. `C:foo` means "foo in whatever directory the C drive
-        // is reading", which is not the root and is not anything this process can see — so the
-        // difference between it and `C:\foo` is one separator, and that is the whole judgement.
-        for spelling in ["C:notes.rs", "c:", "Z:x"] {
-            assert!(
-                windows_drive_relative(spelling),
-                "{spelling:?} is drive-relative"
-            );
-        }
-        for spelling in [
-            "C:\\notes.rs",
-            "C:/notes.rs",
-            "c:\\",
-            "\\\\server\\share\\x.rs",
-            "//server/share/x.rs",
-            "notes.rs",
-            "foo:bar",
-            "C",
-            "",
-        ] {
-            assert!(
-                !windows_drive_relative(spelling),
-                "{spelling:?} is not drive-relative"
-            );
-        }
-    }
+    // The classifier itself is `peek_core::containment::windows_drive_relative`'s and is tested
+    // there, on any host, because it is a judgement about two characters and the MCP server's
+    // `index` boundary now answers the same question. What is tested here is this module's wiring:
+    // that a drive-relative spelling reaches `relative_to` and is refused by it.
 
     #[cfg(windows)]
     #[test]

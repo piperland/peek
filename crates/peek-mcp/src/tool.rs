@@ -219,6 +219,13 @@ the count of every resolution state, so `relations_ambiguous` and `relations_unr
 measurements of what the engine could not decide, and `files_skipped`, `files_unsupported` and \
 the `skipped` list say which files did not make it in and why.
 
+**`paths` names files inside this repository and nothing else.** A path spelled in full is \
+accepted only if the repository contains it; one that is outside is a **refusal**, not a skipped \
+file, because this server will read it and put its contents in the index. One unusable entry \
+refuses the whole request rather than the rest of it running without that entry: the request is \
+either honoured for every path you named or it does not run at all, so a successful answer \
+always means the index covers the list you sent.
+
 Do not use it to ask a question. It does not answer anything about a target. Do not use `mode: \
 refresh` for a file you have not changed: a refresh re-extracts and re-resolves, which is \
 correct but is not free, and `index_status` is the cheaper way to ask what is already indexed.",
@@ -236,10 +243,13 @@ correct but is not free, and `index_status` is the cheaper way to ask what is al
                 (
                     "paths",
                     property(
-                        "string",
-                        "Repository-relative, `/`-separated paths to refresh. Required in \
-                         `refresh` mode and refused in `full` mode, where it would be ignored.",
-                        &[],
+                        "array",
+                        "Files to refresh, as paths inside this repository and `/`-separated. \
+                         Required in `refresh` mode and refused in `full` mode, where it would be \
+                         ignored. A path outside this repository is refused rather than skipped, \
+                         and one such path refuses the whole request: nothing is indexed, and \
+                         the refusal names every offending entry.",
+                        &[("items", json!({ "type": "string" }))],
                     ),
                 ),
             ],

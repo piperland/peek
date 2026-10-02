@@ -737,6 +737,375 @@ pub fn decorate() -> u32 {
     );
 }
 
+/// A file outside the fixture's repository, which removes itself and its directory.
+///
+/// **The sibling, not the fixture's index directory, on purpose.** A path under the index the
+/// fixture already uses would be a file written into a place the engine writes to as well, and a
+/// test that reaches there is asserting against its own side effects. A sibling directory is one
+/// the fixture owns outright, so it cannot collide with anything and `Drop` leaves nothing behind.
+///
+/// The path is carried as a `String` because that is what a caller sends over the protocol, so the
+/// refusal under test is produced by the same bytes a real client would send rather than by a
+/// `Path` this test formatted differently.
+struct Outside {
+    /// The absolute path to the file, as the caller would spell it.
+    path: String,
+    /// The directory holding it, so a failed test leaves nothing in the temporary tree.
+    directory: PathBuf,
+}
+
+impl Outside {
+    fn named(fixture: &Fixture, label: &str) -> Self {
+        let directory = fixture.root.path().with_file_name(format!(
+            "{}-outside-{label}",
+            fixture
+                .root
+                .path()
+                .file_name()
+                .expect("the fixture directory is named")
+                .to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("create a directory outside the repository");
+        let file = directory.join("borrowed.rs");
+        std::fs::write(&file, "fn borrowed() -> u32 { 42 }\n")
+            .expect("write a file outside the repository");
+        // The fixture's own precondition, asserted rather than assumed: a path inside the tree
+        // would make every test below pass for the wrong reason, since `index` refreshes those.
+        assert!(
+            !file.starts_with(fixture.root.path()),
+            "the file must be outside the repository: {}",
+            file.display()
+        );
+        Self {
+            path: file.display().to_string(),
+            directory,
+        }
+    }
+
+    fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+impl Drop for Outside {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+#[test]
+fn a_refresh_naming_a_path_outside_the_repository_is_refused_rather_than_skipped() {
+    // **The defect, on the MCP surface.** `refresh` anchored each entry with `root.join(path)`, and
+    // `Path::join` with an absolute argument discards the base — so `/…/borrowed.rs` stayed
+    // `/…/borrowed.rs` and the caller named the file the host process read. The engine refuses to
+    // index such a path, and it refuses it the way it refuses an unreadable file: as a **skip**,
+    // counted in `files_skipped` and named in the `skipped` list under `outcome: ok`. A caller
+    // whose paths were all skipped got a successful answer describing a build that did not read
+    // what it was asked to read, which is the failure this test pins shut.
+    //
+    // **Refused, not skipped**, so the assertion is on the shape of the answer and not on a count:
+    // a skip is visible only to a caller who already suspects one, and `outcome` is the field a
+    // program branches on. `refuse` is the helper that fails the test if the call *succeeds*, so
+    // this cannot pass by a skip reaching the response.
+    let mut fixture = indexed("refresh-outside-refused");
+    let borrowed = Outside::named(&fixture, "borrowed");
+    let named = borrowed.path().to_owned();
+
+    let error = refuse(
+        &mut fixture.session,
+        "index",
+        json!({ "mode": "refresh", "paths": [named.clone()] }),
+    );
+
+    // The three claims, in order. The state a caller branches on; the reason that says why; and
+    // the repository, because a refusal that names only the offending path leaves a reader with
+    // nothing to act on.
+    assert_eq!(
+        error.outcome,
+        Outcome::Refused,
+        "a path outside the repository is a refusal, not a skip: {}",
+        error.verdict_reason
+    );
+    assert!(
+        error
+            .verdict_reason
+            .contains("is not inside the repository at "),
+        "the refusal names the condition, in the CLI's words, so the two surfaces cannot disagree \
+         about what the same request means: {}",
+        error.verdict_reason
+    );
+    assert!(
+        error.verdict_reason.contains(&named),
+        "and it names the offending path as the caller spelled it, because a refusal that says only \
+         'a path is outside' leaves nothing to act on: {}",
+        error.verdict_reason
+    );
+    assert!(
+        error
+            .verdict_reason
+            .contains(&fixture.root.path().display().to_string()),
+        "and the repository it refused to leave: {}",
+        error.verdict_reason
+    );
+    assert!(
+        error
+            .advice
+            .as_deref()
+            .is_some_and(|advice| advice.contains("relative to")),
+        "the advice says what would be accepted instead: {:?}",
+        error.advice
+    );
+
+    // **And nothing was read.** A refusal that left the contents in the index would be a refusal
+    // with a side effect, which is worse than either answer on its own: `borrowed` is not a symbol
+    // this repository declares, so if it answers at all the file was read.
+    let indexed_borrowed = refuse(
+        &mut fixture.session,
+        "dependents",
+        json!({ "target": "borrowed", "depth": 1 }),
+    );
+    assert_eq!(
+        indexed_borrowed.outcome,
+        Outcome::UnknownTarget,
+        "the contents of a file outside the repository must not be in the index under any name: {}",
+        indexed_borrowed.verdict_reason
+    );
+}
+
+#[test]
+fn one_path_outside_the_repository_refuses_the_whole_refresh() {
+    // **The decision, asserted.** `paths` is a request about a set, and the answer that makes the
+    // request true is one where every file named was acted on. Acting on the two good entries and
+    // saying nothing about the third would return `outcome: ok` with `files_indexed: 2` for a
+    // request for three paths, and the caller's actual intent — that the index is current for
+    // everything it named — would be silently unmet.
+    //
+    // The commit is what makes this checkable rather than merely arguable: a partial refresh
+    // advances the generation and rewrites the file it touched, and this one must do neither.
+    let mut fixture = indexed("refresh-mixed-refused");
+    let before = call(&mut fixture.session, "index_status", json!({}));
+    let generation = before["recorded_generation"]
+        .as_u64()
+        .expect("a recorded generation");
+
+    // The good path is changed on disk, so a refresh that ran would leave evidence. The bad path
+    // is the one from outside. The order is the caller's, not the tool's: the offending entry is
+    // last, so a boundary that stopped at the first refusal and one that judges every entry cannot
+    // be told apart by this call — only by the reason below.
+    fixture.root.write(
+        "src/ui.rs",
+        "\
+pub fn render() -> u32 {
+    30
+}
+
+pub fn decorate() -> u32 {
+    4
+}
+",
+    );
+    let borrowed = Outside::named(&fixture, "mixed");
+    let named = borrowed.path().to_owned();
+
+    let error = refuse(
+        &mut fixture.session,
+        "index",
+        json!({
+            "mode": "refresh",
+            "paths": ["src/ui.rs", named.clone()]
+        }),
+    );
+    assert_eq!(error.outcome, Outcome::Refused, "{}", error.verdict_reason);
+    assert!(
+        error.verdict_reason.contains("refused in full"),
+        "the reason says the whole request was refused rather than partly acted on, so a caller \
+         knows neither entry was indexed: {}",
+        error.verdict_reason
+    );
+    assert!(
+        error.verdict_reason.contains(&named),
+        "and it names the offending entry, so one correction fixes the request: {}",
+        error.verdict_reason
+    );
+
+    // **No commit, on either file.** `decorate` was added on disk and the refusal means it is not
+    // in the index — which is the claim a partial refresh would have broken.
+    let unindexed = refuse(
+        &mut fixture.session,
+        "dependents",
+        json!({ "target": "decorate", "depth": 1 }),
+    );
+    assert_eq!(
+        unindexed.outcome,
+        Outcome::UnknownTarget,
+        "the acceptable entry must not have been refreshed either: {}",
+        unindexed.verdict_reason
+    );
+    let after = call(&mut fixture.session, "index_status", json!({}));
+    assert_eq!(
+        after["recorded_generation"].as_u64(),
+        Some(generation),
+        "a refused request must not advance the generation, or it left a commit behind: {after}"
+    );
+}
+
+#[test]
+fn every_offending_entry_is_named_rather_than_only_the_first() {
+    // One refusal has to answer the whole request, or a caller corrects one path, re-sends, and
+    // learns about the next one the same way — once per round trip, for a decision the tool has
+    // already made for all of them.
+    let mut fixture = indexed("refresh-names-all");
+    let first = Outside::named(&fixture, "first");
+    let second = Outside::named(&fixture, "second");
+    let (one, two) = (first.path().to_owned(), second.path().to_owned());
+
+    let error = refuse(
+        &mut fixture.session,
+        "index",
+        json!({
+            "mode": "refresh",
+            "paths": ["src/ui.rs", one.clone(), two.clone()]
+        }),
+    );
+    assert_eq!(error.outcome, Outcome::Refused, "{}", error.verdict_reason);
+    let reason = error.verdict_reason.clone();
+    assert!(
+        reason.contains(&one) && reason.contains(&two),
+        "both offending entries are named, so one correction fixes the request: {reason}"
+    );
+    assert!(
+        !reason.contains("src/ui.rs"),
+        "an entry that names a file in the repository is not offending, and accusing it sends a \
+         caller to fix something that was never wrong: {reason}"
+    );
+    assert!(
+        error
+            .verdict_reason
+            .contains("2 of the 3 path(s) in `paths` could not be placed"),
+        "the count is stated against the count the caller sent, because a bare 'refused' does not \
+         say how much of the request was the problem: {}",
+        error.verdict_reason
+    );
+}
+
+/// A Windows drive-relative spelling is refused rather than joined onto the root.
+///
+/// **Measured on this platform before it was refused.** `Path::join` with a drive-relative
+/// argument does *not* keep the base: `Path::new("C:\\repo").join("C:src/a.rs")` is `C:src/a.rs`,
+/// which is not absolute, and every `fs` call on it resolves against whatever directory the C drive
+/// happens to be reading. So the join discarded the root exactly as an absolute path does, and
+/// produced a path whose meaning is process state the caller never named — process-global, and
+/// invisible in the answer.
+///
+/// The classifier is `peek_core::containment::windows_drive_relative`'s, shared with the CLI's two
+/// refusals for the same spelling. What is tested here is the MCP boundary reaching it, which is a
+/// different call site from either of those.
+#[cfg(windows)]
+#[test]
+fn a_drive_relative_path_is_refused_rather_than_joined_onto_the_root() {
+    let mut fixture = indexed("refresh-drive-relative");
+    // The fixture's own precondition, asserted rather than assumed: this spelling only reaches a
+    // join at all because it discards the base, and on another platform it is a legal filename
+    // containing a colon.
+    let root = fixture.root.path().join("repo");
+    assert_eq!(
+        root.join("C:src/ui.rs"),
+        std::path::PathBuf::from("C:src/ui.rs"),
+        "a drive-relative argument must discard the base, or this test asserts nothing about the \
+         join it exists to pin"
+    );
+
+    let error = refuse(
+        &mut fixture.session,
+        "index",
+        json!({ "mode": "refresh", "paths": ["C:src/ui.rs"] }),
+    );
+    assert_eq!(error.outcome, Outcome::Refused, "{}", error.verdict_reason);
+    assert!(
+        error
+            .verdict_reason
+            .contains("relative to whatever directory the current drive happens to be reading"),
+        "the refusal has to name why the spelling is unanswerable, in the CLI's words: {}",
+        error.verdict_reason
+    );
+    assert!(
+        !error.verdict_reason.contains("not inside the repository"),
+        "it is refused for having no location at all rather than for naming the wrong tree, and a \
+         message saying it is simply outside would blame a tree for a spelling that named none: {}",
+        error.verdict_reason
+    );
+}
+
+#[test]
+fn a_path_spelled_in_full_that_is_inside_the_repository_is_accepted() {
+    // The other direction, and it is what keeps the refusal from being a narrower contract than
+    // the engine's. `paths` is documented as repository-relative, but the *rule* is containment:
+    // the engine keys a file by the name it has inside the root, so a path the caller spelled in
+    // full and that is inside the repository is that same file and is refreshed as one.
+    //
+    // Asserting this matters because the fix could have gone the other way — refusing every
+    // absolute path — and that version would have been simpler and wrong: it would refuse a
+    // legitimate request that the engine can satisfy, and it would make this surface stricter than
+    // `peek rm`, which accepts the same spelling for the same file.
+    let mut fixture = indexed("refresh-absolute-inside");
+    let inside = fixture.root.path().join("src/ui.rs");
+    let named = inside.display().to_string();
+    assert!(
+        inside.starts_with(fixture.root.path()),
+        "the fixture's own precondition: the file is inside the repository"
+    );
+
+    let refreshed = call(
+        &mut fixture.session,
+        "index",
+        json!({ "mode": "refresh", "paths": [named] }),
+    );
+    assert_eq!(
+        refreshed["report"]["files_indexed"].as_u64(),
+        Some(1),
+        "a file inside the repository is refreshable however it was spelled: {refreshed}"
+    );
+}
+
+#[test]
+fn the_index_schema_says_paths_is_a_list_of_repository_paths() {
+    // **The contract a model reads, checked against what the handler does.** The schema is the
+    // text the catalogue puts in a client's context and the only statement of what `paths` may
+    // contain, so a schema that does not forbid a path outside the repository leaves the hole open
+    // for the next implementer however well the handler behaves. And the type has to be a list:
+    // the handler reads an array, so a schema saying `string` is a second, wrong answer to the
+    // same question.
+    let index = peek_mcp::tool::find("index").expect("`index` is in the catalogue");
+    let paths = &index.input_schema["properties"]["paths"];
+
+    assert_eq!(
+        paths["type"],
+        json!("array"),
+        "`paths` is a list; the handler reads a list, and a schema saying otherwise is a contract \
+         a model follows to be refused: {}",
+        paths
+    );
+    assert_eq!(
+        paths["items"]["type"],
+        json!("string"),
+        "and its entries are strings: {paths}"
+    );
+
+    let description = paths["description"].as_str().expect("a description");
+    assert!(
+        description.contains("outside this repository is refused"),
+        "the schema has to say what happens to a path outside the repository, or it is the only \
+         statement of the contract and it is silent on the one case that matters: {description}"
+    );
+    assert!(
+        index.description.contains("refuses the whole request"),
+        "the tool description carries the same rule, because it is what a model reads when \
+         choosing between tools and it is the place a prohibition belongs: {}",
+        index.description
+    );
+}
+
 #[test]
 fn refresh_mode_without_paths_is_refused_rather_than_walking_the_repository() {
     let mut fixture = indexed("refresh-no-paths");

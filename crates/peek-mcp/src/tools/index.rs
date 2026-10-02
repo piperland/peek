@@ -52,8 +52,10 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
+use peek_core::containment::{normalise_lexically, relative_path, windows_drive_relative};
 use peek_core::discover::DiscoveryOptions;
 use peek_core::indexer::{self, IndexOutcome, IndexReport};
+use peek_core::model::RepoPath;
 use peek_core::resolve::ResolutionReport;
 use peek_core::store::StoreStats;
 
@@ -121,9 +123,14 @@ pub fn index(session: &mut Session, arguments: Option<&Value>) -> Result<ToolAns
 
 /// Re-extract and re-resolve the named files.
 fn refresh(session: &mut Session, paths: &[String]) -> Result<ToolAnswer, ToolError> {
-    session.refuse_if_watching("a refresh")?;
     let root = session.root().to_path_buf();
-    let absolute: Vec<PathBuf> = paths.iter().map(|path| root.join(path)).collect();
+    // **The boundary, and it is before the writer is opened.** `Store::open` creates a missing
+    // index, so a refusal that arrived after the store was open would leave behind an index for a
+    // request it declined. The refusal is also before `refuse_if_watching`: a path outside the
+    // repository is wrong whatever else is true of the session, and the watch would only add a
+    // second refusal to answer once that one is fixed.
+    let absolute = anchor(&root, paths)?;
+    session.refuse_if_watching("a refresh")?;
     let mut store = session.writer()?;
     let outcome = indexer::refresh(&mut store, &root, &absolute, &DiscoveryOptions::default())
         .map_err(|error| {
@@ -139,6 +146,168 @@ fn refresh(session: &mut Session, paths: &[String]) -> Result<ToolAnswer, ToolEr
         view.render(),
         index_body(&view, &Verdict::ok()),
     ))
+}
+
+/// Place every path the caller named inside `root`, or refuse the whole request.
+///
+/// # Why the refusal happens here and not in the engine
+///
+/// `Path::join` with an absolute argument **discards the base**: `root.join("/etc/passwd")` is
+/// `/etc/passwd`, and whatever `root` was has no part in the result. So the path the caller supplied
+/// is the path that gets read, and a client that can call this tool can name any file the host
+/// process can read and get its contents back, indexed and summarised. The engine's `refresh` now
+/// refuses to *index* such a path, but it refuses it the way it refuses an unreadable file: as a
+/// **skip**, counted in `files_skipped` and named in the `skipped` list beside a build that
+/// otherwise reports `outcome: ok`.
+///
+/// That is a successful answer to a build that did not read what it was asked to read. A skip is
+/// "I looked and declined to act on this one"; a refusal is "this request is not something I will
+/// do", with a reason and an `outcome` a caller can branch on. `peek rm` already has this wording
+/// for the same condition, in `crates/peek-cli/src/paths.rs`, and the same sentences are used here
+/// so the two surfaces cannot disagree about what the same request means.
+///
+/// # Why the whole request is refused rather than the offending entry
+///
+/// `paths` is a *request about a set*, not a set of independent requests. `index` with
+/// `mode: "refresh"` means "these files are current now, re-extract them" — and the answer that
+/// makes that claim true is one where every file named was acted on. Refusing the offending entry
+/// alone would return a **plausible, successful, incomplete** answer: `outcome: ok`, `files_indexed`
+/// counting the paths that worked, and the caller's real intent — that the index is current for
+/// everything it named — silently unmet.
+///
+/// Three further reasons, in the order they decided it:
+///
+/// * **A partial answer is a wrong answer for this tool.** Every other field on the response is a
+///   measurement, and a measurement with an unstated denominator is the defect this crate exists
+///   to remove. A caller reading `files_indexed: 3` from a request for four paths has to
+///   cross-reference the `skipped` list to notice, and the caller who was probing the boundary is
+///   exactly the one who will not.
+/// * **The caller can retry cheaply; it cannot discover cheaply.** Refusing names every offending
+///   path, so one correction fixes the whole request in a single round trip. Partial execution
+///   spends the run and leaves the caller to work out which entries are still missing.
+/// * **The engine's skip is the right answer for the engine and the wrong one here.** A watcher
+///   feeds `refresh` a batch of paths the operating system reported, and one unreadable file must
+///   not stop the rest — so `SkipReason::OutsideRoot` earns its place. A caller's array is a
+///   request, and a request is either honoured in full or refused in full.
+///
+/// The refusal names **every** offending entry rather than the first, because a caller that fixed
+/// one path and re-sent the array would learn about the next one the same way, once per round trip,
+/// and the engine has already proven it can decide all of them in one pass.
+fn anchor(root: &Path, paths: &[String]) -> Result<Vec<PathBuf>, ToolError> {
+    let mut anchored = Vec::with_capacity(paths.len());
+    let mut refused: Vec<String> = Vec::new();
+    for given in paths {
+        match place(root, given) {
+            Ok(path) => anchored.push(path),
+            Err(reason) => refused.push(reason),
+        }
+    }
+    if refused.is_empty() {
+        return Ok(anchored);
+    }
+    let count = refused.len();
+    Err(ToolError::refused(
+        // **The reason is the refusal itself**, one sentence per offending entry in the CLI's
+        // words, rather than a summary that defers the detail to `advice`. A caller reading only
+        // `reason` — which is what most of them read, and what a client logs — has to learn *which*
+        // path was wrong and *why*, and a summary that says "some of `paths` are not inside this
+        // repository" answers neither. The summary of the outcome is the last clause, because
+        // "nothing was indexed" is the part that decides what the caller does next.
+        format!(
+            "{} Nothing was indexed: {} of the {} path(s) in `paths` could not be placed, and \
+             the request is refused in full rather than partly, because an answer covering only \
+             the paths that could be honoured would tell the caller the index is current for \
+             every path it named",
+            refused.join(". "),
+            count,
+            paths.len(),
+        ),
+        format!(
+            "`index` refreshes only files inside the repository at {}. Give `paths` paths \
+             relative to it, `/`-separated, such as `src/payments/service.rs`",
+            root.display()
+        ),
+    ))
+}
+
+/// One caller-supplied path, placed inside `root`.
+///
+/// **The join happens first and the judgement is made on its result**, which is the only order
+/// that can work: anchoring an absolute path onto a root yields the absolute path, so a judgement
+/// about the caller's spelling and a judgement about what will actually be read are two different
+/// questions whenever the caller spelled one in full. Anchoring first makes the second one
+/// askable; refusing before anchoring would be refusing a spelling and reading something else.
+///
+/// The two refusals are the CLI's sentences, kept as sentences rather than reworded, because they
+/// are the wording a person has already learned to read and this is the same condition. The
+/// drive-relative one is asked before the join: a path this process cannot resolve to a location has
+/// no base to be joined onto and no location to be compared with, so it must not reach either.
+fn place(root: &Path, given: &str) -> Result<PathBuf, String> {
+    if given.is_empty() {
+        return Err("the path is empty; name a file or directory inside the repository".to_owned());
+    }
+    if cfg!(windows) && windows_drive_relative(given) {
+        return Err(format!(
+            "{given} names a location relative to whatever directory the current drive happens to \
+             be reading, which this process cannot see, so it cannot be shown to be inside the \
+             repository at {}",
+            root.display()
+        ));
+    }
+    // **The join is what is judged, not the spelling**, and that is the whole difference from a
+    // gate that ran before it: `root.join("/etc/passwd")` is `/etc/passwd`, so a spelling that is
+    // outside is exactly the case a pre-join gate would have to inspect the join to find.
+    let joined = root.join(given);
+    // The engine's lexical rule, for the reason `containment` gives: the key has to be the key the
+    // discovery walk would give the same file, so a path spelled in full that *is* inside the
+    // repository is not refused for being spelled in full. It is asked in this order and against
+    // this value because that is the sequence `indexer::refresh` applies to the same path, so a
+    // path the boundary accepts and the engine skips is not reachable — the boundary can only turn
+    // a skip into a refusal and never the other way round, which is what makes refusing the whole
+    // array a change of what the answer *says* rather than a narrowing of what may be asked for.
+    let Some(inside) = relative_path(root, &joined) else {
+        return Err(outside_the_repository(
+            given,
+            &normalise_lexically(&joined),
+            root,
+        ));
+    };
+    // `RepoPath` is the model's own validator and the second half of the engine's predicate. A
+    // spelling inside the root that names nothing — the root itself, `.`, `""` — has no name to
+    // key an index row under, so it is refused here rather than becoming a skip there. Named by
+    // the spelling rather than by the join, because on this branch the two are one file and the
+    // caller is the one who wrote it.
+    if RepoPath::from_path(&inside).is_none() {
+        return Err(format!(
+            "{given} is not a repository-relative path; a path that escapes the root, or is \
+             empty, has no meaning here"
+        ));
+    }
+    Ok(joined)
+}
+
+/// The refusal for a path that is not inside the repository, naming both places.
+///
+/// **The CLI's helper, with `read` where it says `touch`.** `outside_the_repository` in
+/// `crates/peek-cli/src/paths.rs` refuses this condition with these words, and the actor differs
+/// between the two surfaces — a command touches a working tree, this server reads a file to index
+/// it — so the verb is the one word that had to change. Everything a reader acts on is the same,
+/// including naming where the spelling points rather than the spelling itself, which is what tells
+/// an escape apart from a spelling.
+fn outside_the_repository(given: &str, spelled: &Path, root: &Path) -> String {
+    let mut message = format!(
+        "{} is not inside the repository at {}; this tool will not read anything outside the tree \
+         it was pointed at",
+        spelled.display(),
+        root.display()
+    );
+    // The spelling and where it points differ whenever `..` was involved, and a reader told only
+    // one of them cannot tell an escape from a spelling. Named once when they agree, twice when
+    // they do not.
+    if spelled.to_string_lossy() != given {
+        message.push_str(&format!(". {given} names {}", spelled.display()));
+    }
+    message
 }
 
 /// Report what the index holds, measured.
