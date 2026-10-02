@@ -26,6 +26,17 @@
 //! because a path arriving from outside the root means the watcher is watching something it was
 //! not asked to watch.
 //!
+//! **The operating system does not spell the root the way the caller did, and a watcher that
+//! believes it did re-indexes nothing.** The backends disagree: `inotify` reports a path under the
+//! name it was registered with, while FSEvents reports it under the *resolved* name, and on macOS
+//! the directory a temporary fixture lives in is behind a symlink (`/var` resolves to
+//! `/private/var`). A watcher that compares a reported path against the caller's spelling of the
+//! root therefore decides that *every* event arrived from outside the repository: counted in
+//! `outside_root`, absent from the re-index list, and reported as no failure at all — an index that
+//! claims to be current and is not. A reported path is therefore restated in the caller's spelling
+//! before it is planned, which is also the spelling `indexer::refresh` strips against to reach a
+//! repository-relative path. See [`under_root`].
+//!
 //! **Deleted means removed, even if the delete arrives before the create.** A build that indexed
 //! the file and then lost it must not keep answering questions about it, and the index has to be
 //! able to say the symbol is gone rather than leaving a row that points nowhere.
@@ -104,12 +115,38 @@ impl Plan {
     }
 }
 
+/// Restate a path an operating system reported in the spelling of the root a caller named.
+///
+/// `root` is the root as the caller wrote it and `resolved_root` is the same directory with its
+/// symlinks resolved. A backend that names the resolved directory reports every event under it, and
+/// a watcher that compared those paths against `root` would classify all of them as arriving from
+/// outside the repository — counted, dropped, and never reported as a failure.
+///
+/// A path already under `root` is returned unchanged, and so is one under neither, because deciding
+/// that a path is outside the root is [`plan_batch`]'s job and this must not pre-empt it: a path
+/// that really is elsewhere has to stay countable rather than be quietly reshaped into something
+/// that looks like it is inside.
+fn under_root(root: &Path, resolved_root: &Path, reported: &Path) -> PathBuf {
+    if reported.starts_with(root) {
+        return reported.to_path_buf();
+    }
+    match reported.strip_prefix(resolved_root) {
+        Ok(relative) => root.join(relative),
+        Err(_) => reported.to_path_buf(),
+    }
+}
+
 /// Turn a burst of raw event paths into a plan.
 ///
 /// `root` is the repository root; a path that is not under it is counted as outside rather than
 /// silently dropped. `is_indexable` decides whether an extension is one we extract, so that a
 /// `.md` edit does not cost a transaction. Both are injected rather than discovered so this stays
 /// pure and so a caller can apply whatever policy it actually has.
+///
+/// The comparison against `root` is lexical, which is what makes it pure and testable, and it is
+/// also why a caller feeding it paths from an operating system hands them through [`under_root`]
+/// first: the two sides have to be spelled the same way or every path looks like it came from
+/// elsewhere.
 pub fn plan_batch<F>(root: &Path, events: &[PathBuf], mut is_indexable: F) -> Plan
 where
     F: FnMut(&Path) -> bool,
@@ -293,6 +330,10 @@ impl std::fmt::Display for Plan {
 /// pure and therefore testable without a filesystem. A watcher whose logic lives in the event
 /// loop can only be tested by causing real file events, which is how a watcher ends up with a
 /// test suite that is either flaky or absent.
+///
+/// Spelling a path so that it can be compared with a root is the OS's business rather than the
+/// planner's, so [`under_root`] is applied here, where the notification is picked up: from this
+/// point on, every path is in the caller's spelling of the root.
 pub mod native {
     use std::path::{Path, PathBuf};
     use std::sync::mpsc;
@@ -300,7 +341,7 @@ pub mod native {
 
     use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
-    use super::{Debouncer, Plan, plan_batch};
+    use super::{Debouncer, Plan, plan_batch, under_root};
 
     /// Everything a caller can configure, so the defaults are visible rather than buried.
     #[derive(Debug, Clone)]
@@ -333,7 +374,13 @@ pub mod native {
         watcher: Option<RecommendedWatcher>,
         events: mpsc::Receiver<notify::Result<Event>>,
         debouncer: Debouncer,
+        /// The repository root as the caller named it.
+        ///
+        /// Every path this watcher hands out is spelled this way, because this is the spelling the
+        /// caller strips them against to reach a repository-relative path.
         root: PathBuf,
+        /// The same directory with its symlinks resolved, which is how some backends report it.
+        resolved_root: PathBuf,
         options: WatchOptions,
     }
 
@@ -368,6 +415,10 @@ pub mod native {
     impl Watch {
         /// Begin watching `root` recursively.
         pub fn start(root: &Path, options: WatchOptions) -> Result<Self, WatchError> {
+            // Resolved once, here, rather than per event: it cannot change under a running watch,
+            // and a failed resolution falls back to the caller's spelling, which is what a backend
+            // that reports paths that way would have used anyway.
+            let resolved_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
             let (tx, events) = mpsc::channel();
             let mut watcher = notify::recommended_watcher(move |result| {
                 // A send failure means the receiver is gone, which is shutdown. Dropping the event
@@ -383,6 +434,7 @@ pub mod native {
                 events,
                 debouncer: Debouncer::new(options.quiet_for),
                 root: root.to_path_buf(),
+                resolved_root,
                 options,
             })
         }
@@ -399,7 +451,10 @@ pub mod native {
                 // only for real paths, so an errored watch is surfaced by the watcher itself
                 // rather than by a path that does not exist.
                 if let Ok(event) = event {
-                    for path in event.paths {
+                    for reported in event.paths {
+                        // Restated here, at the one place where a path comes off the operating
+                        // system, so everything below this line speaks the caller's spelling.
+                        let path = under_root(&self.root, &self.resolved_root, &reported);
                         self.debouncer.record([path]);
                         taken += 1;
                     }
