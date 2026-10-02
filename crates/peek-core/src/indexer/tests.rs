@@ -455,7 +455,11 @@ fn a_refresh_of_a_path_outside_the_root_indexes_nothing_and_says_why() {
 
     // The fixture's own index directory: it exists, it is outside the tree, and it is removed with
     // the fixture, so a file written beside the database leaves nothing behind either.
-    let outside_dir = tree.db.parent().expect("the index path has a parent").to_path_buf();
+    let outside_dir = tree
+        .db
+        .parent()
+        .expect("the index path has a parent")
+        .to_path_buf();
     let outside = outside_dir.join("borrowed.rs");
     fs::write(&outside, "fn borrowed() {}\n").expect("write a file outside the tree");
     // The fixture's own precondition: the path has to be outside the tree, or this asserts nothing.
