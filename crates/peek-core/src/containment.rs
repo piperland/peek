@@ -383,9 +383,15 @@ pub fn resolve_location(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        climbs, contains, normalise_lexically, relative_path, resolve_location, same_volume,
-        windows_drive_relative,
+        climbs, contains, normalise_lexically, relative_path, same_volume, windows_drive_relative,
     };
+    // Only one test reads this, and it is `#[cfg(unix)]`: it walks to the deepest existing prefix,
+    // and on Windows a path with a climb on the end is a spelling the filesystem refuses rather
+    // than one that resolves. Imported separately so Windows does not see an unused binding — a
+    // `-D warnings` build is a build failure, and this line is the only thing standing between
+    // "the tests are unix-shaped" and "the crate does not build on Windows".
+    #[cfg(unix)]
+    use super::resolve_location;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
