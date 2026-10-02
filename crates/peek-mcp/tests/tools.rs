@@ -2247,6 +2247,12 @@ fn a_watch_keeps_the_index_current_as_a_file_changes() {
     // reason: it is the only one here that can be slow, and the only one that could be flaky on a
     // platform whose notifications do not work. It polls for the change with a deadline rather than
     // sleeping a fixed amount, so it is as fast as the platform allows and as slow as it must be.
+    //
+    // Two claims, not one, and which of them is asserted depends on what the watch did — which is
+    // why the branch is written out rather than folded into a single "either way" assertion. A
+    // tolerated answer has to be an answer: asking a helper that panics on a refusal cannot report
+    // one, so the tolerance was a claim the test could not execute and did not, and every failure
+    // it was written for arrived as a panic from the middle of it instead.
     let mut fixture = indexed("watch-refreshes");
     let opened = call(&mut fixture.session, "index_status", json!({}));
     assert_eq!(
@@ -2314,19 +2320,94 @@ pub fn decorate() -> u32 {
         "and no refresh failed: {stopped}"
     );
     // Whatever the platform did with the notification, the claim that must hold is that a stopped
-    // watch leaves a consistent index rather than a claim about how quickly it noticed.
-    let found = call(
-        &mut fixture.session,
-        "dependents",
-        json!({ "target": "decorate", "depth": 1 }),
-    );
-    assert!(
-        matches!(
-            found["outcome"].as_str(),
-            Some("ok") | Some("unknown_target")
-        ),
-        "the index answers either way, which is what consistency means here: {found}"
-    );
+    // watch leaves a consistent index rather than a claim about how quickly it noticed — and the
+    // two ways of not noticing are answered differently, because one of them is a bug.
+    if applied > 0 {
+        // A refresh reached the store, so this is the strong claim: the function the file now
+        // declares is answerable, and by the identity that refresh wrote. A watcher that applies a
+        // batch of paths it cannot place under its own root fails here rather than quietly, because
+        // the entity it wrote has a repository path nothing else in the index has.
+        let found = call(
+            &mut fixture.session,
+            "dependents",
+            json!({ "target": "decorate", "depth": 1 }),
+        );
+        assert_eq!(
+            found["outcome"],
+            json!("ok"),
+            "a refresh was applied, so what the file now declares is answerable: {found}"
+        );
+        assert_ne!(
+            found["target"]["matched"],
+            json!("path"),
+            "and a bare function name resolves to a declaration, not to a file path: {found}"
+        );
+        assert_eq!(
+            found["target"]["entity"]["id"]["path"],
+            json!("src/ui.rs"),
+            "whose repository-relative identity is the file that changed, and not a path some \
+             refresh could not place under this root: {found}"
+        );
+    } else {
+        // Nothing was applied, so this platform delivered no notification at all. That is what the
+        // tolerance is for, and it proves less than the branch above, which says so here rather
+        // than letting the assertion speak for it. What still has to hold is consistency: the index
+        // is exactly what it was, it says so plainly for what it does not hold, and it answers the
+        // moment the same change is handed to it directly.
+        let withheld = refuse(
+            &mut fixture.session,
+            "dependents",
+            json!({ "target": "decorate", "depth": 1 }),
+        );
+        assert_eq!(
+            withheld.outcome,
+            Outcome::UnknownTarget,
+            "with no refresh applied, a target that was never indexed is a refusal that names \
+             itself rather than an empty answer: {}",
+            withheld.verdict_reason
+        );
+        assert!(
+            withheld.verdict_reason.contains("decorate"),
+            "and the refusal names what it could not find: {}",
+            withheld.verdict_reason
+        );
+        assert!(
+            withheld.candidates.is_empty(),
+            "an unknown target has no candidates to offer: {:?}",
+            withheld.candidates
+        );
+        let untouched = call(
+            &mut fixture.session,
+            "dependents",
+            json!({ "target": "settle", "depth": 1 }),
+        );
+        assert_eq!(
+            untouched["outcome"],
+            json!("ok"),
+            "the index still answers for what it held before the file changed, which is what \
+             consistency means here: {untouched}"
+        );
+        // Measured rather than assumed: the same index, the same session and the same file answer
+        // `decorate` as soon as the change is handed over directly, so what is missing here is the
+        // notification and nothing else. Without this the branch would be asserting that the
+        // platform is incapable of watching, which is not something it can observe.
+        call(
+            &mut fixture.session,
+            "index",
+            json!({ "mode": "refresh", "paths": ["src/ui.rs"] }),
+        );
+        let by_hand = call(
+            &mut fixture.session,
+            "dependents",
+            json!({ "target": "decorate", "depth": 1 }),
+        );
+        assert_eq!(
+            by_hand["outcome"],
+            json!("ok"),
+            "so the index was able to answer all along, and the watch is what delivered nothing: \
+             {by_hand}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
