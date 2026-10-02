@@ -44,6 +44,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::containment::relative_path;
+
 /// What a path in a batch requires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Action {
@@ -136,6 +138,21 @@ fn under_root(root: &Path, resolved_root: &Path, reported: &Path) -> PathBuf {
     }
 }
 
+/// Whether `path` is outside `root`, as the engine's one containment rule decides it.
+///
+/// **A normalised spelling, not a component-wise prefix.** `Path::starts_with` is component-wise,
+/// so `<root>/../escape.rs` reads as under the root: every component of it is a name under the
+/// root, and the `..` is the only thing in it that says otherwise. The planner counted such a path
+/// as inside and planned a re-index for it, `refresh` then refused it, and the plan reported work
+/// that was not going to happen.
+///
+/// Resolving is deliberately *not* done here, and the module's own reason for being a pure function
+/// is the reason: this is called on every batch, its whole suite runs without a filesystem, and a
+/// path it cannot place has to stay countable rather than become a `stat` on somebody's disk.
+fn is_outside_root(root: &Path, path: &Path) -> bool {
+    relative_path(root, path).is_none()
+}
+
 /// Turn a burst of raw event paths into a plan.
 ///
 /// `root` is the repository root; a path that is not under it is counted as outside rather than
@@ -143,9 +160,11 @@ fn under_root(root: &Path, resolved_root: &Path, reported: &Path) -> PathBuf {
 /// `.md` edit does not cost a transaction. Both are injected rather than discovered so this stays
 /// pure and so a caller can apply whatever policy it actually has.
 ///
-/// The comparison against `root` is lexical, which is what makes it pure and testable, and it is
-/// also why a caller feeding it paths from an operating system restates them in the root's own
-/// spelling first, as `under_root` below does.
+/// **Containment is [`crate::containment`]'s lexical rule**, applied to the spelling as given, and
+/// the answer is the same one `indexer::refresh` reaches when it derives the repository-relative
+/// name. The two used to disagree — this one read the spelling and that one read the path — so a
+/// plan could list work the refresh would refuse. A caller feeding this paths from an operating
+/// system restates them in the root's own spelling first, as `under_root` below does.
 pub fn plan_batch<F>(root: &Path, events: &[PathBuf], mut is_indexable: F) -> Plan
 where
     F: FnMut(&Path) -> bool,
@@ -156,7 +175,7 @@ where
     let mut outside_root: Vec<PathBuf> = Vec::new();
 
     for path in events {
-        if !path.starts_with(root) {
+        if is_outside_root(root, path) {
             // A path outside the root is a fact about the watcher's configuration. Counted, and
             // kept out of the re-index list: acting on it would mean touching files the user did
             // not ask us to read.
@@ -176,7 +195,7 @@ where
 
     let mut ignored = Vec::new();
     for path in events {
-        if !path.starts_with(root) {
+        if is_outside_root(root, path) {
             continue;
         }
         if is_indexable(path) {

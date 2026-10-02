@@ -26,6 +26,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::containment::relative_path;
 use crate::discover::{
     DiscoveredFile, DiscoveryOptions, DiscoveryStats, FileDiscovery, WalkIssue, WalkIssueReason,
 };
@@ -316,7 +317,21 @@ pub fn refresh(
     let mut displaced: Vec<Relation> = Vec::new();
 
     for path in paths {
-        let Some(relative) = RepoPath::from_path(path.strip_prefix(root).unwrap_or(path)) else {
+        // **The repository-relative name, or nothing.** `strip_prefix` alone was not the question:
+        // it says `Err` for a path outside the root, and the `unwrap_or` beside it handed the whole
+        // path on — so an absolute path that was not under the root became the name the index held
+        // it under. `RepoPath` accepts `/etc/passwd` as `etc/passwd`, so the store took a row
+        // keyed by an absolute path on the host, and a caller that names paths (`index` in refresh
+        // mode over MCP) could have the engine read a file outside the repository and index it.
+        //
+        // The rule is [`crate::containment`]'s lexical one, and lexical is the right one *here*:
+        // the key has to be the key the discovery walk would give the same file, and discovery keys
+        // a file by the path it was walked under without resolving a symlink first. Resolving here
+        // would key a followed link by its target and make an incremental build disagree with a
+        // full one about the same repository — which is the defect a refresh is supposed to be the
+        // cheap version of.
+        let inside = relative_path(root, path);
+        let Some(relative) = inside.and_then(|name| RepoPath::from_path(&name)) else {
             outcome.report.files_skipped += 1;
             outcome.skipped.push(SkippedFile {
                 path: path.display().to_string(),

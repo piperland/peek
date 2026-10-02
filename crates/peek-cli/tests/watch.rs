@@ -159,12 +159,13 @@ fn a_path_outside_the_repository_is_counted_separately() {
 
     // **The outside path is spelled absolutely, and it is outside rather than climbing out.**
     //
-    // `plan_batch` decides containment with `Path::starts_with`, which is component-wise, so
-    // `<root>/../escape.rs` *is* under `<root>` by that test and is planned for re-indexing. The
+    // `plan_batch` decides containment with `peek_core::containment`'s lexical rule, so a climb
+    // out of the root is counted as from outside as well — `<root>/../escape.rs` is component-wise
+    // under `<root>`, and the rule reads what the spelling says rather than that it does. The
     // earlier spelling of this test built its escape with exactly that `..` and was asserting a
-    // count the planner never makes: the path reached `refresh`, which refused it and counted it
-    // under `skipped_by_reason` as "outside the repository root". The two facts are both true and
-    // they are different facts, and only one of them is this test's.
+    // count the planner could not make: the path reached `refresh`, which refused it and counted it
+    // under `skipped_by_reason` as "outside the repository root". The two facts were both true then
+    // and they are different facts, and only one of them is this test's.
     //
     // A sibling under the fixture's own base is outside in the sense the planner measures, and is
     // the shape the real watcher produces for a misconfigured watch: a symlink target or a second

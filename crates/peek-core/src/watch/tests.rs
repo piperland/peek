@@ -312,6 +312,45 @@ fn the_quiet_period_is_a_parameter_and_not_a_constant() {
     );
 }
 
+#[test]
+fn a_climb_out_of_the_root_is_a_path_from_outside_it() {
+    // The misclassification, and the reason the planner does not compare the spelling. Every
+    // component of `/repo/../escape.rs` is under `/repo`, so a component-wise prefix test called it
+    // inside and planned a re-index for it; `refresh` then refused it and the plan reported work
+    // that was never going to happen. It was never an escape — nothing outside the tree was read —
+    // but a plan that lists work that does not happen is a report nobody can act on.
+    //
+    // **Nothing here touches a filesystem, so the two spellings differ by construction.** The root
+    // is `/repo` and does not exist, on any platform: the `..` is the whole of the difference
+    // between the spelling and what it says, and there is no temporary directory on the host whose
+    // own spelling could be mistaken for the case.
+    let root = root();
+    let escape = root.join("../escape.rs");
+    // The fixture's own precondition: the spelling is component-wise under the root, which is
+    // exactly why reading it is not the same as reading what it says.
+    assert!(escape.starts_with(&root), "under the root, component-wise");
+
+    let plan = plan_batch(&root, std::slice::from_ref(&escape), rust_only);
+    assert!(plan.reindex.is_empty(), "a path that leaves is not work");
+    assert_eq!(plan.outside_root, vec![escape], "counted, not planned");
+    assert!(plan.ignored.is_empty(), "and not a decline either");
+}
+
+#[test]
+fn a_climb_that_stays_inside_the_root_is_still_a_change_inside_it() {
+    // The other half, and the reason the rule is arithmetic rather than a refusal of `..`: the
+    // answer has to follow where the path lands, and a blanket refusal would drop a change inside
+    // the repository on the grounds that it was written as a climb.
+    let root = root();
+    let landed = root.join("src/../src/lib.rs");
+    let plan = plan_batch(&root, std::slice::from_ref(&landed), rust_only);
+
+    // The path is planned as the operating system spelled it, and the refresh derives the name with
+    // the same rule, so the two cannot disagree about what it is.
+    assert_eq!(plan.reindex, vec![landed], "still a change inside it");
+    assert!(plan.outside_root.is_empty(), "not a misconfigured watch");
+}
+
 // ---------------------------------------------------------------------------
 // How a path is spelled on its way off an operating system
 // ---------------------------------------------------------------------------

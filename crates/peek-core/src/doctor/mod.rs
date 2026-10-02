@@ -40,6 +40,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::containment::contains;
 use crate::discover::{DiscoveryOptions, FileDiscovery, WalkIssueReason};
 use crate::store::paths;
 use crate::store::{Durability, SCHEMA_VERSION, Store, StoreError, StoreStats};
@@ -457,7 +458,13 @@ fn check_repository_identity(store: &Store, repo: &crate::store::RepoId, root: &
 
 fn check_index_location(store: &Store, root: &Path) -> Finding {
     let path = store.path();
-    let inside = paths::is_within(path, root);
+    // **The shared rule, and the located one.** Both arguments are locations — the file this store
+    // was opened at, and a root somebody else resolved — so they can be two spellings of one
+    // directory and the answer has to be about where they are rather than about how they were
+    // written. A directory link out of the tree is not inside it, which the comparison of two raw
+    // spellings this replaces got wrong in the direction that tells a user to go and delete an
+    // in-repository index that is not there.
+    let inside = contains(root, path);
     let detail = format!("the index lives at {}", path.display());
     if inside {
         Finding::problem(

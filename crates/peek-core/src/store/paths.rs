@@ -22,6 +22,12 @@
 //! Each platform also gets a physical one: on Linux the index is a cache and the OS may delete it
 //! under pressure, which is correct, because it can be rebuilt.
 //!
+//! **Nothing here decides whether a path is inside a repository.** That question is asked by
+//! [`crate::doctor`], it is answered by [`crate::containment::contains`], and the answer is a
+//! *finding* rather than a guard: this module places the index in the OS cache directory whatever
+//! `PEEK_INDEX_DIR` says, so an index somebody has deliberately pointed at their own working tree
+//! is a misconfiguration to be reported, not a write to be refused.
+//!
 //! # Why the directory is named for the repository
 //!
 //! Not for the repository's *name*, which collides — two checkouts called `api` in different
@@ -38,7 +44,7 @@
 //! directory needs a way to say so. It is one variable and it is documented, not a config file
 //! with a schema.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::store::{RepoId, StoreError};
 
@@ -155,28 +161,10 @@ fn missing(variable: &str) -> StoreError {
     ))
 }
 
-/// Whether `path` lies inside `root`.
-///
-/// Written by hand rather than reaching for `starts_with`, which is a plain component-wise string
-/// comparison and is easy to get subtly wrong. The point is that this function is *never wrong*,
-/// because it is the only thing standing between an index and the repository it describes. A
-/// prefix comparison would call `/repo/src` a parent of `/repo/src-old`, which is exactly the
-/// mistake that would put one repository's index inside another's tree.
-pub fn is_within(path: &Path, root: &Path) -> bool {
-    let (path, root) = match (path.canonicalize(), root.canonicalize()) {
-        (Ok(path), Ok(root)) => (path, root),
-        // Either side may not exist yet — the index root is created on first use. Fall back to
-        // the paths as given, which is still a sound *over*-approximation: it can say "yes"
-        // when the answer is ambiguous, and it can never say "no" for a path that is genuinely
-        // inside. Refusing to answer would be worse than being conservative here.
-        _ => (path.to_path_buf(), root.to_path_buf()),
-    };
-    path.starts_with(root)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ENV_INDEX_DIR, index_dir, index_path, is_within, root};
+    use super::{ENV_INDEX_DIR, index_dir, index_path, root};
+    use crate::containment::contains;
     use crate::store::RepoId;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -287,7 +275,7 @@ mod tests {
         with_index_dir(index.path(), || {
             let path = index_path(&repo).expect("resolve the index path");
             assert!(
-                !is_within(&path, tree.path()),
+                !contains(tree.path(), &path),
                 "the index at {} is inside the repository at {}",
                 path.display(),
                 tree.path().display()
@@ -359,28 +347,35 @@ mod tests {
 
     #[test]
     fn containment_is_component_wise_and_not_a_string_prefix() {
-        // `/repo/src-old` is not inside `/repo/src`. A prefix comparison says it is, which is
+        // `/x/repo/src-old` is not inside `/x/repo/src`. A prefix comparison says it is, which is
         // exactly the mistake that would let one repository's index be written into another's
         // tree when two projects share a parent directory and a name.
-        let outer = Temp::new("prefix-outer");
-        let sibling = Temp::new("prefix-sibling");
+        //
+        // **The two names really do share a string prefix, because that is the claim this rests
+        // on.** The fixture used to be two unrelated temporary directories, and a string comparison
+        // would have got the right answer from them for the wrong reason — so the test asserted
+        // that the rule compares components without ever presenting it with two names that a string
+        // comparison would confuse. The names are built here, from one parent, for that reason.
+        let parent = Temp::new("prefix");
+        let source = parent.path().join("repo/src");
+        let sibling = parent.path().join("repo/src-old");
+        std::fs::create_dir_all(&source).expect("create the source directory");
+        std::fs::create_dir_all(&sibling).expect("create the sibling directory");
+
+        // The fixture's own precondition, asserted rather than assumed: a string comparison would
+        // call the sibling inside, which is the mistake being ruled out.
+        let source_text = source.to_string_lossy();
+        let sibling_text = sibling.to_string_lossy();
         assert!(
-            !is_within(sibling.path(), outer.path()),
-            "{} is not inside {}",
-            sibling.path().display(),
-            outer.path().display()
+            sibling_text.starts_with(&*source_text),
+            "the fixture must present two names a string prefix cannot tell apart: {} and {}",
+            source_text,
+            sibling_text
         );
-        let nested = outer.path().join("nested");
-        std::fs::create_dir_all(&nested).expect("create the nested directory");
-        assert!(
-            is_within(&nested, outer.path()),
-            "{} is inside {}",
-            nested.display(),
-            outer.path().display()
-        );
-        assert!(
-            is_within(outer.path(), outer.path()),
-            "a directory is inside itself"
-        );
+
+        assert!(!contains(&source, &sibling), "not inside");
+        let inside = source.join("a.rs");
+        assert!(contains(&source, &inside), "inside, created or not");
+        assert!(contains(&source, &source), "inside itself");
     }
 }

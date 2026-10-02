@@ -436,6 +436,97 @@ fn a_refresh_of_nothing_is_not_a_commit() {
 }
 
 #[test]
+fn a_refresh_of_a_path_outside_the_root_indexes_nothing_and_says_why() {
+    // **The defect.** `refresh` derived a repository-relative name with
+    // `path.strip_prefix(root).unwrap_or(path)`, so a path that was not under the root was handed
+    // on whole. `RepoPath` does not reject an absolute path — it drops the leading separator — so
+    // `/…/borrowed.rs` became the key `…/borrowed.rs` and the store took rows for a file outside
+    // the tree. Nothing refused it: the outcome said one file was indexed, and the only trace of
+    // where it came from was a repository-relative name with no repository in it.
+    //
+    // **The file is spelled absolutely, because that is the shape that reaches this.** A relative
+    // path with a `..` in it is caught by `RepoPath`'s own validator, so the two spellings of the
+    // same escape fail differently, and only the absolute one reached the store.
+    let tree = TempTree::new("refresh-outside-root");
+    tree.write("src/keep.rs", "fn keep() {}\n");
+    let mut store = open_store(&tree);
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
+    let before = store.stats().expect("stats").entity_count;
+
+    // The fixture's own index directory: it exists, it is outside the tree, and it is removed with
+    // the fixture, so a file written beside the database leaves nothing behind either.
+    let outside_dir = tree.db.parent().expect("the index path has a parent").to_path_buf();
+    let outside = outside_dir.join("borrowed.rs");
+    fs::write(&outside, "fn borrowed() {}\n").expect("write a file outside the tree");
+    // The fixture's own precondition: the path has to be outside the tree, or this asserts nothing.
+    assert!(!outside.starts_with(tree.path()), "outside the tree");
+    let reported = outside.display().to_string();
+
+    let outcome = refresh(
+        &mut store,
+        tree.path(),
+        std::slice::from_ref(&outside),
+        &DiscoveryOptions::default(),
+    )
+    .expect("refresh");
+
+    assert_eq!(
+        outcome.report().files_indexed,
+        0,
+        "a path outside the root is not a file in the repository"
+    );
+    assert_eq!(outcome.report().files_skipped, 1, "{outcome:?}");
+    // And the refusal has to name which path and why, or the count is the whole report.
+    let refused = outcome
+        .skipped
+        .iter()
+        .find(|skipped| skipped.path == reported)
+        .expect("the outside path is named in the report");
+    assert_eq!(refused.reason, SkipReason::OutsideRoot);
+    assert!(
+        store
+            .entities_named("borrowed", 5)
+            .expect("query")
+            .is_empty(),
+        "the contents of a file outside the root must not be in the index under any name"
+    );
+    let after = store.stats().expect("stats").entity_count;
+    assert_eq!(after, before, "the index is exactly as it was");
+}
+
+#[test]
+fn a_refresh_of_a_climb_that_stays_inside_the_root_indexes_the_file_it_lands_on() {
+    // The other half of the same rule, and the reason it normalises rather than refusing `..`: a
+    // climb that ends up inside the root is an ordinary path, and the name it has inside the
+    // repository is the one it lands on. Refusing every spelling with a `..` in it would have made
+    // this a second way to lose a file.
+    let tree = TempTree::new("refresh-climb-inside");
+    tree.write("src/keep.rs", "fn keep() {}\n");
+    let mut store = open_store(&tree);
+
+    let climbed = tree.path().join("src/../src/keep.rs");
+    let outcome = refresh(
+        &mut store,
+        tree.path(),
+        std::slice::from_ref(&climbed),
+        &DiscoveryOptions::default(),
+    )
+    .expect("refresh");
+
+    assert_eq!(
+        outcome.report().files_indexed,
+        1,
+        "the climb stays inside the tree, so it names a file of it"
+    );
+    let kept = id("src/keep.rs", EntityKind::Function, "keep");
+    assert!(
+        store.entity(&kept).expect("query").is_some(),
+        "and it is indexed under the name it lands on, not the spelling it arrived as"
+    );
+    assert!(outcome.skipped.is_empty(), "nothing was refused");
+}
+
+#[test]
 fn an_oversized_file_is_skipped_and_counted_rather_than_parsed() {
     // The engine Peek replaces handed a 200 MB file straight to the parser.
     let tree = TempTree::new("too-large");

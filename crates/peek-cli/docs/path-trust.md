@@ -6,7 +6,15 @@ This is the answer to one question:
 > that path may not exist, what is Peek allowed to treat as evidence?
 
 It governs `crates/peek-cli/src/paths.rs`, and the one function there that implements it is
-`relative_to`, through `locate_within`. Nothing else in the crate decides containment.
+`relative_to`, through `locate_within`. Within that crate, nothing else decides containment.
+
+**The rule itself is in the engine, in `crates/peek-core/src/containment.rs`.** The engine asks the
+same question in three places — the incremental refresh, the watch planner, and where the index
+lives — and it used to answer it three different ways. The mechanism this document describes (the
+lexical comparison, the normalisation, the walk to the deepest existing prefix) therefore lives
+there, and `relative_to` calls it: the CLI keeps the anchoring and the sentences, and the
+comparisons are one implementation the whole workspace shares. That module names which of the four
+notions each of its callers uses and why, which is the argument below turned into a table.
 
 ## The invariant, stated
 
@@ -149,6 +157,24 @@ than the contract, so the test asks the filesystem which file the spelling opens
 answer to be that file. The consequence for a caller is the same one *mixed separators* already
 records: the two platforms judge an identically spelled path differently, and that is correct.
 
+
+## The three engine sites, and which notion each of them wants
+
+The four notions above are not alternatives a caller picks between at random. Three callers in
+`peek-core` ask the same question about paths they were handed rather than paths a user typed, and
+each of them needs a different answer — and the reasons are not stylistic.
+
+| site | notion | why that one, there |
+|---|---|---|
+| `indexer::refresh` derives a `RepoPath` from a path | **lexical** | The name it derives has to be the name the discovery walk gave the same file. Discovery keys a file by the path it was walked under and does not resolve a symlink before doing so, so resolving here would key a followed link by its target and an incremental build would disagree with a full one about the same repository. It used to use `strip_prefix(..).unwrap_or(path)`, which is not a notion at all: a path outside the root was handed on whole, and `RepoPath` accepts `/etc/passwd` as `etc/passwd`, so the store took rows for a file outside the tree. |
+| `watch::plan_batch` classifies an event | **lexical** | It is a pure function over paths an operating system reported, and its whole suite runs without a filesystem; a path it cannot place has to stay countable rather than become a `stat`. It used to compare the spelling with `starts_with`, which is component-wise and therefore read `<root>/../escape.rs` as inside — a misclassification, not an escape, but a plan listing work that was not going to happen. |
+| `doctor`'s index-location check | **trusted-ancestor** | Both arguments are independent filesystem locations — the file the store was opened at, and a root somebody else resolved — so they can be two spellings of one directory, and the question is about a place. Its old fallback compared a resolved path against an unresolved one, or the reverse, and so answered about a spelling on one side and a location on the other; the arguments and the direction of its error are in `peek-core/src/containment.rs`. |
+
+**The refresh site is a security-relevant one, and the observable change is this:** a path outside
+the root handed to `refresh` used to be indexed under a mangled repository-relative name and
+reported as a successful file; it is now counted as skipped with the reason *outside the repository
+root*, and the name of the path is in the report. Over MCP, `index` in `refresh` mode with an
+absolute path in `paths` is the shape that reached it.
 
 ## Cases, and what each one means
 
