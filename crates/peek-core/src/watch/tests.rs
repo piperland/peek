@@ -318,7 +318,10 @@ fn the_quiet_period_is_a_parameter_and_not_a_constant() {
 
 /// The root as a caller on macOS names it, and the same directory as FSEvents names it.
 fn named_and_resolved_roots() -> (PathBuf, PathBuf) {
-    (PathBuf::from("/var/folders/pe/peek"), PathBuf::from("/private/var/folders/pe/peek"))
+    (
+        PathBuf::from("/var/folders/pe/peek"),
+        PathBuf::from("/private/var/folders/pe/peek"),
+    )
 }
 
 #[test]
