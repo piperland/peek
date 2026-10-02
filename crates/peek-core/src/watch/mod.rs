@@ -35,7 +35,7 @@
 //! `outside_root`, absent from the re-index list, and reported as no failure at all — an index that
 //! claims to be current and is not. A reported path is therefore restated in the caller's spelling
 //! before it is planned, which is also the spelling `indexer::refresh` strips against to reach a
-//! repository-relative path. See [`under_root`].
+//! repository-relative path. See `under_root` below.
 //!
 //! **Deleted means removed, even if the delete arrives before the create.** A build that indexed
 //! the file and then lost it must not keep answering questions about it, and the index has to be
@@ -144,9 +144,8 @@ fn under_root(root: &Path, resolved_root: &Path, reported: &Path) -> PathBuf {
 /// pure and so a caller can apply whatever policy it actually has.
 ///
 /// The comparison against `root` is lexical, which is what makes it pure and testable, and it is
-/// also why a caller feeding it paths from an operating system hands them through [`under_root`]
-/// first: the two sides have to be spelled the same way or every path looks like it came from
-/// elsewhere.
+/// also why a caller feeding it paths from an operating system restates them in the root's own
+/// spelling first, as `under_root` below does.
 pub fn plan_batch<F>(root: &Path, events: &[PathBuf], mut is_indexable: F) -> Plan
 where
     F: FnMut(&Path) -> bool,
@@ -332,7 +331,7 @@ impl std::fmt::Display for Plan {
 /// test suite that is either flaky or absent.
 ///
 /// Spelling a path so that it can be compared with a root is the OS's business rather than the
-/// planner's, so [`under_root`] is applied here, where the notification is picked up: from this
+/// planner's, so the restating is applied here, where the notification is picked up: from this
 /// point on, every path is in the caller's spelling of the root.
 pub mod native {
     use std::path::{Path, PathBuf};
