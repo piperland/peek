@@ -31,7 +31,7 @@ the figure the same run produced.
 | `symbol_recall` | 96.67% (87/90) | 96.66 |
 | `definitions` | 60.23% (53/88) | 60.22 |
 | `calls` | 97.50% (39/40) | 97.50 |
-| `references` | 0.00% (0/18) | 0.00 |
+| `references` | 94.74% (18/19) | 94.73 |
 | `imports` | 66.67% (10/15) | 66.66 |
 | `imports_module_retained` | 0.00% (0/3) | 0.00 |
 | `members` | 91.67% (22/24) | 91.66 |
@@ -39,8 +39,8 @@ the figure the same run produced.
 | `inheritance_base` | 100.00% (5/5) | 100.00 |
 | `negative_references` | 100.00% (14/14) | 100.00 |
 | `negative_inheritance` | 100.00% (3/3) | 100.00 |
-| `incremental` | 100.00% (1200/1200) | 100.00 |
-| `query` | 96.67% (29/30) | 96.66 |
+| `incremental` | 100.00% (2288/2288) | 100.00 |
+| `query` | 100.00% (30/30) | 100.00 |
 | `context` | 100.00% (7/7) | 100.00 |
 
 A floor is a ratchet, not a target. It says "do not go below this without saying so in
@@ -56,15 +56,8 @@ output.
 
 ## What the low numbers are
 
-None of them is a rounding artefact, and the three worth naming:
+None of them is a rounding artefact, and the two worth naming:
 
-- **`references` at 0 of 18.** Not "few references found": the `References` class is
-  unreachable. `spec::ReferenceRule::excluded_parents` lists every node type the spec
-  declares as a symbol, and the walker's `is_excluded_reference` walks *up* to the
-  nearest declared ancestor, so an identifier inside a function finds `function_item`
-  and is excluded. An identifier at file level is not excluded but still dropped,
-  because emission requires an enclosing entity. `tests/reference_reachability.rs`
-  pins both halves against the engine directly.
 - **`definitions` at 53 of 88.** The walker's `declare` gives a top-level declaration a
   parent only when it declares a module; every other top-level symbol gets
   `parent: None` and so has no incoming structural edge. A `const`, a `static`, a
@@ -72,6 +65,23 @@ None of them is a rounding artefact, and the three worth naming:
 - **`imports_module_retained` at 0 of 3.** The three imports in `lib.rs` are placed by
   `UniqueName` rather than by their `ImportBinding`, so the module the statement named
   is not in the decided state and cannot be read back out.
+
+`references` used to be the third, and it was not a rounding artefact either: the
+`References` class was **unreachable**, not rare. `spec::ReferenceRule::excluded_parents`
+listed every node type the spec declares as a symbol and the walker's
+`is_excluded_reference` walked *up* to the nearest declared ancestor, so an identifier
+inside a function found `function_item` in the list and was excluded — the list was meant
+to suppress a declaration's own name and it suppressed every name in the body. The rule
+now asks whether an occurrence is the name the enclosing declaration introduced, which is
+a question about one node rather than about a subtree; `tests/reference_reachability.rs`
+pins that against the engine directly, and `tests/reference_value.rs` measures what the
+edge is worth once it exists.
+
+The remaining 1 of 19 is `src/traits.rs`'s `Saveable.save | entry`, and the gate reports
+it as a miss because that line is believed wrong: `Saveable.save` has no body, so `entry`
+occurs only as the parameter's binding. It is left in place rather than corrected — see
+the note at the top of `gate.expect` for why a miss is reported and a contradiction is
+corrected.
 
 The full table with denominators is `../../../LANGUAGE_MATRIX.md`, generated from a
 measurement rather than written by hand.
