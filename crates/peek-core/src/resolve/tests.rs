@@ -2981,9 +2981,8 @@ fn the_guess_answers_a_path_the_table_cannot_spell() {
         "the file the referring file's own directory chain names is where the declaration is: {}",
         state_of(&flag)
     );
-    assert_eq!(
+    assert!(
         report.module_files.guess_answered > 0,
-        true,
         "and the report says the guess is what answered: {:?}",
         report.module_files
     );
@@ -3025,9 +3024,8 @@ fn the_table_answers_a_package_the_guess_cannot_reach() {
         "the path names another package, so the edge belongs there and not beside the import: {}",
         state_of(&gateway)
     );
-    assert_eq!(
+    assert!(
         report.module_files.table_answered > 0,
-        true,
         "and the table is what answered it, because the guess could not: {:?}",
         report.module_files
     );
