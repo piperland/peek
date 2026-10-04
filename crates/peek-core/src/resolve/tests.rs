@@ -163,6 +163,21 @@ fn state_of(relation: &crate::model::Relation) -> String {
     )
 }
 
+/// The evidence a `Resolved` relation was resolved on, or a message saying it was not resolved.
+///
+/// A rung that fired is not observable from outside, so a test that asserts *which* rung answered
+/// reads it out of the stored state — the same field `peek explain` reports — rather than out of
+/// the resolver. That is the only assertion that would fail if `explain` and the ladder disagreed.
+fn decided_by(relation: &crate::model::Relation) -> Evidence {
+    match &relation.resolution {
+        ResolutionState::Resolved { by } => by.clone(),
+        other => panic!(
+            "expected a resolved relation, got {other:?}: {}",
+            state_of(relation)
+        ),
+    }
+}
+
 /// Reset one kind of relation to `Pending`, resolve the index again with the module table on or
 /// off, and hand back the relations of that kind.
 ///
@@ -253,6 +268,16 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
         "crates/beta/src/lib.rs",
         "use alpha::gateway::Gateway;\n\npub fn go() -> u8 {\n    Gateway.send()\n}\n",
     );
+    // A second package declaring the same type and the same method. This is the discriminator for
+    // both halves of the test: with one `Gateway` in the repository a repository-wide name lookup
+    // could reach the right answer by luck, so a rung that never ran would look identical to one
+    // that did. Two of them, in two packages, can only be told apart by the path in the import.
+    tree.write("crates/gamma/Cargo.toml", "[package]\nname = \"gamma\"\n");
+    tree.write("crates/gamma/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/gamma/src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        2\n    }\n}\n",
+    );
 
     let mut store = tree.index_without_resolving();
     let options = ResolutionOptions {
@@ -261,6 +286,7 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
     };
     resolve_all(&mut store, options).expect("resolve with the module table on");
     let alpha = "crates/alpha/src/gateway.rs";
+    let gamma = "crates/gamma/src/gateway.rs";
 
     let import = relations_of(&store, RelationKind::Imports)
         .into_iter()
@@ -302,32 +328,45 @@ fn a_cross_package_import_is_placed_by_the_module_table_and_by_nothing_else() {
         "the scope row the methods hang from is still in the index"
     );
 
-    // The method call is still unplaced, and it is a **different** defect with a different cause.
-    // `Gateway.send()` in `beta` is `no_candidate` even though `send` is declared in
+    // The method call is now placed, and the rung that placed it is the import rather than the
+    // receiver. It used to be `no_candidate` even though `send` is declared in
     // `crates/alpha/src/gateway.rs` and the receiver is written out in full.
     //
-    // The cause is not the impl block's entity. R-012's hypothesis was that it was — that the
-    // receiver rung has to name the receiver's owner before it can look for a method inside it,
-    // `Gateway` is ambiguous between the struct and the impl block, so the rung cannot commit and
-    // stops. The test
-    // `a_receiver_resolves_when_its_type_is_in_the_callers_file_and_stops_when_it_is_not`
+    // R-012 blamed the impl block's entity — that the receiver rung cannot commit to an owner
+    // because `Gateway` is ambiguous between the struct and the block. The test
+    // `a_receiver_resolves_when_its_type_is_in_the_callers_file_and_through_an_import_when_it_is_not`
     // measures that hypothesis and refutes it: with two owner candidates and the type in the
     // caller's file the call resolves, and with the *same* two candidates and the type in another
-    // file it does not. What decides it is that the receiver rung looks for the owner **in the
-    // caller's file only** and is terminal when it finds nothing, and here the owner is in another
-    // package, reached by an import that R1 is skipped for because the relation carries a receiver.
+    // file it did not. What decided it was that the receiver rung looked for the owner **in the
+    // caller's file only**, was terminal when it found nothing, and left R1 — the rung that knows
+    // where an imported name came from — skipped for exactly the relations that needed it.
     //
-    // Asserted as observed, not as desired, so the test records what is true and fails the moment
-    // that is fixed.
+    // So this assertion records the answer D-0036 produces rather than the one it removed. It was
+    // written to fail the moment that was fixed, and it did; `gamma` is what keeps it honest now,
+    // because a `Gateway.send` in two packages is a name a repository-wide search cannot place and
+    // only the import can.
     let call = relations_of(&store, RelationKind::Calls)
         .into_iter()
         .find(|relation| relation.target_name == "send")
         .expect("the call to send was extracted");
     assert_eq!(
-        state_of(&call),
-        "go -> send (unresolved (no_candidate)), target None",
-        "the method call on a cross-package type is still not placed, because the receiver rung \
-         cannot see an owner outside the caller's file: {call:?}"
+        call.target,
+        Some(id(alpha, EntityKind::Method, "Gateway.send")),
+        "the method call on a cross-package type is placed, in the package the import named: \
+         {}",
+        state_of(&call)
+    );
+    assert_eq!(
+        rung_name(&decided_by(&call)),
+        "import_binding",
+        "and the rung that placed it is the one that knows where an imported name came from: {}",
+        state_of(&call)
+    );
+    assert_ne!(
+        call.target,
+        Some(id(gamma, EntityKind::Method, "Gateway.send")),
+        "not the same method in the other package: {}",
+        state_of(&call)
     );
 }
 
@@ -457,7 +496,7 @@ fn the_module_table_switch_really_turns_the_table_off() {
 }
 
 #[test]
-fn a_receiver_resolves_when_its_type_is_in_the_callers_file_and_stops_when_it_is_not() {
+fn a_receiver_resolves_when_its_type_is_in_the_callers_file_and_through_an_import_when_it_is_not() {
     // R-012's hypothesis, measured rather than assumed.
     //
     // The hypothesis was that the receiver rung has to name the receiver's owner before it can
@@ -469,7 +508,15 @@ fn a_receiver_resolves_when_its_type_is_in_the_callers_file_and_stops_when_it_is
     // rather than a fact about one fixture: `via_receiver` collects its owners as **names**, not as
     // entity identities, so any number of entities sharing the receiver's name produce one owner
     // string and one search, and `decide_candidates` drops the duplicate identities that leaves
-    // behind. The candidate count below is identical in both arms and the answers are opposite.
+    // behind. The candidate count below is identical in both arms.
+    //
+    // **The two arms used to have opposite answers and now do not, and that is the fix.** The old
+    // difference was not the collision — the count is the same either way — it was that the rung
+    // read only the caller's file and refused when the owner was not there. D-0036 made the
+    // refusal a decline, so the same call now resolves through the import that brought the name
+    // in, and the rung that answers is R1 rather than R2. What the count still measures is
+    // unchanged: the collision is real, it is present in both arms, and it is not what decides the
+    // answer.
     let gateway = "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) {}\n}\n";
 
     // Arm one: the type, its `impl` block and the call are all in one file, and the receiver is
@@ -515,7 +562,7 @@ fn a_receiver_resolves_when_its_type_is_in_the_callers_file_and_stops_when_it_is
     );
 
     // Arm two: the same call, with the receiver's type in another package. The candidate count is
-    // the same two, and the answer is the opposite — so the count is not what decides it.
+    // still the same two, so the collision still cannot be what decides the answer.
     let far = TempTree::new("receiver-owner-elsewhere");
     far.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
     far.write("crates/alpha/src/gateway.rs", gateway);
@@ -537,19 +584,23 @@ fn a_receiver_resolves_when_its_type_is_in_the_callers_file_and_stops_when_it_is
     resolve_all(&mut far_store, ResolutionOptions::default()).expect("resolve");
     let call = the_call(&far_store, "send");
     assert_eq!(
-        call.resolution,
-        ResolutionState::Unresolved {
-            reason: UnresolvedReason::NoCandidate
-        },
-        "the identical candidate count and the opposite answer. What decides it is that the \
-         receiver rung looks for the owner in the caller's file only, and is terminal when it \
-         finds nothing: {}",
+        call.target,
+        Some(id(
+            "crates/alpha/src/gateway.rs",
+            EntityKind::Method,
+            "Gateway.send"
+        )),
+        "the identical candidate count, and the same method reached — this time through the \
+         import that brought the name into the file: {}",
         state_of(&call)
     );
-    assert_eq!(
-        call.target,
-        None,
-        "and a receiver with no owner in scope must name no target: {}",
+    assert_ne!(
+        rung_name(&decided_by(&call)),
+        rung_name(&Evidence::ReceiverType {
+            receiver: "Gateway".to_owned()
+        }),
+        "the two arms are answered by two different rules, and the difference is visible rather \
+         than implied: {}",
         state_of(&call)
     );
 }
@@ -1089,6 +1140,466 @@ fn a_receiver_that_names_a_type_in_its_own_file_resolves_to_that_type_only() {
         call.target,
         Some(id("src/lib.rs", EntityKind::Method, "Service.retry")),
         "and it points at that method: {}",
+        state_of(&call)
+    );
+}
+
+#[test]
+fn a_method_on_a_type_imported_from_another_file_resolves_to_that_method_of_that_type() {
+    // The defect, at its narrowest and with nothing else in the fixture to explain it: `Gateway`
+    // reaches `beta` through a `use`, `Gateway.send()` is a method call on it, and `send` is
+    // declared in another package.
+    //
+    // Every fixture below is load-bearing, and each one removes a way the answer could have been
+    // right for the wrong reason.
+    //
+    // * **A second package with the same type and the same method.** A repository-wide name lookup
+    //   cannot tell `alpha`'s `send` from `gamma`'s, so an implementation that searched by name
+    //   would report an ambiguity rather than a target. Only the path in the import places it.
+    // * **A free function called `send` in the caller's own file.** This is the shape that turns a
+    //   fix into a regression: a rung that falls through to the repository-wide rungs, or to the
+    //   same-file rung, lands there instead, and the edge looks plausible. The assertion below
+    //   names that function so the test fails on it rather than passing beside it.
+    // * **The target is the `Method` whose qualified name is `Gateway.send`.** A method is
+    //   `Type.method`; an implementation that resolved the name `send` to a bare function would
+    //   satisfy "something resolved" and lose the distinction the graph exists to carry.
+    let tree = TempTree::new("imported-method");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/alpha/src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        1\n    }\n}\n",
+    );
+    tree.write("crates/gamma/Cargo.toml", "[package]\nname = \"gamma\"\n");
+    tree.write("crates/gamma/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/gamma/src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        2\n    }\n}\n",
+    );
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    tree.write(
+        "crates/beta/src/lib.rs",
+        "use alpha::gateway::Gateway;\n\npub fn send() -> u8 {\n    0\n}\n\n\
+         pub fn go() -> u8 {\n    Gateway.send()\n}\n",
+    );
+
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let call = the_call(&store, "send");
+    assert_eq!(
+        call.target,
+        Some(id(
+            "crates/alpha/src/gateway.rs",
+            EntityKind::Method,
+            "Gateway.send"
+        )),
+        "the method, on the type the import named, in the package the path named: {}",
+        state_of(&call)
+    );
+    assert_eq!(
+        rung_name(&decided_by(&call)),
+        "import_binding",
+        "and the rule that answered is the one that knows where an imported name came from: {}",
+        state_of(&call)
+    );
+    for wrong in [
+        id(
+            "crates/gamma/src/gateway.rs",
+            EntityKind::Method,
+            "Gateway.send",
+        ),
+        id("crates/beta/src/lib.rs", EntityKind::Function, "send"),
+    ] {
+        assert_ne!(
+            call.target,
+            Some(wrong.clone()),
+            "the call landed on {wrong:?}, which nothing in `beta` says it means: {}",
+            state_of(&call)
+        );
+    }
+}
+
+#[test]
+fn the_rung_and_the_evidence_class_are_both_readable_from_the_stored_state() {
+    // `peek explain` reports the evidence class verbatim from the stored state and names the rung
+    // through [`rung_name`], so those two strings are the whole of what a caller can learn about how
+    // an edge was decided. Both are asserted here from the index rather than from the resolver's
+    // internals, because a test on the rung that fired would keep passing while `explain` reported
+    // something else.
+    //
+    // Two shapes in one fixture, and the point is that they are told apart: the same call syntax,
+    // one with the type declared in the caller's file and one with it imported, must not produce the
+    // same class. If they did, a consumer could not tell a proof by declaration from a proof by
+    // import, and the ladder's one deviation from its own order would be invisible.
+    let tree = TempTree::new("which-rung-answered");
+    tree.write(
+        "src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) {}\n}\n",
+    );
+    tree.write(
+        "src/app.rs",
+        "use crate::gateway::Gateway;\n\npub fn go() {\n    Gateway.send()\n}\n",
+    );
+    tree.write(
+        "src/local.rs",
+        "pub struct Local;\nimpl Local {\n    pub fn stop(&self) {}\n}\n\n\
+         pub fn drive() {\n    Local.stop()\n}\n",
+    );
+
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let imported = the_call(&store, "send");
+    let local = the_call(&store, "stop");
+
+    assert_eq!(
+        imported.resolution.evidence_class(),
+        Some("import_binding"),
+        "the imported receiver is reported by the class that says how the name arrived: {}",
+        state_of(&imported)
+    );
+    assert_eq!(
+        local.resolution.evidence_class(),
+        Some("receiver_type"),
+        "and the declared one by the class that says the owner was read out of this file: {}",
+        state_of(&local)
+    );
+    assert_eq!(
+        rung_name(&decided_by(&imported)),
+        "import_binding",
+        "so each names its own rung, and neither names the other's"
+    );
+    assert_eq!(rung_name(&decided_by(&local)), "receiver_owner");
+    assert_ne!(
+        imported.resolution.evidence_class(),
+        local.resolution.evidence_class(),
+        "the two shapes must not be indistinguishable to a consumer: {} vs {}",
+        state_of(&imported),
+        state_of(&local)
+    );
+}
+
+#[test]
+fn an_impl_block_in_the_callers_file_is_not_an_owner_and_the_import_still_answers() {
+    // The same defect one step to the side, and it is ordinary Rust rather than a corner.
+    //
+    // `impl Gateway { .. }` is indexed as a `Module` named `Gateway` because the walker's scope
+    // stack needs a row to anchor the block's methods to. So a file that writes
+    // `use alpha::gateway::Gateway;` *and* carries an inherent `impl Gateway` holds a `Gateway` that
+    // declares nothing at all — the type arrived by import, and the row is the block's own scope.
+    //
+    // Reading that row as an owner is what made this shape unplaceable even after the decline was
+    // fixed, because the rung then had an owner, found nothing inside it, and refused. The rule
+    // that fixes it is the one this file already applies to candidates: a namespace is outranked
+    // by a symbol, so a name only a namespace carries in this file is not an owner *here*.
+    //
+    // The fixture is `gamma`-shaped as well, so a name search could not have reached the right
+    // answer by itself.
+    let tree = TempTree::new("impl-block-is-not-an-owner");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/alpha/src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        1\n    }\n}\n",
+    );
+    tree.write("crates/gamma/Cargo.toml", "[package]\nname = \"gamma\"\n");
+    tree.write("crates/gamma/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/gamma/src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        2\n    }\n}\n",
+    );
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    tree.write(
+        "crates/beta/src/lib.rs",
+        "use alpha::gateway::Gateway;\n\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        \
+         self.receive()\n    }\n\n    pub fn receive(&self) -> u8 {\n        3\n    }\n}\n\n\
+         pub fn go() -> u8 {\n    Gateway.send()\n}\n",
+    );
+
+    let mut store = tree.index_without_resolving();
+    // The fixture has to contain what it claims: the block's scope row, and no declaration of the
+    // type in this file. Without this the test would pass for a reason it does not name.
+    let local = store
+        .entities_in_file(
+            &RepoPath::new("crates/beta/src/lib.rs").expect("valid path"),
+            64,
+        )
+        .expect("the caller's entities");
+    let owners: Vec<&str> = local
+        .iter()
+        .filter(|entity| entity.name == "Gateway")
+        .map(|entity| entity.kind().as_str())
+        .collect();
+    assert_eq!(
+        owners,
+        vec!["module"],
+        "the only `Gateway` in the caller's file is the impl block's own row: {local:?}"
+    );
+
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let call = the_call(&store, "send");
+    assert_eq!(
+        call.target,
+        Some(id(
+            "crates/alpha/src/gateway.rs",
+            EntityKind::Method,
+            "Gateway.send"
+        )),
+        "the block's scope row is not an owner, so the decline stands and the import answers: {}",
+        state_of(&call)
+    );
+    // And the same method name, written on a receiver that *is* declared here, stays local. One
+    // name, two call sites, two files, two answers — which is what a receiver is for.
+    let local_call = the_call(&store, "receive");
+    assert_eq!(
+        local_call.target,
+        Some(id(
+            "crates/beta/src/lib.rs",
+            EntityKind::Method,
+            "Gateway.receive"
+        )),
+        "a method this file declares is reached from the enclosing scope, not from the import: {}",
+        state_of(&local_call)
+    );
+}
+
+#[test]
+fn a_re_decision_walks_the_same_ladder_and_keeps_the_rung_that_placed_it() {
+    // A second defect, found while tracing this one, and it would have quietly undone the first.
+    //
+    // `resolve_paths` does not only decide what is pending: it re-decides every edge pointing *into*
+    // a changed file, and a relation it re-decides is one that already holds an answer. The receiver
+    // and the scope were read out of a `Pending` pattern, so on the second pass they were `None`, the
+    // relation walked a shorter ladder, and the answer changed:
+    //
+    // * `Gateway.send()` through an import would lose the receiver, find no `send` in the caller's
+    //   own file, and land on the repository-wide rung — which, with two packages declaring the
+    //   method, is an **ambiguity between them**. A proven edge becomes an undecided one.
+    // * `alpha::gateway::charge()` would lose its scope the same way, with the same outcome.
+    //
+    // Both targets are already stored in the evidence class, so both rungs read it in whatever state
+    // the relation is in. The evidence is what D-0003 put in the schema for, and this is the test
+    // that says so.
+    //
+    // The last assertion is the one that makes it a measurement rather than a claim: a re-decision
+    // that changes nothing must write nothing and commit nothing, which is the property
+    // `resolving_an_unchanged_index_is_a_no_op_that_moves_no_generation` states for a whole pass.
+    let tree = TempTree::new("re-decision-keeps-the-rung");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/alpha/src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        1\n    }\n}\n\n\
+         pub fn charge() -> u8 {\n    1\n}\n",
+    );
+    tree.write("crates/gamma/Cargo.toml", "[package]\nname = \"gamma\"\n");
+    tree.write("crates/gamma/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/gamma/src/gateway.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        2\n    }\n}\n\n\
+         pub fn charge() -> u8 {\n    2\n}\n",
+    );
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    tree.write(
+        "crates/beta/src/lib.rs",
+        "use alpha::gateway::Gateway;\n\npub fn go() -> u8 {\n    Gateway.send()\n}\n\n\
+         pub fn also() -> u8 {\n    alpha::gateway::charge()\n}\n",
+    );
+
+    let mut store = tree.index_without_resolving();
+    let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
+    assert!(
+        first.committed,
+        "the fixture must produce decisions, or the re-decision proves nothing: {}",
+        first.summary()
+    );
+    let receiver_call = the_call(&store, "send");
+    let scoped_call = the_call(&store, "charge");
+    assert_eq!(
+        receiver_call.target,
+        Some(id(
+            "crates/alpha/src/gateway.rs",
+            EntityKind::Method,
+            "Gateway.send"
+        )),
+        "the imported receiver resolves on the first pass: {}",
+        state_of(&receiver_call)
+    );
+    assert_eq!(
+        scoped_call.target,
+        Some(id(
+            "crates/alpha/src/gateway.rs",
+            EntityKind::Function,
+            "charge"
+        )),
+        "and so does the fully qualified call: {}",
+        state_of(&scoped_call)
+    );
+
+    // Now touch the file both targets live in. Nothing about the call sites changed, so nothing
+    // about their answers should either.
+    let report = resolve_paths(
+        &mut store,
+        &[
+            RepoPath::new("crates/alpha/src/gateway.rs").expect("valid path"),
+            RepoPath::new("crates/gamma/src/gateway.rs").expect("valid path"),
+        ],
+        &[],
+        ResolutionOptions::default(),
+    )
+    .expect("a scoped pass over the declaring file");
+    assert!(
+        report.examined > 0,
+        "the pass must have reached the edges pointing into those files: {}",
+        report.summary()
+    );
+    assert_eq!(
+        report.relations_written,
+        0,
+        "and must have found nothing to change, or a second ladder answered the same question \
+         differently: {}",
+        report.summary()
+    );
+
+    for (name, expected) in [("send", "Gateway.send"), ("charge", "charge")] {
+        let call = the_call(&store, name);
+        assert_eq!(
+            call.target.as_ref().map(|target| target.qualified_name()),
+            Some(expected),
+            "`{name}` moved on the second pass, which means it was answered by a different rung: {}",
+            state_of(&call)
+        );
+    }
+    assert_eq!(
+        rung_name(&decided_by(&the_call(&store, "send"))),
+        "import_binding",
+        "and the receiver call still carries the rung that placed it"
+    );
+    assert_eq!(
+        rung_name(&decided_by(&the_call(&store, "charge"))),
+        "scope_qualified_name",
+        "as does the scoped one"
+    );
+}
+
+#[test]
+fn a_receiver_the_import_rung_cannot_place_still_refuses() {
+    // The half of the ladder that must not move, and the one a fix like this most easily throws
+    // away. The receiver rung now declines instead of refusing, and the rung that answers next is
+    // the import one, so the question this pins is whether that rung's answer can be "some function
+    // with the same name".
+    //
+    // It cannot, and the reason is in the fixture: `Service` **is** imported, so the import rung
+    // runs and finds nothing it can place, because the receiver is `s` — a local variable, and the
+    // index records no type for a local. Reaching the import rung and reaching a decision are two
+    // different things, and the second is not reachable here by any route the ladder has.
+    //
+    // The two things it must not bind to are both in the fixture on purpose: the method
+    // `Service.charge`, which is the right method on the wrong evidence, and the free `charge`
+    // beside it, which is what the engine Peek replaces did to every receiver call (audit B3).
+    let tree = TempTree::new("receiver-refuses-still");
+    tree.write(
+        "src/service.rs",
+        "pub struct Service;\nimpl Service { pub fn charge(&self) {} }\npub fn charge() {}\n",
+    );
+    tree.write(
+        "src/app.rs",
+        "use crate::service::Service;\n\npub fn boot() {\n    let s = Service;\n    s.charge();\n}\n",
+    );
+
+    let mut store = tree.index_without_resolving();
+    let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let call = the_call(&store, "charge");
+    assert_eq!(
+        call.resolution,
+        ResolutionState::Unresolved {
+            reason: UnresolvedReason::NoCandidate
+        },
+        "a receiver the caller does not name a type by must still refuse: {}",
+        state_of(&call)
+    );
+    assert_eq!(call.target, None, "and name no target: {}", state_of(&call));
+    for wrong in [
+        id("src/service.rs", EntityKind::Method, "Service.charge"),
+        id("src/service.rs", EntityKind::Function, "charge"),
+    ] {
+        assert_ne!(
+            call.target,
+            Some(wrong.clone()),
+            "the receiver bound to {wrong:?}, which nothing in `app.rs` says it means: {}",
+            state_of(&call)
+        );
+    }
+    // Counted as the refusal it is, so a caller reading the report sees the bucket and not a zero.
+    assert!(
+        report
+            .unresolved_by_reason
+            .get("no_candidate")
+            .copied()
+            .unwrap_or(0)
+            >= 1,
+        "and the pass must count it: {}",
+        report.summary()
+    );
+}
+
+#[test]
+fn a_declaration_in_the_callers_file_is_not_overridden_by_an_import_of_the_same_name() {
+    // The shadowing question, and the answer is pinned here rather than argued in prose: the ladder
+    // is a chain, not a race. When the receiver rung finds an owner it owns the answer, and the
+    // import rung is not asked to confirm it — not even to confirm it agrees.
+    //
+    // The fixture is a file **the compiler rejects**, which is measured rather than remembered:
+    // rustc 1.98.1 on this shape gives `error[E0255]: the name `Gateway` is defined multiple
+    // times`, alongside `warning: unused import`. So in Rust source that builds, a local
+    // declaration and an import of one name cannot both be in a module, and R2 and R1 can never
+    // hold a candidate for the same receiver at once. That is why the ladder is a chain and not a
+    // race — the race has nothing to race over.
+    //
+    // The rule is pinned here anyway, for two reasons. Peek indexes a working tree rather than a
+    // build artefact, and a file being edited is the ordinary state of a repository, so this shape
+    // is reachable input; and the ordering rule is a whole-file rule, so a language where the
+    // collision is legal would answer the same way under it.
+    //
+    // The last assertion is the one that carries the weight. A design in which the import rung
+    // runs for confirmation, or wins on agreement, would produce a *different target* here and
+    // would report `import_binding` rather than `receiver_owner`. Both assertions fail for it.
+    let tree = TempTree::new("shadowing");
+    tree.write(
+        "src/remote.rs",
+        "pub struct Gateway;\nimpl Gateway {\n    pub fn send(&self) -> u8 {\n        1\n    }\n}\n",
+    );
+    tree.write(
+        "src/app.rs",
+        "use crate::remote::Gateway;\n\npub struct Gateway;\n\n\
+         impl Gateway {\n    pub fn send(&self) -> u8 {\n        2\n    }\n}\n\n\
+         pub fn go() -> u8 {\n    Gateway.send()\n}\n",
+    );
+
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let call = the_call(&store, "send");
+    assert_eq!(
+        call.target,
+        Some(id("src/app.rs", EntityKind::Method, "Gateway.send")),
+        "the declaration in this file is the owner, and the import does not displace it: {}",
+        state_of(&call)
+    );
+    assert_ne!(
+        call.target,
+        Some(id("src/remote.rs", EntityKind::Method, "Gateway.send")),
+        "and the imported type of the same name is not the answer either: {}",
+        state_of(&call)
+    );
+    assert_eq!(
+        rung_name(&decided_by(&call)),
+        "receiver_owner",
+        "the rung that answered is the receiver's own, which is only true if the import rung was \
+         never asked to answer at all: {}",
         state_of(&call)
     );
 }

@@ -72,6 +72,38 @@
 //! `Ambiguous`, which is a result and never a pick (D-0004). `symbols.first()` does not appear
 //! anywhere in this file.
 //!
+//! **One relation does not walk that order, and it is the receiver.** A relation carrying a
+//! receiver skips R1 and goes to R2, because a receiver and an import of the same name are two
+//! claims about one symbol and the receiver is the more specific. R2 then either decides or
+//! **declines**, and a decline hands the relation back to R1 — see
+//! [`Resolver::via_imported_receiver`]. Every other relation walks the ladder straight through, so
+//! "the first rung that answers wins" holds, and the one place it does not is written down rather
+//! than left to be found.
+//!
+//! # A re-decision walks the same ladder as the first decision
+//!
+//! [`resolve_paths`] does not only decide what is pending: with `reconsider_decided` on, which is
+//! the default, it also re-decides every edge *pointing into* a changed file, including edges that
+//! already hold an answer. That is contract G9 — a definition that moved must drag its callers with
+//! it — and it means the ladder runs a second time over a relation whose `ResolutionState` is no
+//! longer `Pending`.
+//!
+//! So the receiver and the scope are read out of the **evidence class**, in every state that has
+//! one, rather than out of a `Pending` pattern. Read from `Pending` alone they would be `None` on
+//! the second pass, the relation would walk a shorter ladder than the one that placed it, and a
+//! `receiver_type` or `qualified_name_in_scope` proof would quietly become a `same_file` or
+//! `unique_name` claim. [`receiver_evidence`] and [`scope_evidence`] are the two places that
+//! happens, and they are the reason [`import_evidence`] was written the way it was.
+//!
+//! One relation cannot be read back that way, and the exception is stated rather than papered over.
+//! A receiver resolved *through an import* records `import_binding`, and that class has room for
+//! the module and not for the name the receiver was written under — so the receiver is gone from
+//! the state. [`placed_import`] and [`Resolver::local_names_of`] put it back by looking the binding
+//! up from the module instead, which is the same binding the first pass used.
+//!
+//! `Ambiguous` and `Unresolved` carry no evidence, so a relation that ended in either is re-decided
+//! from its bare name. That is a limit of the state and it is stated here rather than papered over.
+//!
 //! # What each rung does, and what it refuses to do
 //!
 //! ## R1 — import binding
@@ -81,9 +113,13 @@
 //! same file**, which is what lets a bare `charge()` in a file containing `use payments::charge;`
 //! resolve to another file's definition.
 //!
-//! It is deliberately skipped when the relation carries `ReceiverType` evidence. A receiver and
-//! an import of the same name are two claims about one symbol; when they disagree the receiver is
-//! the more specific one, and letting the import win would re-create audit B3 under a new name.
+//! It is skipped up front when the relation carries `ReceiverType` evidence. A receiver and an
+//! import of the same name are two claims about one symbol; when they disagree the receiver is the
+//! more specific one, and letting the import win would re-create audit B3 under a new name.
+//!
+//! It is asked a second time, and only for a receiver, when R2 declines. The receiver's *name* is
+//! then the local name an import binds, and R1 is the rung that knows which file it came from.
+//! [`Resolver::via_imported_receiver`] is the whole of that hand-off.
 //!
 //! Turning a module path into a file is [`Resolver::module_files`] — the module table first, the
 //! path guess as its fallback — and the guess's limits are documented at [`files_for_module`]
@@ -100,10 +136,35 @@
 //! referring file, because that is where a type the receiver names is declared in every language
 //! this engine supports.
 //!
-//! **R2 never falls through.** If the owner cannot be identified, or nothing inside it carries
-//! the name, the answer is `Unresolved`. Falling through to R4 or R5 would bind `service.retry()`
-//! to whatever free function named `retry` sorts first in the repository, which is the single
-//! worst behaviour the engine Peek replaces had.
+//! **R2 declines when it has no owner; it does not refuse.** A type that reached the caller's file
+//! through an import is not declared in it, so the rung has no owner to look inside and says so.
+//! Saying so is not the same as saying there is none, and the difference was the whole of D-0036:
+//! a decline hands the relation to R1, which is the rung that knows where the name went. Returning
+//! `no_candidate` there was a claim, and it was false.
+//!
+//! **R2 refuses when it has an owner and finds nothing inside it.** That is the case a single
+//! answer was right about, and it is the one that must not fall through: `service.retry()` where
+//! `Service` is declared in this file and carries no `retry` must not bind to whatever free
+//! function named `retry` sorts first in the repository, which is the single worst behaviour the
+//! engine Peek replaces had (audit B3). So the refusal stands, and it stands for the whole ladder:
+//! a receiver never reaches R3, R4 or R5.
+//!
+//! **What "no owner" excludes, and why.** An owner established *only* by a namespace row is not an
+//! owner. `impl Gateway { .. }` is indexed as a `Module` named `Gateway` beside the type it
+//! belongs to, because the walker's scope stack needs a row to hang the block's methods from — so
+//! a file that writes `use alpha::gateway::Gateway;` and also carries an `impl Gateway` holds a
+//! `Gateway` that declares nothing. The rule [`prefer_symbols`] applies to a name lookup applies to
+//! an owner too: a namespace is outranked by a symbol, and if only a namespace carries the name
+//! then the name is not an owner *here*, which means the type reached the file by import.
+//!
+//! **The gap that leaves, stated rather than hidden.** Rust lets an inherent `impl` block for a
+//! type live in a file that does not declare the type, and this module reads one file at a time,
+//! so a method reached through such a block is unplaceable from one direction and not the other.
+//! `Gateway.send()` written in a file whose only `Gateway` is that block's scope row declines and
+//! reaches R1, and resolves. `self.send()` *inside* the block still refuses, because there the
+//! owner is a declaration in this file and R2 is right that this declaration carries no `send`.
+//! Closing it means recording an `impl` block's target type as something the index can look up
+//! across files, which is an extractor change rather than a resolver one.
 //!
 //! ## R3 — qualified name in scope
 //!
@@ -471,6 +532,20 @@ enum Decision {
     Unresolved { reason: UnresolvedReason },
 }
 
+/// What the receiver rung concluded about one relation.
+///
+/// The distinction between the two variants is the whole of D-0036's rule, and it is a distinction
+/// about **what the rung looked at**, not about the repository. `Declined` says "I cannot answer
+/// this"; it never says "there is no answer". Refusing is a claim, and the claim R2 used to make
+/// about an imported type was false.
+#[derive(Debug)]
+enum Receiver {
+    /// The rung placed the target, or refused with a reason it can justify from this file.
+    Answered(Decision),
+    /// The rung could not name the receiver's owner from the caller's own file.
+    Declined,
+}
+
 /// A candidate target and the evidence that put it on the list.
 #[derive(Debug, Clone)]
 struct Found {
@@ -507,6 +582,92 @@ fn import_evidence(state: &ResolutionState) -> Option<(String, Option<String>)> 
             by: Evidence::ImportBinding { module, alias },
             ..
         } => Some((module.clone(), alias.clone())),
+        _ => None,
+    }
+}
+
+/// The receiver a relation carries, in whichever decided state it is in.
+///
+/// **The state matters, and reading only `Pending` is a defect.** A relation is `Pending` the first
+/// time the ladder sees it and decided afterwards, and [`resolve_paths`] re-decides every edge
+/// pointing into a changed file — a second time, against a row that already holds a decision. A
+/// receiver read from `Pending` alone is `None` on that second pass, so the relation walks a
+/// *different* ladder than the one that placed it, and a `receiver_type` answer can be replaced by a
+/// `same_file` or `unique_name` one. The evidence class is the only field that survives a decision
+/// carrying the receiver through it, which is what D-0003 put in the schema.
+///
+/// `Ambiguous` and `Unresolved` carry no evidence at all, so a receiver relation that ended in one
+/// of those has nothing to read back and is re-decided from its bare name. That is a limit of the
+/// state rather than of this function, and it is why the two are named here rather than worked
+/// around.
+fn receiver_evidence(state: &ResolutionState) -> Option<String> {
+    match state {
+        ResolutionState::Pending {
+            evidence: Evidence::ReceiverType { receiver },
+            ..
+        }
+        | ResolutionState::Resolved {
+            by: Evidence::ReceiverType { receiver },
+        }
+        | ResolutionState::Inferred {
+            by: Evidence::ReceiverType { receiver },
+            ..
+        } => Some(receiver.clone()),
+        _ => None,
+    }
+}
+
+/// The qualified scope a relation carries, in whichever decided state it is in.
+///
+/// The same reason and the same cost as [`receiver_evidence`], one rung along: a path call decided
+/// by the scope rung has its scope recorded in the evidence class, and a re-decision that ignored
+/// it would fall through to the repository-wide rungs and report a claim where a proof was stored.
+fn scope_evidence(state: &ResolutionState) -> Option<String> {
+    match state {
+        ResolutionState::Pending {
+            evidence: Evidence::QualifiedNameInScope { scope },
+            ..
+        }
+        | ResolutionState::Resolved {
+            by: Evidence::QualifiedNameInScope { scope },
+        }
+        | ResolutionState::Inferred {
+            by: Evidence::QualifiedNameInScope { scope },
+            ..
+        } => Some(scope.clone()),
+        _ => None,
+    }
+}
+
+/// The module an import placed a relation through, in whichever decided state it is in.
+///
+/// **The module is the whole of what survives, and that is enough to place it again.** A relation
+/// an import rung placed records the module and not the receiver: `Gateway.send()` names the method
+/// in `target_name` and the type in the receiver, and the evidence class has room for the first and
+/// not the second. A re-decision therefore cannot read the receiver back, and without this the
+/// relation would walk a shorter ladder and come out with a different — weaker, or wrong — answer.
+///
+/// The module is a sufficient key, because it identifies the import: the binding is found in the
+/// caller's own file by the module it names, and the binding names the type the method belongs to.
+/// Two bindings from one module (`use a::X; use a::Y;`) are both tried and the candidates are
+/// decided together, so the pair is an `Ambiguous` rather than a pick.
+///
+/// Only reachable for a relation that is **not** an import, which is what distinguishes "an import
+/// placed this reference" from "this relation *is* an import". [`Resolver::decide`] checks the
+/// kind before asking.
+fn placed_import(state: &ResolutionState) -> Option<String> {
+    match state {
+        ResolutionState::Pending {
+            evidence: Evidence::ImportBinding { module, .. },
+            ..
+        }
+        | ResolutionState::Resolved {
+            by: Evidence::ImportBinding { module, .. },
+        }
+        | ResolutionState::Inferred {
+            by: Evidence::ImportBinding { module, .. },
+            ..
+        } => Some(module.clone()),
         _ => None,
     }
 }
@@ -560,20 +721,10 @@ impl<'s> Resolver<'s> {
 
     /// Decide one relation. The rungs are tried strongest first.
     fn decide(&mut self, relation: &Relation) -> Result<Decision, StoreError> {
-        let receiver = match &relation.resolution {
-            ResolutionState::Pending {
-                evidence: Evidence::ReceiverType { receiver },
-                ..
-            } => Some(receiver.clone()),
-            _ => None,
-        };
-        let scope = match &relation.resolution {
-            ResolutionState::Pending {
-                evidence: Evidence::QualifiedNameInScope { scope },
-                ..
-            } => Some(scope.clone()),
-            _ => None,
-        };
+        // Read from the state rather than from a `Pending` pattern, because a scoped pass decides
+        // relations that already hold a decision — see `receiver_evidence`.
+        let receiver = receiver_evidence(&relation.resolution);
+        let scope = scope_evidence(&relation.resolution);
 
         // A glob import binds no single name, so no rule can ever prove a target for it. Saying
         // so beats falling through to a name lookup on the character `*`, which is roughly what
@@ -585,16 +736,46 @@ impl<'s> Resolver<'s> {
         }
 
         // R1. Skipped for a receiver: a receiver and an import of one name are two claims about
-        // the same symbol, and the receiver is the more specific of the two.
+        // the same symbol, and the receiver is the more specific of the two. R2 asks again below,
+        // and only if it declines.
         if receiver.is_none()
             && let Some(decision) = self.via_import_binding(relation)?
         {
             return Ok(decision);
         }
 
-        // R2. Terminal: it decides, or the relation is unresolved.
+        // R2. Decides when it can name the receiver's owner in the caller's own file, refuses when it
+        // can name one and finds nothing inside it, and declines when it cannot name one at all.
         if let Some(receiver) = receiver {
-            return self.via_receiver(relation, &receiver);
+            match self.via_receiver(relation, &receiver)? {
+                Receiver::Answered(decision) => return Ok(decision),
+                Receiver::Declined => {
+                    let owners = [receiver];
+                    if let Some(decision) = self.via_imported_receiver(relation, &owners)? {
+                        return Ok(decision);
+                    }
+                    // Neither the caller's own file nor an import into it names an owner. That is a
+                    // real absence rather than a rung that could not look: `service.retry()` has no
+                    // owner anywhere this pass can see, and the alternatives are a free function
+                    // of the same name somewhere in the repository, which is audit B3.
+                    return Ok(Decision::Unresolved {
+                        reason: UnresolvedReason::NoCandidate,
+                    });
+                }
+            }
+        }
+
+        // R1 again, for a relation an import placed and this pass is seeing a second time. Its
+        // evidence names the module it was placed through, the module names the binding, and the
+        // binding names the type — so the receiver is found without being stored. See
+        // `placed_import` for why it is not in the evidence in the first place.
+        if relation.kind != RelationKind::Imports
+            && let Some(module) = placed_import(&relation.resolution)
+        {
+            let owners = self.local_names_of(&module, relation.source.path())?;
+            if let Some(decision) = self.via_imported_receiver(relation, &owners)? {
+                return Ok(decision);
+            }
         }
 
         // R3.
@@ -652,15 +833,26 @@ impl<'s> Resolver<'s> {
     }
 
     /// The import bindings of one file whose local name is `name`.
-    ///
-    /// Owned rather than borrowed: the file's bindings live in this resolver's cache, and holding
-    /// a borrow of that cache across the `self.targets_of` call below would make the resolver
-    /// immutable for the whole lookup.
     fn bindings_for(
         &mut self,
         name: &str,
         path: &RepoPath,
     ) -> Result<Vec<ImportBinding>, StoreError> {
+        Ok(self
+            .bindings_in(path)?
+            .into_iter()
+            .filter(|binding| binding.local == name)
+            .collect())
+    }
+
+    /// Every import binding one file declares, read once and cached.
+    ///
+    /// Owned rather than borrowed: the bindings live in this resolver's cache, and holding a borrow
+    /// of that cache across the `self.targets_of` calls that consume them would make the resolver
+    /// immutable for the whole lookup. Split from [`Resolver::bindings_for`] so the two questions
+    /// the ladder asks of a file — *which name does this import bind* and *which import binds this
+    /// module* — read the cache instead of duplicating it.
+    fn bindings_in(&mut self, path: &RepoPath) -> Result<Vec<ImportBinding>, StoreError> {
         if !self.imports.contains_key(path) {
             let limit = self.options.outgoing_per_source;
             let mut bindings = Vec::new();
@@ -684,16 +876,24 @@ impl<'s> Resolver<'s> {
             }
             self.imports.insert(path.clone(), bindings);
         }
-        let all = self
-            .imports
-            .get(path)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        Ok(all
-            .iter()
-            .filter(|binding| binding.local == name)
-            .cloned()
-            .collect())
+        Ok(self.imports.get(path).cloned().unwrap_or_default())
+    }
+
+    /// The local names the imports of `path` bind out of `module`.
+    ///
+    /// The second way of finding a receiver, and the one a re-decision has to use: a relation placed
+    /// by an import records the module it was placed through and not the name it was reached by, so
+    /// the module is what the binding is looked up from. Every matching name is returned rather than
+    /// the first, because a file may import two things from one module and the answer is the one the
+    /// method belongs to — which is [`Resolver::via_imported_receiver`]'s to give, not this one's.
+    fn local_names_of(&mut self, module: &str, path: &RepoPath) -> Result<Vec<String>, StoreError> {
+        let mut names: Vec<String> = Vec::new();
+        for binding in self.bindings_in(path)? {
+            if binding.module == module && !names.contains(&binding.local) {
+                names.push(binding.local);
+            }
+        }
+        Ok(names)
     }
 
     /// The entities an import binding names.
@@ -864,16 +1064,29 @@ impl<'s> Resolver<'s> {
     }
 
     /// R2: the receiver names an owner, and the target is declared inside that owner.
+    ///
+    /// Returns [`Receiver::Declined`] rather than an answer when no owner can be named from the
+    /// caller's own file. A type that reached this file through an import has no owner here to
+    /// find, and reporting "there is no owner" about that is a claim the index does not support.
+    /// The ladder hands it to [`Resolver::via_imported_receiver`] instead, which is the rung that
+    /// knows where the name went.
+    ///
+    /// Returns [`Receiver::Answered`] carrying an `Unresolved` when it *did* name an owner and
+    /// found nothing inside it. That is a refusal rather than a decline, and it is the
+    /// load-bearing difference: falling through there would bind `service.retry()` to whatever
+    /// free function named `retry` sorts first in the repository, which is audit B3 exactly.
     fn via_receiver(
         &mut self,
         relation: &Relation,
         receiver: &str,
-    ) -> Result<Decision, StoreError> {
+    ) -> Result<Receiver, StoreError> {
         let name = relation.target_name.as_str();
         let in_file = self.entities_in_file(relation.source.path())?;
 
         // `self`, `this` and `Self` name the enclosing declaration, and the source's qualified
-        // name already carries it exactly. No guess is involved.
+        // name already carries it exactly. No guess is involved, and no entity lookup either, so
+        // the namespace rule below does not apply to it: the owner here is a prefix of a
+        // qualified name, not a row somebody chose.
         let owners: Vec<(String, bool)> = if matches!(receiver, "self" | "this" | "Self") {
             match enclosing_owner(relation) {
                 Some(owner) => vec![(owner, false)],
@@ -885,25 +1098,34 @@ impl<'s> Resolver<'s> {
                 .filter(|entity| entity.name == receiver)
                 .map(|entity| entity.name.clone())
                 .collect();
-            if !exact.is_empty() {
-                exact.into_iter().map(|owner| (owner, false)).collect()
-            } else {
-                // The documented case-fold, and the only one in this file. A local variable
-                // called `service` and the type `Service` are the same thing in every language
-                // here, but the match is a guess, so it is recorded as one: the decision becomes
-                // `Inferred` and its basis says that letter case was ignored.
-                in_file
-                    .iter()
-                    .filter(|entity| entity.name.eq_ignore_ascii_case(receiver))
-                    .map(|entity| (entity.name.clone(), true))
-                    .collect()
-            }
+            let named: Vec<(String, bool)> = match exact.is_empty() {
+                true => {
+                    // The documented case-fold, and the only one in this file. A local variable
+                    // called `service` and the type `Service` are the same thing in every language
+                    // here, but the match is a guess, so it is recorded as one: the decision
+                    // becomes `Inferred` and its basis says that letter case was ignored.
+                    in_file
+                        .iter()
+                        .filter(|entity| entity.name.eq_ignore_ascii_case(receiver))
+                        .map(|entity| (entity.name.clone(), true))
+                        .collect()
+                }
+                false => exact.into_iter().map(|owner| (owner, false)).collect(),
+            };
+            // A name this file carries only through a namespace row is not an owner. `impl
+            // Gateway { .. }` needs a row of its own for the block's methods to hang from, and that
+            // row is a `Module` named `Gateway`; a file holding one beside `use a::Gateway;`
+            // holds a `Gateway` that declares nothing. Same rule as `prefer_symbols`, applied to
+            // the owner rather than to a candidate: a namespace is outranked by a symbol, and a
+            // name only a namespace carries here came in through an import.
+            named
+                .into_iter()
+                .filter(|(owner, _)| names_a_symbol(&in_file, owner))
+                .collect()
         };
 
         if owners.is_empty() {
-            return Ok(Decision::Unresolved {
-                reason: UnresolvedReason::NoCandidate,
-            });
+            return Ok(Receiver::Declined);
         }
 
         let mut found: Vec<Found> = Vec::new();
@@ -921,9 +1143,9 @@ impl<'s> Resolver<'s> {
                 }
             }
         }
-        Ok(match found.is_empty() {
-            // Terminal on purpose. Falling through here would bind `service.retry()` to an
-            // unrelated free function named `retry`, which is audit B3 exactly.
+        Ok(Receiver::Answered(match found.is_empty() {
+            // Terminal on purpose, and the whole of the rung: falling through from here would bind
+            // `service.retry()` to an unrelated free function named `retry`.
             true => Decision::Unresolved {
                 reason: UnresolvedReason::NoCandidate,
             },
@@ -934,6 +1156,92 @@ impl<'s> Resolver<'s> {
                      ignoring letter case, which is an inference and not a proof"
                 ),
             ),
+        }))
+    }
+
+    /// R1 asked about a receiver: the receiver's name reached this file through an import, and the
+    /// import says which file it came from.
+    ///
+    /// **This is the hand-off, and the only fall-through in the ladder.** It reports
+    /// [`Evidence::ImportBinding`] rather than [`Evidence::ReceiverType`] because the honest
+    /// description of how the target was found is the author's own `use`: the receiver's name was
+    /// not read off a type declared next to the call. `peek explain` therefore reports
+    /// `import_binding` for `Gateway.send()` on an imported `Gateway` and `receiver_type` for one
+    /// declared in the caller's file, and a caller can tell which rung answered without reading
+    /// this file.
+    ///
+    /// The method is searched for **inside the file that declares the type**, so the target is the
+    /// method on the right type, in the package the import named. The receiver's name is only a
+    /// handle onto that type: `Gateway` in the caller's file is a local spelling, and a method of
+    /// some other `send` anywhere else is not what the call means.
+    ///
+    /// `owners` is every local name the receiver may have been written under — one, on the first
+    /// pass, and however many the module matched on a re-decision. More than one is an `Ambiguous`
+    /// rather than a pick, which is the same rule every other rung follows.
+    ///
+    /// The binding lookup is exact, with no case folding, so `Service` imported and `service`
+    /// written is not placed here. That is the deliberate limit: a fold is a guess, and R2's
+    /// case-folded receiver stays a guess whether it resolves locally or not.
+    ///
+    /// An *aliased* binding names a module rather than an item, which is how
+    /// [`Resolver::targets_of`] reads one, so its owner is a file entity and nothing inside it can
+    /// carry a `Type.` prefix. `use alpha::gateway::Gateway as G; G.send();` therefore stays
+    /// unplaced here, exactly as it was before this rung existed.
+    fn via_imported_receiver(
+        &mut self,
+        relation: &Relation,
+        owners: &[String],
+    ) -> Result<Option<Decision>, StoreError> {
+        let name = relation.target_name.as_str();
+        let importer = relation.source.path().clone();
+        let mut found: Vec<Found> = Vec::new();
+        for owner_name in owners {
+            for binding in self.bindings_for(owner_name, &importer)? {
+                if binding.local == GLOB {
+                    continue;
+                }
+                let evidence = Evidence::ImportBinding {
+                    module: binding.module.clone(),
+                    alias: binding.alias.clone(),
+                };
+                let mut owners_of_binding: Vec<Found> = Vec::new();
+                for id in self.targets_of(&binding, &importer)? {
+                    let already = owners_of_binding.iter().any(|seen| seen.id == id);
+                    if !already {
+                        owners_of_binding.push(Found {
+                            id,
+                            by: evidence.clone(),
+                            guessed: false,
+                        });
+                    }
+                }
+                // Ranked before the search rather than after it, and that ordering is the point: the
+                // collision `prefer_symbols` documents is between a type and the `impl` block that
+                // holds its methods, so leaving both owners in would turn one type's methods into an
+                // ambiguity between two spellings of that type.
+                for owner in prefer_symbols(owners_of_binding) {
+                    let declared = owner.id.name();
+                    let prefix = format!("{declared}.");
+                    let file = owner.id.path().clone();
+                    for entity in self.entities_in_file(&file)? {
+                        let inside = entity.name == name;
+                        if inside && entity.id.qualified_name().starts_with(&prefix) {
+                            found.push(Found {
+                                id: entity.id.clone(),
+                                by: evidence.clone(),
+                                guessed: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(match found.is_empty() {
+            true => None,
+            false => Some(self.decide_candidates(
+                found,
+                "the receiver's type was reached through an import binding in this file",
+            )),
         })
     }
 
@@ -1177,16 +1485,32 @@ fn is_namespace(kind: EntityKind) -> bool {
 /// `no_candidate`. When every candidate is a namespace, the namespaces stand and the import
 /// resolves; when a symbol is also a candidate, the symbol is what the name means.
 fn prefer_symbols(found: Vec<Found>) -> Vec<Found> {
-    let names_a_symbol = found
+    let any_symbol = found
         .iter()
         .any(|candidate| !is_namespace(candidate.id.kind()));
-    if !names_a_symbol {
+    if !any_symbol {
         return found;
     }
     found
         .into_iter()
         .filter(|candidate| !is_namespace(candidate.id.kind()))
         .collect()
+}
+
+/// Whether any entity in `file` that is not a namespace carries `name`.
+///
+/// The owner half of the rule [`prefer_symbols`] states for candidates. A namespace can be named
+/// but declares nothing a bare name denotes, and the sharpest row of that kind in a Rust index is
+/// the one an `impl` block needs so its methods have a scope to hang from: `impl Gateway { .. }`
+/// is a `Module` named `Gateway`, sitting beside the `struct Gateway` it belongs to.
+///
+/// So a caller file holding `use alpha::gateway::Gateway;` *and* an `impl Gateway { .. }` has two
+/// `Gateway` rows and declares the type in neither. Reading that as an owner would make the
+/// receiver rung refuse a call it never looked at, which is the false negative D-0036 removed on
+/// the other side of the same case.
+fn names_a_symbol(file: &[crate::model::Entity], name: &str) -> bool {
+    file.iter()
+        .any(|entity| entity.name == name && !is_namespace(entity.kind()))
 }
 
 /// The declaration enclosing `relation.source`, if it has one.
