@@ -415,49 +415,17 @@ impl Graph {
             .collect()
     }
 
-    /// Whether the entity at `key` exists in this index at all.
-    ///
-    /// Asked before "is this edge wrong", because the answer separates two
-    /// defects that look identical in a count. An edge pointing at something that
-    /// is not in the index cannot be a misplacement — there is nothing there to
-    /// have placed — while an edge pointing at a *real* entity that the label says
-    /// is the wrong one is a placement the engine got wrong with the right
-    /// material in hand.
-    pub fn holds(&self, key: &Key) -> bool {
-        self.by_key.contains_key(&key.render())
-    }
-
     /// Every entity carrying one declared name anywhere in the index.
     ///
     /// The population R5 asks about, read the same way R5 asks about it: by the
-    /// declared name, across every file. Used to tell "exactly one entity carries
-    /// this name" — the claim R5 stores — from the truth about the name.
+    /// declared name, across every file. Written as `rsplit('.')` on the qualified
+    /// name because that is how a declaration's own name is written there —
+    /// `Entry.count` declares `count` — and because reading it any other way would
+    /// answer a different question than the one the rung asks.
     pub fn named(&self, name: &str) -> Vec<&EntityRow> {
         self.rows
             .iter()
             .filter(|row| row.qualified_name.rsplit('.').next() == Some(name))
-            .collect()
-    }
-
-    /// The `contains` edges pointing **into** this identity, as owner qualified
-    /// names.
-    ///
-    /// Read through the public store rather than recomputed from the source: the
-    /// question "which declarations contain this one" is a question about the
-    /// graph, and a gate that answered it from the source text would be measuring
-    /// its own reading of the fixture rather than the index.
-    pub fn contained_by(&self, key: &Key, relations: &[RelationRow]) -> Vec<String> {
-        let rendered = key.render();
-        relations
-            .iter()
-            .filter(|relation| {
-                matches!(relation.kind, "contains" | "defines")
-                    && relation
-                        .target
-                        .as_ref()
-                        .is_some_and(|target| target.key().render() == rendered)
-            })
-            .map(|relation| relation.source.qualified_name.clone())
             .collect()
     }
 }
@@ -1083,6 +1051,10 @@ pub struct Placement {
     pub covered: u64,
     /// The labelled relations of a scored class, counted with multiplicity.
     pub labeled: u64,
+    /// Whether each labelled relation's correct entity was reachable by any rung.
+    /// The measurement that decides whether a wrong edge is an extractor or a
+    /// resolver defect, taken over the whole population.
+    pub reach: Vec<Reach>,
 }
 
 impl Placement {
@@ -1099,14 +1071,129 @@ impl Placement {
     }
 }
 
+/// **For each decided relation, is the correct entity reachable by any rung at
+/// all?** This is the question that separates the two explanations of a wrong
+/// edge, and it is asked from the index rather than from the source.
+///
+/// * **Extractor.** The relation names something that is not a name in this
+///   language — a `let` binding, a field read whose owner the extractor dropped.
+///   There is no entity the edge could point at, so **no rung could have placed
+///   it correctly**, and the correct outcome is `Unresolved`. The rung that
+///   answered did not lie: it was asked a question with one candidate.
+/// * **Resolver.** The correct entity is in the index and is reachable by a rung
+///   the relation's own evidence would have let fire. The material was in hand and
+///   the ladder reached for the wrong rung, or the wrong rung answered when a
+///   stronger one had something to say.
+///
+/// The test is deliberately mechanical: `graph.named(name)` is the population R5
+/// asks about, and `contained_by` is the `contains` chain that tells whether the
+/// source's own scope had already declared the name. A judgement made by reading
+/// the resolver's source would be an inference about intent; this is a count
+/// against the graph the engine actually built.
+#[derive(Debug, Clone)]
+pub struct Reach {
+    /// The label key the reading is about.
+    pub key: String,
+    /// Every entity in the index whose declared name is the one named.
+    pub carriers: Vec<String>,
+    /// Whether any of those carriers is the entity the label names.
+    pub correct_in_carriers: bool,
+    /// Whether the symbol the relation is written in already declares that name
+    /// itself, which would make the import binding and the same-file rung wrong
+    /// regardless of what else carries it.
+    pub shadowed_in_source: bool,
+}
+
+impl Reach {
+    /// Which of the two explanations this reading supports.
+    pub fn verdict(&self) -> &'static str {
+        match (self.correct_in_carriers, self.shadowed_in_source) {
+            // The source's own scope declares the name, so the rung that answered
+            // had the right answer in front of it inside the file it was reading.
+            (false, true) => "resolver: the source's own scope declares the name",
+            // The right entity is a candidate by name and the ladder still placed
+            // it elsewhere.
+            (true, _) => "resolver: the correct entity is a candidate by name",
+            // Nothing in the index carries the name at all except what the rung
+            // found, and that is not the right entity: there was no answer to give.
+            (false, false) => "extractor: no entity in the index carries the name",
+        }
+    }
+}
+
+/// Measure, for every labelled relation, whether its correct entity was reachable.
+///
+/// Run over the whole labelled population rather than only over the wrong edges,
+/// because a reachability measure that is computed after the fact is a
+/// post-hoc explanation and not a measurement: a verdict about the wrong edges
+/// means something only if the same procedure says `reachable` for the ones that
+/// came out right.
+pub fn measure_reach(corpus: &Corpus, graph: &Graph) -> Vec<Reach> {
+    corpus
+        .binds
+        .iter()
+        .map(|bind| {
+            let carriers: Vec<String> = graph
+                .named(&bind.name)
+                .into_iter()
+                .map(EntityRow::render)
+                .collect();
+            let correct_in_carriers = bind.target.as_ref().is_some_and(|target| {
+                carriers.iter().any(|carrier| {
+                    carrier == &format!("{} | {} | {} | #0", target.path, target.kind, target.qualified_name)
+                })
+            });
+            Reach {
+                key: bind.key(),
+                carriers,
+                correct_in_carriers,
+                shadowed_in_source: declares_in_scope(graph, bind),
+            }
+        })
+        .collect()
+}
+
+/// Whether the symbol a relation is written in declares that name itself.
+///
+/// Through the `contains` chain, because containment is the only thing in the
+/// graph that distinguishes `describe.entry` from `model.rs entry`: both are a
+/// `parameter`/`function` pair with the same bare name, and only one of them is
+/// inside the symbol whose body the relation is written in.
+fn declares_in_scope(graph: &Graph, bind: &Bind) -> bool {
+    let source = Key::new(&bind.path, &bind.kind, &bind.subject);
+    graph
+        .relations
+        .iter()
+        .filter(|relation| {
+            matches!(relation.kind, "contains" | "defines")
+                && relation.source.key() == source
+                && relation
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| declared_name(&target.qualified_name) == bind.name)
+        })
+        .any(|relation| {
+            relation
+                .target
+                .as_ref()
+                .is_some_and(|target| target.kind != "file" && target.kind != "module")
+        })
+}
+
+/// The bare name a qualified name ends in, which is what an occurrence of it in
+/// a body means.
+fn declared_name(qualified_name: &str) -> &str {
+    qualified_name.rsplit('.').next().unwrap_or(qualified_name)
+}
+
 /// Score placement over every labelled relation that carries a `binds` label.
 ///
-/// The population is the intersection of the placement labels and the labelled
-/// relations, so a `binds` line for something no other label names cannot
-/// silently become its own denominator. It is matched on class, path, subject
-/// **and name**: a reference to `count` and a call to `count` from the same
-/// function are two relations with two answers, and scoring them as one would
-/// report whichever was checked last.
+/// Matched on class, path, **source kind**, subject and name. The kind is in the
+/// key because `counted` is both a macro and a function in the Rust fixture and a
+/// relation written in one is not a relation written in the other; the name is in
+/// it because a reference to `count` and a call to `count` from the same function
+/// are two relations with two answers, and scoring them as one would report
+/// whichever was checked last.
 pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
     let mut correct = 0u64;
     let mut decided = 0u64;
@@ -1121,6 +1208,7 @@ pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
             .filter(|relation| {
                 relation.kind == bind.class
                     && relation.source.path == bind.path
+                    && relation.source.kind == bind.kind
                     && relation.source.qualified_name == bind.subject
                     && relation.target_name == bind.name
             })
@@ -1182,6 +1270,7 @@ pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
         absent,
         covered,
         labeled,
+        reach: measure_reach(corpus, graph),
     }
 }
 
@@ -1232,6 +1321,12 @@ fn site_of(class: &str, path: &str, subject: &str, name: &str) -> String {
 
 /// Every relation the fixture's existence labels claim, as `(class, path, subject,
 /// name)`.
+///
+/// `reference` lines carry no kind — a use of a name is not a call and the model
+/// does not need the caller's kind to say which relation was meant — so coverage
+/// is matched on the four fields all three populations have. `score_placement`
+/// still keys on five, and a `binds` line with the wrong kind is caught there as
+/// an absent relation rather than being silently scored as coverage.
 fn labelled_sites(corpus: &Corpus) -> Vec<(&str, &str, &str, &str)> {
     let mut sites: Vec<(&str, &str, &str, &str)> = Vec::new();
     for reference in &corpus.references {
@@ -1250,7 +1345,12 @@ fn labelled_sites(corpus: &Corpus) -> Vec<(&str, &str, &str, &str)> {
         // qualified name is the file's own name. A fact about the model rather
         // than a guess about the fixture.
         if let Some(file) = Path::new(&import.path).file_name() {
-            sites.push(("imports", &import.path, file.to_str().unwrap_or(""), &import.local));
+            sites.push((
+                "imports",
+                &import.path,
+                file.to_str().unwrap_or(""),
+                &import.local,
+            ));
         }
     }
     sites

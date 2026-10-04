@@ -485,10 +485,10 @@ pub fn to_markdown(rows: &[Row], generated_note: &str) -> String {
     out.push_str(
         "\n### Decided and wrong\n\n\
          `resolution_correctness` is a fraction over the relations the engine **decided**, so\n\
-         it can be raised by declining to decide more. These four counts are published beside\n\
-         it for that reason: a language cannot read well by answering less. `wrong` is a\n\
-         confidently wrong edge — a claim — and `undecided` is a gap, an absence a reader can\n\
-         see. They are never added together.\n\n",
+         it can be raised by declining to decide more. These counts are published beside it for\n\
+         that reason: a language cannot read well by answering less. `Decided and wrong` is a\n\
+         confidently wrong edge, which is a claim, and `Undecided` is a gap, which is an\n\
+         absence a reader can see. They are never added together.\n\n",
     );
     out.push_str(
         "| Language | Decided | Right | Decided and wrong | Undecided | Labelled but no relation |\n\
@@ -511,7 +511,9 @@ pub fn to_markdown(rows: &[Row], generated_note: &str) -> String {
 
     out.push_str(
         "\n### Every decided-and-wrong edge, by name\n\n\
-         A rate is not an audit. Four edges is a list somebody can read against the source.\n\n",
+         A rate is not an audit: a short list is one somebody can read against the source, and a\n\
+         fraction is not. Each line names the relation, the rung that placed it, the entity it\n\
+         landed on, and what the fixture says should have happened.\n\n",
     );
     let mut any_wrong = false;
     for row in rows {

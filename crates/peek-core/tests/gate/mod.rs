@@ -200,6 +200,34 @@ fn print_measurement(measurement: &Measurement, incremental: &incremental::Incre
     for edge in measurement.placement.wrong.iter().take(10) {
         println!("  decided and wrong: {edge}");
     }
+    // The reachability reading for each wrong edge, taken from the index rather
+    // than from the resolver's source. Printed with the edge because the verdict
+    // is what tells an extractor defect from a resolver one, and a verdict with
+    // no edge beside it is not checkable.
+    for wrong in &measurement.placement.wrong {
+        let Some(reach) = measurement.placement.reach.iter().find(|reach| {
+            wrong.contains(
+                &reach
+                    .key
+                    .rsplit('|')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        }) else {
+            continue;
+        };
+        println!(
+            "  reachability: {} — {} carriers, {}",
+            reach.verdict(),
+            reach.carriers.len(),
+            if reach.carriers.is_empty() {
+                "none".to_owned()
+            } else {
+                reach.carriers.join(", ")
+            }
+        );
+    }
     for gap in measurement.placement.absent.iter().take(6) {
         println!("  labelled, no relation: {gap}");
     }

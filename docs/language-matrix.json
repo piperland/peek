@@ -9,6 +9,7 @@
     "definitions",
     "calls",
     "references",
+    "resolution_correctness",
     "imports",
     "imports_module_retained",
     "members",
@@ -40,6 +41,10 @@
     "references": {
       "measures": "of the labelled uses of a name, how many produced a reference relation",
       "denominator": "labelled uses of a name"
+    },
+    "resolution_correctness": {
+      "measures": "of the decided relations the fixture says where they must point, how many point at the entity it names",
+      "denominator": "labelled relations the engine placed in a `resolved` or `inferred` state; a relation left undecided is a gap and is counted beside this figure, never inside it"
     },
     "imports": {
       "measures": "of the labelled import bindings, how many produced an import relation carrying the same module and alias",
@@ -146,9 +151,14 @@
           "percent": "97.50"
         },
         "references": {
-          "numerator": 18,
-          "denominator": 19,
-          "percent": "94.74"
+          "numerator": 25,
+          "denominator": 26,
+          "percent": "96.15"
+        },
+        "resolution_correctness": {
+          "numerator": 36,
+          "denominator": 48,
+          "percent": "75.00"
         },
         "imports": {
           "numerator": 10,
@@ -251,8 +261,12 @@
           "percent": "100.00"
         },
         "references": {
-          "basis_points": 9473,
-          "percent": "94.73"
+          "basis_points": 9614,
+          "percent": "96.14"
+        },
+        "resolution_correctness": {
+          "basis_points": 7500,
+          "percent": "75.00"
         },
         "symbol_precision": {
           "basis_points": 9666,
@@ -322,6 +336,13 @@
         "relations_written": 312,
         "relations_undecided": 0,
         "tests_found": 0
+      },
+      "placement": {
+        "decided": 48,
+        "correct": 36,
+        "wrong": 6,
+        "undecided": 48,
+        "unlabelled_relations": 3
       }
     },
     {

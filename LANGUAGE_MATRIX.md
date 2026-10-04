@@ -24,6 +24,7 @@ rendering `1.00`.
 | `definitions` | of the labelled declarations, how many an incoming structural edge points at | distinct labelled declaration identities |
 | `calls` | of the labelled call sites, how many produced a call relation | labelled call sites, counted with multiplicity |
 | `references` | of the labelled uses of a name, how many produced a reference relation | labelled uses of a name |
+| `resolution_correctness` | of the decided relations the fixture says where they must point, how many point at the entity it names | labelled relations the engine placed in a `resolved` or `inferred` state; a relation left undecided is a gap and is counted beside this figure, never inside it |
 | `imports` | of the labelled import bindings, how many produced an import relation carrying the same module and alias | labelled import bindings |
 | `imports_module_retained` | of the imports whose module path must survive resolution, how many still carry it | labelled imports whose module the graph has to be able to name |
 | `members` | of the labelled type members, how many a structural edge reaches from the owning type | labelled type members |
@@ -42,7 +43,7 @@ rendering `1.00`.
 | typescript | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | javascript | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | python | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| rust | unverified | yes | 96.67 (87/90) | 96.67 (87/90) | 60.23 (53/88) | 97.50 (39/40) | 94.74 (18/19) | 66.67 (10/15) | 91.67 (22/24) |
+| rust | unverified | yes | 96.67 (87/90) | 96.67 (87/90) | 60.23 (53/88) | 97.50 (39/40) | 96.15 (25/26) | 66.67 (10/15) | 91.67 (22/24) |
 | go | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | java | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | csharp | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
@@ -68,34 +69,60 @@ rendering `1.00`.
 
 ## Resolution and correctness
 
-| Language | Inheritance (subject) | Inheritance (base) | No self-reference | No false inheritance | Incremental | Query | Context |
-|---|---|---|---|---|---|---|---|
-| typescript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| javascript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| python | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| rust | 100.00 (5/5) | 100.00 (5/5) | 100.00 (14/14) | 100.00 (3/3) | 100.00 (2288/2288) | 100.00 (30/30) | 100.00 (7/7) |
-| go | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| java | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| csharp | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| c | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| cpp | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| kotlin | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| swift | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| ruby | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| php | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| scala | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| elixir | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| erlang | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| dart | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| lua | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| r | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| julia | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| haskell | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| ocaml | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| clojure | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| bash | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| objectivec | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| zig | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| Language | Inheritance (subject) | Inheritance (base) | No self-reference | No false inheritance | Resolution correctness | Incremental | Query | Context |
+|---|---|---|---|---|---|---|---|---|
+| typescript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| javascript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| python | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| rust | 100.00 (5/5) | 100.00 (5/5) | 100.00 (14/14) | 100.00 (3/3) | 75.00 (36/48) | 100.00 (2288/2288) | 100.00 (30/30) | 100.00 (7/7) |
+| go | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| java | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| csharp | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| c | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| cpp | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| kotlin | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| swift | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| ruby | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| php | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| scala | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| elixir | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| erlang | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| dart | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| lua | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| r | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| julia | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| haskell | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| ocaml | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| clojure | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| bash | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| objectivec | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+| zig | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
+
+### Decided and wrong
+
+`resolution_correctness` is a fraction over the relations the engine **decided**, so
+it can be raised by declining to decide more. These four counts are published beside
+it for that reason: a language cannot read well by answering less. `wrong` is a
+confidently wrong edge — a claim — and `undecided` is a gap, an absence a reader can
+see. They are never added together.
+
+| Language | Decided | Right | Decided and wrong | Undecided | Labelled but no relation |
+|---|---|---|---|---|---|
+| rust | 48 | 36 | 6 | 48 | 3 |
+
+### Every decided-and-wrong edge, by name
+
+A rate is not an audit. Four edges is a list somebody can read against the source.
+
+**rust**
+
+- references from src/lib.rs | summarise names `out` and the unique_name rung placed it on src/report.rs | parameter | render.out | #0; the label says no entity is the referent
+- references from src/report.rs | format_line_inner names `entry` and the import_binding rung placed it on src/model.rs | function | entry | #0; the label says `src/report.rs | parameter | format_line_inner.entry`
+- references from src/report.rs | render names `count` and the same_file rung placed it on src/report.rs | parameter | format_line.count | #0; the label says `src/model.rs | field | Entry.count`
+- references from src/service.rs | Runner.run names `last` and the same_file rung placed it on src/service.rs | parameter | retry.last | #0; the label says no entity is the referent
+- references from src/service.rs | describe names `count` and the same_file rung placed it on src/service.rs | parameter | format_line.count | #0; the label says `src/model.rs | field | Entry.count`
+- references from src/service.rs | describe names `entry` and the import_binding rung placed it on src/model.rs | function | entry | #0; the label says `src/service.rs | parameter | describe.entry`
+
 
 ## Relation states per class
 
