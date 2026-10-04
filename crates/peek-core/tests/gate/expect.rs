@@ -392,7 +392,7 @@ fn parse_basis_points(text: &str) -> Option<u64> {
                 return None;
             }
             let whole: u64 = whole.parse().ok()?;
-            let fraction = format!("{fraction:0<2}").parse().ok()?;
+            let fraction: u64 = format!("{fraction:0<2}").parse().ok()?;
             if whole > 100 || (whole == 100 && fraction > 0) {
                 return None;
             }
