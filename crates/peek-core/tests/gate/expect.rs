@@ -365,40 +365,38 @@ fn alias_of(field: &str) -> Option<String> {
 
 /// The number of hundredths of a percent in `text`.
 ///
-/// Two spellings are accepted and they mean the same thing:
+/// **One spelling, and it is a percentage**: `100`, `73.12`, `0.5`. An earlier
+/// version also accepted a bare integer of hundredths, which made `100` mean two
+/// different things — a hundred percent in one reading and one percent in the other
+/// — and a floor file that reads both ways is worse than one that reads one way.
+/// The comparison in `score::Fraction::reaches` still works in exact hundredths, so
+/// nothing is lost by requiring the readable form at the boundary.
 ///
-/// * a **percentage** — `100`, `73.12`, `0.5` — which is what a reader comparing
-///   the floor with the published table would write;
-/// * a plain **integer of hundredths** — `7312` — which is the exact form the
-///   comparison in [`crate::gate::score::Fraction::reaches`] uses, so a floor can
-///   be recorded at the precision the comparison needs.
-///
-/// There is no third reading, and nothing is guessed: a value above `10000` is
-/// refused rather than clamped, `PLACEHOLDER` is refused so a floor that was never
-/// measured cannot become an assertion that asserts nothing, and anything that is
-/// neither spelling is refused so a typo cannot become a floor of zero.
+/// Nothing is guessed. A value above a hundred percent is refused rather than
+/// clamped, `PLACEHOLDER` is refused so a floor that was never measured cannot
+/// become an assertion that asserts nothing, and anything else is refused so a typo
+/// cannot become a floor of zero.
 fn parse_basis_points(text: &str) -> Option<u64> {
     if text == "PLACEHOLDER" {
         return None;
     }
-    match text.split_once('.') {
-        None => {
-            let value: u64 = text.parse().ok()?;
-            // An integer is hundredths, so the ceiling is 10000 rather than 100.
-            (value <= 10_000).then_some(value)
-        }
-        Some((whole, fraction)) => {
-            if fraction.len() > 2 || !whole.chars().all(|c| c.is_ascii_digit()) {
-                return None;
-            }
-            let whole: u64 = whole.parse().ok()?;
-            let fraction: u64 = format!("{fraction:0<2}").parse().ok()?;
-            if whole > 100 || (whole == 100 && fraction > 0) {
-                return None;
-            }
-            Some(whole * 100 + fraction)
-        }
+    let (whole, fraction) = match text.split_once('.') {
+        None => (text, ""),
+        Some((whole, fraction)) => (whole, fraction),
+    };
+    if fraction.len() > 2 || !whole.chars().all(|c| c.is_ascii_digit()) {
+        return None;
     }
+    let whole: u64 = whole.parse().ok()?;
+    let fraction: u64 = if fraction.is_empty() {
+        0
+    } else {
+        format!("{fraction:0<2}").parse().ok()?
+    };
+    if whole > 100 || (whole == 100 && fraction > 0) {
+        return None;
+    }
+    Some(whole * 100 + fraction)
 }
 
 #[cfg(test)]
@@ -462,14 +460,13 @@ mod tests {
     }
 
     #[test]
-    fn the_exact_integer_spelling_reads_as_hundredths() {
-        // `7312` and `73.12` are the same floor, and the integer form is what the
-        // comparison uses, so a floor can be recorded at exactly the precision the
-        // comparison needs rather than through a rounded rendering.
-        assert_eq!(parse_basis_points("7312"), Some(7312));
-        assert_eq!(parse_basis_points("7312"), parse_basis_points("73.12"));
-        assert_eq!(parse_basis_points("0"), Some(0));
-        assert_eq!(parse_basis_points("1"), Some(1));
+    fn a_bare_integer_of_hundredths_is_refused_rather_than_guessed_at() {
+        // `7312` is 73.12% in the spelling this file uses and 7312% in the one it
+        // rejects. Accepting both made `100` mean either a hundred percent or one
+        // percent depending on which reading the reader had in mind, so exactly one
+        // spelling survives.
+        assert_eq!(parse_basis_points("7312"), None);
+        assert_eq!(parse_basis_points("1"), Some(100));
     }
 
     #[test]
@@ -482,10 +479,9 @@ mod tests {
         assert_eq!(parse_basis_points("100.5"), None);
         assert_eq!(parse_basis_points("1.234"), None);
         assert_eq!(parse_basis_points("abc"), None);
-        // Above a hundred percent, in either spelling. A floor of `101` would be
-        // a demand nothing can meet, and a floor of `10001` would be a typo.
+        // Above a hundred percent. A floor of `101` would be a demand nothing can
+        // meet, and the gate would fail for a reason that reads like a regression.
         assert_eq!(parse_basis_points("101"), None);
-        assert_eq!(parse_basis_points("10001"), None);
     }
 
     #[test]

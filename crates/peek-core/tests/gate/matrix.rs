@@ -349,10 +349,7 @@ pub fn to_json(rows: &[Row]) -> String {
                                 .collect(),
                         ),
                     ));
-                    entries.push((
-                        "index_report",
-                        Json::str(measurement.index_report.summary()),
-                    ));
+                    entries.push(("index_report", index_report(&measurement.index_report)));
                 }
             }
             Json::obj(entries)
@@ -526,6 +523,38 @@ pub fn to_markdown(rows: &[Row], generated_note: &str) -> String {
 
     out.push_str("\n## Reproducing\n\n```\n./scripts/language-gate.sh\n```\n");
     out
+}
+
+/// The counters of a full build, as a value.
+///
+/// **Not** `IndexReport::summary()`. The summary ends with the wall-clock
+/// duration, and this document is compared byte-for-byte against a fresh render by
+/// `the_published_matrix_is_the_current_measurement`. A timing in a committed file
+/// would make that comparison fail on every run for a reason that has nothing to do
+/// with the engine, which is how a check like that gets deleted.
+///
+/// The duration is available to a human from `cargo test -- --nocapture`; it is
+/// simply not part of the published state.
+fn index_report(report: &peek_core::indexer::IndexReport) -> Json {
+    Json::obj(vec![
+        ("generation", Json::Num(report.generation)),
+        ("files_indexed", Json::Num(report.files_indexed)),
+        ("files_skipped", Json::Num(report.files_skipped)),
+        (
+            "files_unsupported",
+            Json::Num(report.files_unsupported),
+        ),
+        ("files_degraded", Json::Num(report.files_degraded)),
+        ("files_removed", Json::Num(report.files_removed)),
+        ("entities_written", Json::Num(report.entities_written)),
+        ("entities_removed", Json::Num(report.entities_removed)),
+        ("relations_written", Json::Num(report.relations_written)),
+        (
+            "relations_undecided",
+            Json::Num(report.relations_undecided),
+        ),
+        ("tests_found", Json::Num(report.tests_found)),
+    ])
 }
 
 /// The relation classes worth printing, in a fixed order.
