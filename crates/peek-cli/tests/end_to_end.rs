@@ -409,6 +409,15 @@ fn doctor_and_status_agree_about_every_count() {
 fn doctor_reports_a_healthy_install_as_healthy_and_exits_zero() {
     // The green path matters as much as the red one: a `doctor` that could only ever fail would be
     // as useless as one that could only ever pass.
+    //
+    // **And healthy is not the same as nothing to say.** This fixture declares `amount` as a
+    // parameter of both `wallet_charge` and `ledger_commit`, and each body reads its own. Since
+    // reference extraction became reachable, each body therefore records a `references` edge to
+    // the name `amount`, and a bare name with two same-file candidates is one the engine refuses
+    // to place — so the ambiguity check reports a notice. That is the check working: it is a
+    // notice rather than a warning because ambiguity is a fact about the code and not a defect
+    // (D-0004), and the assertion below names which check produced the worst severity rather
+    // than accepting any severity.
     let repository = Repository::small("e2e-doctor-healthy");
     run(&repository, &["index", repository.root_str()]);
     let outcome = run(&repository, &["doctor"]);
@@ -422,10 +431,32 @@ fn doctor_reports_a_healthy_install_as_healthy_and_exits_zero() {
     match &outcome.output.answer {
         Answer::Doctor(answer) => {
             assert!(answer.healthy, "{answer:?}");
-            assert_eq!(answer.worst.as_deref(), Some("pass"), "{answer:?}");
+            let worst = answer
+                .worst
+                .as_deref()
+                .expect("a doctor that ran checks reports the worst of them");
+            assert_eq!(worst, "notice", "{answer:?}");
+            let worst_check = answer
+                .findings
+                .iter()
+                .find(|finding| finding.severity == worst)
+                .map(|finding| finding.check.as_str())
+                .expect("the worst severity is a severity some finding carries");
+            assert_eq!(
+                worst_check, "ambiguity",
+                "the notice is the ambiguity check and nothing else: {answer:?}"
+            );
             assert!(
                 answer.findings.iter().any(|f| f.check == "integrity"),
                 "the integrity check must have run: {answer:?}"
+            );
+            assert!(
+                answer.findings
+                    .iter()
+                    .filter(|f| f.check == "ambiguity")
+                    .all(|f| f.detail.contains("not guesses")),
+                "an ambiguity notice must say that the candidates are not guesses, because a \
+                 reader who does not know that will read the notice as a defect: {answer:?}"
             );
             assert!(
                 answer.findings.iter().all(|f| !f.detail.is_empty()),

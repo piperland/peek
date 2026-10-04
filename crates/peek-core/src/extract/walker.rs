@@ -1981,7 +1981,9 @@ mod tests {
         // The before/after proof. The expected values are what the walker on `origin/main`
         // produced for this source, transcribed from the algorithm that produced them, so a
         // change to any existing extraction shows up here as a diff rather than as an index that
-        // quietly differs.
+        // quietly differs. The reference rows are not from `origin/main`: `is_excluded_reference`
+        // dropped every identifier inside a declaration, so the class produced nothing and this
+        // list could not have shown them.
         let file = rust_at(
             "crates/foo/src/app.rs",
             r#"
@@ -2064,6 +2066,20 @@ mod tests {
                 "contains payments -> struct payments.Service".to_owned(),
                 "contains payments -> module payments.Service".to_owned(),
                 "contains payments.Service -> method payments.Service.new".to_owned(),
+                // `fn new() -> Service { Service }` names `Service` twice, once in the signature
+                // and once in the body, and both are uses: the enclosing `impl`'s own name is the
+                // one `Service` that is not.
+                "references payments.Service.new -> Service".to_owned(),
+                "references payments.Service.new -> Service".to_owned(),
+                // `payments::Service::new()` names three nested paths and two bare names, and each
+                // is its own occurrence. The whole paths are here because `scoped_identifier` is a
+                // declared reference node type — a target name that no resolver rung can place, and
+                // a second row for a name its components already carry.
+                "references main -> payments::Service::new".to_owned(),
+                "references main -> payments::Service".to_owned(),
+                "references main -> payments".to_owned(),
+                "references main -> Service".to_owned(),
+                "references main -> new".to_owned(),
                 "calls main -> new".to_owned(),
             ],
             "every relation the walker produced before modules existed, in source order"

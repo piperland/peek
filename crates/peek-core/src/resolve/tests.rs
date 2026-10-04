@@ -1799,8 +1799,9 @@ fn a_definition_that_moves_to_another_file_its_callers_are_re_decided() {
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
     assert_eq!(
         first.inferred,
-        1,
-        "one uniquely named call to decide: {}",
+        2,
+        "two uniquely named relations to decide — the call and the reference to the same name, \
+         because `charge()` both invokes and names it: {}",
         first.summary()
     );
     assert_eq!(
@@ -1885,8 +1886,10 @@ fn a_scoped_pass_decides_the_paths_it_was_given_and_nothing_else() {
     .expect("scope to the second file");
     assert_eq!(
         report.examined,
-        1,
-        "the pass examined exactly the one relation in the file it was given: {}",
+        2,
+        "the pass examined exactly the two relations in the file it was given — the call to \
+         `not_yet` and the reference to the same name, because `not_yet()` both invokes and \
+         names it, and nothing outside the file: {}",
         report.summary()
     );
     assert_eq!(
