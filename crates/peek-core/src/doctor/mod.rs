@@ -573,6 +573,25 @@ fn check_orphan_edges(stats: &StoreStats) -> Finding {
     )
 }
 
+/// Whether the index holds relations the resolver never decided.
+///
+/// The severity is [`Severity::Notice`] and the wording is deliberately careful about *why*.
+///
+/// A pending relation is stored and countable rather than dropped, which is the point of D-0004: a
+/// query about it can be answered with "undecided" instead of with a wrong target. But it is still
+/// an edge that answers no question either way, so the count is worth a user's attention and the
+/// honest detail says what it means.
+///
+/// **There is deliberately no "yet".** An earlier version of this said the resolver "has not placed
+/// them yet", which reads as a promise that a later pass will. Measured on `BurntSushi/ripgrep` with
+/// 348 such relations in the index: a second refresh of the file that owned them left the count at
+/// 348, and only a full re-resolve — the pass `build_full` runs and nothing else does — cleared it.
+/// `peek index` on an already-built repository runs `refresh`, not `build_full`, so the action
+/// below names a rebuild; telling someone to re-run the index named a command that provably does
+/// not fix it.
+///
+/// A `Warn` would be the wrong grade: the index is usable, the edges are stored rather than lost,
+/// and escalating it would rank a cosmetic fact above the findings that cost a user something.
 fn check_pending_work(stats: &StoreStats) -> Finding {
     if stats.pending_relations > 0 {
         return Finding::problem(
@@ -583,12 +602,18 @@ fn check_pending_work(stats: &StoreStats) -> Finding {
                 stats.pending_relations
             ),
             format!(
-                "{} of {} relations — these are extracted references the resolver has not placed \
-                 yet. They are stored and countable rather than dropped, which is the point, but \
-                 a query about them cannot be answered",
+                "{} of {} relations are extracted references the resolver never decided. They are \
+                 stored and countable rather than dropped, which is the point, but a query about one \
+                 cannot be answered: it is neither placed nor refused. Re-indexing refreshes, and a \
+                 refresh decides only the files it re-reads, so these are not work in progress — \
+                 nothing will come back for them but a rebuild",
                 stats.pending_relations, stats.relation_count
             ),
-            Some("re-run the index so the resolution pass runs".to_owned()),
+            Some(
+                "rebuild the index (`peek index --full`): a full build re-extracts every relation \
+                 as undecided and its second pass decides all of them"
+                    .to_owned(),
+            ),
         );
     }
     Finding::pass(
