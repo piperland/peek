@@ -312,13 +312,6 @@ pub struct RepositoryLayout {
     /// empty set of its own.
     none: PackageRoots,
     per_language: Vec<LanguageRoots>,
-    /// Whether a path has been observed since the roots were last derived.
-    ///
-    /// **Deriving the roots is quadratic in the holders, so it cannot happen per observed path.**
-    /// Recording a path is O(1) and the derivation runs once, on the first ask after a change. A
-    /// caller that observes a whole repository and then asks per file therefore pays for the
-    /// derivation exactly once, which is the same shape as the single-pass read it replaced.
-    stale: bool,
 }
 
 /// One language's package roots, and the raw material they were derived from.
@@ -339,29 +332,9 @@ impl RepositoryLayout {
 
     /// The package roots for `spec`'s language, or the empty set when it has no module layout.
     ///
-    /// Takes `&mut self` because this is where the derivation happens, and doing it here rather
-    /// than in [`Self::observe`] is what keeps observing a path cheap.
-    pub fn roots(&mut self, spec: &LanguageSpec) -> &PackageRoots {
-        if self.per_language.is_empty() {
-            self.per_language = crate::extract::registry::all()
-                .iter()
-                .filter_map(|spec| {
-                    let layout = spec.module_layout()?;
-                    Some(LanguageRoots {
-                        language: spec.language,
-                        layout,
-                        holders: BTreeSet::new(),
-                        roots: PackageRoots::default(),
-                    })
-                })
-                .collect();
-        }
-        if self.stale {
-            for entry in &mut self.per_language {
-                entry.roots = PackageRoots::from_holders(&entry.holders, entry.layout);
-            }
-            self.stale = false;
-        }
+    /// Empty until [`Self::derive`] has run, and that is the honest answer for a caller that
+    /// observed paths and forgot to derive — it is the fallback naming, not a half-derived set.
+    pub fn roots(&self, spec: &LanguageSpec) -> &PackageRoots {
         self.per_language
             .iter()
             .find(|entry| entry.language == spec.language)
@@ -369,11 +342,25 @@ impl RepositoryLayout {
             .unwrap_or(&self.none)
     }
 
+    /// Derive the roots from everything observed so far.
+    ///
+    /// **An explicit step rather than a lazy one inside `roots`, and the reason is that deriving is
+    /// quadratic in the number of holders.** Recording a path is O(1); deriving cannot be, so a
+    /// lazy derivation would either run per read — once per extracted file — or need interior
+    /// mutability. A caller that observes a repository and then reads per file pays once, here.
+    ///
+    /// Calling it twice is harmless and gives the same answer, so a caller need not track whether
+    /// it has already run.
+    pub fn derive(&mut self) {
+        for entry in &mut self.per_language {
+            entry.roots = PackageRoots::from_holders(&entry.holders, entry.layout);
+        }
+    }
+
     /// Read one path into every layout that has one. Cheap enough to call per file: the set of
     /// layouts is the set of languages the registry declares a module layout for.
     pub fn observe(&mut self, path: &RepoPath) {
         if self.per_language.is_empty() {
-            *self = Self::new();
             self.per_language = crate::extract::registry::all()
                 .iter()
                 .filter_map(|spec| {
@@ -394,19 +381,19 @@ impl RepositoryLayout {
         for entry in &mut self.per_language {
             if entry.layout.package_roots.contains(&stem) {
                 entry.holders.insert(directory.to_owned());
-                self.stale = true;
             }
         }
     }
 
-    /// Read a repository's paths, in whatever order the caller already has them.
-    pub fn observe_all<'a, I>(&mut self, paths: I)
+    /// Read a repository's paths and derive the roots. The whole of it, for a caller that has the
+    /// paths and wants the answer.
+    pub fn read<'a, I>(paths: I)
     where
         I: IntoIterator<Item = &'a RepoPath>,
     {
-        for path in paths {
-            self.observe(path);
-        }
+        let mut layout = Self::new();
+        layout.observe_all(paths);
+        layout.derive();
     }
 }
 

@@ -305,6 +305,7 @@ pub fn build_full(
     // discovered inside it. See `extract::modules::PackageRoots`.
     let mut layout = crate::extract::modules::RepositoryLayout::new();
     layout.observe_all(discovery.files().iter().map(|file| &file.path));
+    layout.derive();
 
     for file in discovery.files() {
         let absolute = discovery.report().absolute(&file.path);
@@ -606,13 +607,13 @@ fn package_layout(
         .filter_map(|path| relative_path(root, path))
         .filter_map(|name| RepoPath::from_path(&name))
         .collect();
-    let wanted = registry_rust_layout().is_some_and(|layout| {
-        crate::extract::modules::needs_package_roots(&relative, layout)
-    });
+    let wanted =
+        registry_rust_layout().is_some_and(|layout| crate::extract::modules::needs_package_roots(&relative, layout));
     if wanted {
         layout.observe_all(store.indexed_paths(INDEXED_PATH_SCAN_LIMIT)?.iter());
     }
     layout.observe_all(&relative);
+    layout.derive();
     Ok(layout)
 }
 
