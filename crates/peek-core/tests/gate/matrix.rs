@@ -17,7 +17,7 @@ use std::path::Path;
 use peek_core::extract::LanguageSpec;
 use peek_core::model::Language;
 
-use super::measure::{DIMENSIONS, Measurement, Reach};
+use super::measure::{DIMENSIONS, Measurement};
 
 /// The schema tag, so a consumer can refuse a file it does not understand rather
 /// than read fields that have moved.
@@ -397,6 +397,21 @@ pub fn to_json(rows: &[Row]) -> String {
                                                     "correct_entity_is_a_candidate",
                                                     Json::Bool(reach.correct_in_carriers),
                                                 ),
+                                                // The carriers themselves, so the count
+                                                // above can be recounted from the
+                                                // published file rather than believed.
+                                                (
+                                                    "carriers",
+                                                    Json::Arr(
+                                                        reach
+                                                            .carriers
+                                                            .iter()
+                                                            .map(|carrier| {
+                                                                Json::str(carrier.clone())
+                                                            })
+                                                            .collect(),
+                                                    ),
+                                                ),
                                             ])
                                         })
                                         .collect(),
@@ -564,19 +579,24 @@ pub fn to_markdown(rows: &[Row], generated_note: &str) -> String {
             // resolver defect are different defects with different owners, and
             // which one this is comes from counting the entities carrying the name
             // — not from reading the resolver and guessing.
-            let reading = measurement
+            let Some(reach) = measurement
                 .placement
                 .reach
                 .iter()
                 .find(|reach| &reach.key == key)
-                .map_or("not measured", Reach::verdict);
-            let carriers = measurement
-                .placement
-                .reach
-                .iter()
-                .find(|reach| &reach.key == key)
-                .map_or(0, |reach| reach.carriers.len());
-            out.push_str(&format!("  - reachability of `{key}`: {reading} ({carriers} in the index)\n"));
+            else {
+                continue;
+            };
+            out.push_str(&format!(
+                "  - reachability of `{key}`: {} ({} in the index carry the name: {})\n",
+                reach.verdict(),
+                reach.carriers.len(),
+                if reach.carriers.is_empty() {
+                    "none".to_owned()
+                } else {
+                    reach.carriers.join(", ")
+                }
+            ));
         }
         out.push('\n');
     }

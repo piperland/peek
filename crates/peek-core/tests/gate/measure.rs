@@ -428,6 +428,16 @@ impl Graph {
             .filter(|row| row.qualified_name.rsplit('.').next() == Some(name))
             .collect()
     }
+
+    /// Whether the entity at `key` exists in this index.
+    ///
+    /// Asked before anything is said about a label, because the answer separates
+    /// an engine finding from a fixture one. A label naming an entity the index
+    /// does not hold cannot be satisfied by any rung, so a failure to satisfy it
+    /// says the label is wrong and not that the engine placed the edge wrongly.
+    pub fn holds(&self, key: &Key) -> bool {
+        self.by_key.contains_key(&key.render())
+    }
 }
 
 /// Entity kinds the graph uses for repository structure rather than for a
@@ -1103,27 +1113,49 @@ pub struct Reach {
     pub key: String,
     /// Every entity in the index whose declared name is the one named.
     pub carriers: Vec<String>,
-    /// Whether any of those carriers is the entity the label names.
+    /// The entity the label says the relation must point at, or `None` when the
+    /// label says no entity is the referent.
+    pub wants: Option<Key>,
+    /// Whether any of the carriers is the entity the label names.
     pub correct_in_carriers: bool,
     /// Whether the symbol the relation is written in already declares that name
-    /// itself, which would make the import binding and the same-file rung wrong
-    /// regardless of what else carries it.
+    /// itself.
+    ///
+    /// This is the sharpest fact the graph holds, because it is the one that
+    /// distinguishes *a declaration that was in front of the rung* from *a name
+    /// that only happens to exist elsewhere*: `describe` declares a parameter
+    /// called `entry` and also imports a function called `entry`, and an edge on
+    /// that name can only mean one of them.
     pub shadowed_in_source: bool,
 }
 
 impl Reach {
-    /// Which of the two explanations this reading supports.
+    /// Which explanation the measurement supports, and what would have to be true
+    /// for it to be the other one.
+    ///
+    /// Three cases, not two, because "the extractor emitted an edge for a local"
+    /// and "the extractor emitted an edge whose correct target is nowhere in the
+    /// index" are different claims and only the first is a finding about the
+    /// engine.
     pub fn verdict(&self) -> &'static str {
-        match (self.correct_in_carriers, self.shadowed_in_source) {
-            // The source's own scope declares the name, so the rung that answered
-            // had the right answer in front of it inside the file it was reading.
-            (false, true) => "resolver: the source's own scope declares the name",
-            // The right entity is a candidate by name and the ladder still placed
-            // it elsewhere.
-            (true, _) => "resolver: the correct entity is a candidate by name",
-            // Nothing in the index carries the name at all except what the rung
-            // found, and that is not the right entity: there was no answer to give.
-            (false, false) => "extractor: no entity in the index carries the name",
+        match &self.wants {
+            // The label says the name has no referent, so the relation is
+            // legitimate and no target is. A rung that answered anyway placed it
+            // on something the source never referred to, and the correct answer
+            // was `Unresolved`. Whatever carried the name, the rung could not
+            // have known it was the wrong one: nothing in the index says the name
+            // is a binding rather than a declaration.
+            None => "extractor: the name denotes no declaration, so no rung could have placed it",
+            // The label names an entity and the index does not hold it. The
+            // label is what has to be checked here, not the engine.
+            Some(want) if !self.correct_in_carriers => unreachable!(
+                "the label names {want} and the index does not hold it; \
+                 this is a label to check, not a verdict about the engine"
+            ),
+            Some(_) if self.shadowed_in_source => {
+                "resolver: the source's own scope declares the name, and a weaker rung answered"
+            }
+            Some(_) => "resolver: the correct entity is a candidate by name",
         }
     }
 }
@@ -1146,13 +1178,13 @@ pub fn measure_reach(corpus: &Corpus, graph: &Graph) -> Vec<Reach> {
                 .map(EntityRow::render)
                 .collect();
             let correct_in_carriers = bind.target.as_ref().is_some_and(|target| {
-                carriers.iter().any(|carrier| {
-                    carrier == &format!("{} | {} | {} | #0", target.path, target.kind, target.qualified_name)
-                })
+                graph.holds(target)
+                    && graph.named(&bind.name).iter().any(|row| row.key() == *target)
             });
             Reach {
                 key: bind.key(),
                 carriers,
+                wants: bind.target.clone(),
                 correct_in_carriers,
                 shadowed_in_source: declares_in_scope(graph, bind),
             }

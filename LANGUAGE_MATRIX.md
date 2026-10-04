@@ -119,11 +119,17 @@ landed on, and what the fixture says should have happened.
 **rust**
 
 - references from src/lib.rs | summarise names `out` and the unique_name rung placed it on src/report.rs | parameter | render.out | #0; the label says no entity is the referent
+  - reachability of `references|src/lib.rs|function|summarise|out`: extractor: no entity in the index carries the name (1 in the index)
 - references from src/report.rs | format_line_inner names `entry` and the import_binding rung placed it on src/model.rs | function | entry | #0; the label says `src/report.rs | parameter | format_line_inner.entry`
+  - reachability of `references|src/report.rs|function|format_line_inner|entry`: resolver: the correct entity is a candidate by name (6 in the index)
 - references from src/report.rs | render names `count` and the same_file rung placed it on src/report.rs | parameter | format_line.count | #0; the label says `src/model.rs | field | Entry.count`
-- references from src/service.rs | Runner.run names `last` and the same_file rung placed it on src/service.rs | parameter | retry.last | #0; the label says no entity is the referent
+  - reachability of `references|src/report.rs|function|render|count`: resolver: the correct entity is a candidate by name (4 in the index)
 - references from src/service.rs | describe names `count` and the same_file rung placed it on src/service.rs | parameter | format_line.count | #0; the label says `src/model.rs | field | Entry.count`
+  - reachability of `references|src/service.rs|function|describe|count`: resolver: the correct entity is a candidate by name (4 in the index)
 - references from src/service.rs | describe names `entry` and the import_binding rung placed it on src/model.rs | function | entry | #0; the label says `src/service.rs | parameter | describe.entry`
+  - reachability of `references|src/service.rs|function|describe|entry`: resolver: the correct entity is a candidate by name (6 in the index)
+- references from src/service.rs | Runner.run names `last` and the same_file rung placed it on src/service.rs | parameter | retry.last | #0; the label says no entity is the referent
+  - reachability of `references|src/service.rs|method|Runner.run|last`: extractor: no entity in the index carries the name (1 in the index)
 
 
 ## Relation states per class
