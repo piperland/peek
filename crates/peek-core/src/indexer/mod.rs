@@ -303,7 +303,7 @@ pub fn build_full(
     // files share a package is a property of the set of paths rather than of any one of them,
     // and extraction is per-file, so the fact has to be built before the loop rather than
     // discovered inside it. See `extract::modules::PackageRoots`.
-    let layout = crate::extract::modules::RepositoryLayout::new();
+    let mut layout = crate::extract::modules::RepositoryLayout::new();
     layout.observe_all(discovery.files().iter().map(|file| &file.path));
 
     for file in discovery.files() {
@@ -645,7 +645,7 @@ fn widen_to_package_moves(
     }
     let already: BTreeSet<PathBuf> = batch.iter().cloned().collect();
     for path in store.indexed_paths(INDEXED_PATH_SCAN_LIMIT)? {
-        if moved_package_root(&moves, &path).is_none() {
+        if !moved_package_root(&moves, &path) {
             continue;
         }
         let absolute = root.join(path.as_str());
@@ -671,7 +671,10 @@ fn package_root_moves(root: &Path, paths: &[PathBuf]) -> BTreeSet<String> {
     };
     let mut directories = BTreeSet::new();
     for path in paths {
-        let name = path.file_name().unwrap_or_default();
+        let name = path.file_name().and_then(|name| name.to_str());
+        let Some(name) = name else {
+            continue;
+        };
         let stem = match name.rsplit_once('.') {
             Some((head, _)) if !head.is_empty() => head,
             _ => name,
@@ -681,25 +684,23 @@ fn package_root_moves(root: &Path, paths: &[PathBuf]) -> BTreeSet<String> {
         }
         // The *repository-relative* directory, because that is the spelling `PackageRoots` and
         // `Store::indexed_paths` both use. An absolute parent would match nothing.
-        if let Some(parent) = relative_path(root, path)
-            && let Ok(relative) = RepoPath::from_path(&parent)
-        {
-            directories.insert(relative.as_str().to_owned());
+        if let Some(relative) = relative_path(root, path) {
+            directories.insert(relative);
         }
     }
     directories
 }
 
-/// The nearest moved directory at or above `path`, if there is one.
-fn moved_package_root<'a>(moves: &'a BTreeSet<String>, path: &RepoPath) -> Option<&'a str> {
-    let mut current = path.parent();
+/// Whether `path` sits at or below one of the moved directories.
+fn moved_package_root(moves: &BTreeSet<String>, path: &RepoPath) -> bool {
+    let mut current = Some(path.clone());
     while let Some(directory) = current {
         if moves.contains(directory.as_str()) {
-            return Some(directory.as_str());
+            return true;
         }
         current = directory.parent();
     }
-    None
+    false
 }
 
 /// Read every relation that arrives at an entity declared in `path`.

@@ -214,10 +214,10 @@ impl PackageRoots {
     {
         let mut holders: BTreeSet<String> = BTreeSet::new();
         for path in paths {
-            let (Some(stem), Some(directory)) = (stem_of(&path), directory_of(&path)) else {
+            let Some(directory) = directory_of(&path) else {
                 continue;
             };
-            if layout.package_roots.contains(&stem) {
+            if layout.package_roots.contains(stem_of(&path)) {
                 holders.insert(directory.to_owned());
             }
         }
@@ -298,9 +298,10 @@ impl RepositoryLayout {
                 })
                 .collect();
         }
-        let (Some(stem), Some(directory)) = (stem_of(path), directory_of(path)) else {
+        let Some(directory) = directory_of(path) else {
             return;
         };
+        let stem = stem_of(path);
         for (_, layout, roots) in &mut self.per_language {
             if !layout.package_roots.contains(&stem) {
                 continue;
@@ -493,12 +494,12 @@ pub fn for_file(
 /// before it took the set, so the single-file entry point is unchanged rather than degraded.
 pub fn locate(path: &RepoPath, layout: &ModuleLayout, roots: &PackageRoots) -> ModuleLocation {
     let components: Vec<&str> = path.components().collect();
-    let (file_name, directories) = match components.split_last() {
-        Some((last, rest)) => (*last, rest),
-        // `RepoPath` rejects an empty path, so a one-component path is the shortest case and
-        // this branch is unreachable. Falling back to the file's own name keeps the function
-        // total rather than panicking over an invariant three files away.
-        None => (path.as_str(), &[] as &[&str]),
+    // `RepoPath` rejects an empty path, so there is always at least one component and this slice
+    // is never empty; the fallback keeps the function total rather than panicking over an
+    // invariant three files away.
+    let directories: &[&str] = match components.split_last() {
+        Some((_, rest)) => rest,
+        None => &[],
     };
     let stem = stem_of(path);
 
@@ -1024,6 +1025,7 @@ mod tests {
             &file_id("crates/regex/src/lib.rs"),
             span(),
             "fn a() {}",
+            &no_roots(),
         );
         assert!(found.is_empty(), "{found:#?}");
         assert!(found.module.is_none());
@@ -1482,7 +1484,7 @@ mod tests {
         // repository's paths are read only when something in the batch could need them.
         let layout = rust_layout();
         assert!(!super::needs_package_roots(
-            [
+            &[
                 path("crates/foo/src/lib.rs"),
                 path("crates/foo/src/a.rs"),
                 path("crates/foo/src/a/mod.rs")
@@ -1490,14 +1492,14 @@ mod tests {
             layout
         ));
         assert!(super::needs_package_roots(
-            [
+            &[
                 path("crates/foo/src/lib.rs"),
                 path("crates/core/flags/defs.rs")
             ],
             layout
         ));
         assert!(
-            super::needs_package_roots([path("tests/helper.rs")], layout),
+            super::needs_package_roots(&[path("tests/helper.rs")], layout),
             "a file with no source root at all is asked too, since the answer may change"
         );
     }
