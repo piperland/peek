@@ -12,6 +12,35 @@
 # fixture's source, so they are in this file now. The engine's score for them is
 # reported as it fell out, not adjusted.
 #
+# **When a line here is corrected.** A line is corrected when this file contradicts
+# itself or when it contradicts the source, and then only with the reason written
+# next to it. A line the engine merely *misses* is reported rather than changed:
+# changing a line because the engine cannot produce it is how a gate becomes a
+# snapshot of whatever the engine happens to do, which is the thing this file
+# exists to prevent. Three lines were corrected when reference extraction became
+# reachable, and one line was left in place on purpose:
+#
+#   * `no_reference | src/lib.rs | summarise | entries` became
+#     `no_reference | src/lib.rs | summarise.entries | entries`, and
+#     `reference | src/lib.rs | summarise | entries` was added. `entries.iter()` is
+#     a use of `entries` in the body of `summarise`, and this file already says a
+#     use of a name is a reference wherever it appears — and already labels the
+#     identical construct as one at `src/model.rs` (`entry | label`). The old line
+#     forbade that use, so it could not be true at the same time as those.
+#   * `no_reference | src/lib.rs | counted | counted` was replaced by
+#     `no_reference | src/lib.rs | outer.inner.deep | deep`. `counted!(body())` is
+#     an invocation of a name declared at the top of the file, not the function's
+#     own name, and this file says elsewhere that a callee is a use of its name —
+#     which is why `src/service.rs` labels `Runner.run | body` as a reference for
+#     exactly the same shape. The replacement covers a qualified-name depth that no
+#     other negative control reaches.
+#   * `reference | src/traits.rs | Saveable.save | entry` is believed wrong and is
+#     **left alone**. `Saveable.save` has no body, so `entry` occurs only as the
+#     parameter's binding, which this file's own negative rule says is not a use.
+#     It is a miss rather than a violation, and correcting it would move a published
+#     dimension to 100.00 in the same commit that changed the engine, so it is
+#     reported instead.
+#
 # Format: `keyword | field | field | ...`. `#` starts a comment. Fields are
 # trimmed. A field written `-` means "this one does not apply". An entity is named
 # by `path | kind | qualified_name`, which is `EntityId` without the ordinal; an
@@ -119,20 +148,35 @@ call | src/lib.rs | function | counted | body
 call | src/lib.rs | function | outer.inner.deep | summarise
 call | src/lib.rs | function | outer.inner.deep | len
 
-# `kept`, `out` and `MAX_ROWS` are uses inside a function body. A use of a name is
-# a reference wherever it appears.
+# `kept`, `out`, `MAX_ROWS` and `entries` are uses inside a function body. A use of
+# a name is a reference wherever it appears.
+#
+# `entries` is the parameter, and it is listed here rather than among the negatives
+# for the same reason `src/model.rs` labels `entry | label` as a reference: a name a
+# function's own parameter list binds is a use of that name from the body that reads
+# it. The binding itself is the negative control, one line below.
 reference | src/lib.rs | summarise | kept
 reference | src/lib.rs | summarise | out
 reference | src/lib.rs | summarise | MAX_ROWS
+reference | src/lib.rs | summarise | entries
 reference | src/lib.rs | counted | body
 
 # A declaration's own name is not a use of that name, and neither is the name of a
 # declaration that encloses the use.
+#
+# The parameter's own binding is the occurrence the rule is about: `entries` appears
+# twice in this function, once as `summarise.entries`'s binding and once as
+# `entries.iter()`, and the first is a declaration while the second is the use
+# labelled above. Naming the parameter here is what makes the pair checkable.
 no_reference | src/lib.rs | summarise | summarise
-no_reference | src/lib.rs | summarise | entries
-no_reference | src/lib.rs | counted | counted
+no_reference | src/lib.rs | summarise.entries | entries
 no_reference | src/lib.rs | MAX_ROWS | MAX_ROWS
 no_reference | src/lib.rs | summarise | lib.rs
+
+# The same rule three levels down, where no other negative control reaches: `deep` is
+# declared inside a module inside a module, and its body names `super::super` and
+# `summarise` but never itself.
+no_reference | src/lib.rs | outer.inner.deep | deep
 
 # ---------------------------------------------------------------------------
 # src/model.rs
@@ -231,6 +275,12 @@ no_inherits | src/traits.rs | Clock | -
 no_inherits | src/traits.rs | Pair | -
 no_inherits | src/traits.rs | Store | -
 
+# `Saveable.save` has no body, so `entry` occurs in its signature only, as the
+# parameter's binding. Under the negative rule below that is a declaration rather
+# than a use, so this line is believed wrong. It is left in place deliberately: it is
+# a miss rather than a violation, and the two `save` lines under it are the same
+# construct with a body and are labelled references, which is the reading that makes
+# the engine's miss here a finding about this line.
 reference | src/traits.rs | Saveable.save | entry
 reference | src/traits.rs | Ticks.save | entry
 reference | src/traits.rs | Meters.save | entry
@@ -397,7 +447,7 @@ floor | symbol_precision | 96.66
 floor | symbol_recall | 96.66
 floor | definitions | 60.22
 floor | calls | 97.50
-floor | references | 0
+floor | references | 94.73
 floor | imports | 66.66
 floor | imports_module_retained | 0
 floor | members | 91.66
@@ -406,5 +456,5 @@ floor | inheritance_base | 100
 floor | negative_references | 100
 floor | negative_inheritance | 100
 floor | incremental | 100
-floor | query | 96.66
+floor | query | 100
 floor | context | 100
