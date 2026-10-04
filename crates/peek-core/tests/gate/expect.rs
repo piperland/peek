@@ -373,7 +373,7 @@ fn parse_basis_points(text: &str) -> Option<u64> {
         let padded = format!("{fraction:0<2}");
         padded.parse().ok()?
     };
-    if fraction >= 100 {
+    if whole > 100 || (whole == 100 && fraction > 0) {
         return None;
     }
     Some(whole * 100 + fraction)

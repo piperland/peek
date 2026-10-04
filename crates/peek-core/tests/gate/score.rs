@@ -290,10 +290,13 @@ mod tests {
     #[test]
     fn a_rendered_figure_always_carries_its_denominator() {
         // The rule the whole matrix rests on: a number with no denominator is the
-        // defect, so the renderer cannot produce one.
-        assert_eq!(Fraction::new(34, 83).render(), "0.41 (34/83)");
+        // defect, so the renderer cannot produce one. The figure is a percentage,
+        // because 40.96% reads as a rate and 0.41 reads as a fraction of
+        // something unstated.
+        assert_eq!(Fraction::new(34, 83).render(), "40.96 (34/83)");
         assert_eq!(Fraction::new(0, 5).render(), "0.00 (0/5)");
-        assert_eq!(Fraction::new(5, 5).render(), "1.00 (5/5)");
+        assert_eq!(Fraction::new(5, 5).render(), "100.00 (5/5)");
+        assert_eq!(Fraction::new(1, 3).render(), "33.33 (1/3)");
     }
 
     #[test]
