@@ -1402,7 +1402,9 @@ impl<'s> Resolver<'s> {
         // could answer; taking the union instead is what let a declaration site's `mod x;` row
         // answer a path about the module's own file.
         let mut asked = 0usize;
-        for qualified in self.module_qualified_names(module, package_name, strip_last, crate_relative) {
+        for qualified in
+            self.module_qualified_names(module, package_name, strip_last, crate_relative)
+        {
             asked += 1;
             let mut found: Vec<RepoPath> = Vec::new();
             for entity in self
