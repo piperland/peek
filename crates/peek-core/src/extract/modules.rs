@@ -264,14 +264,18 @@ impl PackageRoots {
             }
         }
 
-        // Drop every candidate that sits inside another candidate's source tree. Sorted, so the
-        // enclosing candidate is always seen before the one it contains.
+        // Drop every candidate that sits inside another candidate's source tree. `strip_prefix`
+        // leaves the separator, so the remainder is trimmed before it is split — without that the
+        // first component below is the empty string, `""` is not a source root, and every
+        // candidate survives. That is a test that would have caught it and did not, because the
+        // first version of this predicate read the remainder without the trim.
         let enclosing: Vec<String> = roots.iter().cloned().collect();
         roots.retain(|candidate| {
             !enclosing.iter().any(|outer| {
                 outer != candidate
                     && candidate
                         .strip_prefix(outer.as_str())
+                        .and_then(|below| below.strip_prefix('/'))
                         .and_then(|below| below.split('/').next())
                         .is_some_and(|first| layout.source_roots.contains(&first))
             })
