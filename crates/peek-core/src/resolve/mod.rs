@@ -1422,10 +1422,15 @@ impl<'s> Resolver<'s> {
             importer.file_name().to_owned(),
             0,
         );
-        // `modules_per_source` rather than `modules_per_lookup`, and deliberately larger: the
-        // edge is the *only* `Contains` into a file entity, and the answer must not depend on how
-        // many rows happen to precede it.
-        for relation in self.store.incoming(
+        // **Outgoing, not incoming.** `extract::modules::for_file` writes the edge *from* the file
+        // entity *to* the module row — "the file is what the module is written in" — so asking for
+        // the edges *arriving* at the file returns nothing at all and this function answers `None`
+        // for every file, which is the same defect above in a second shape.
+        //
+        // `outgoing_per_source` rather than `modules_per_lookup`, and deliberately larger: this
+        // edge is the only `Contains` a file entity has, so the answer must not depend on how many
+        // rows happen to precede it.
+        for relation in self.store.outgoing(
             &file,
             Some(RelationKind::Contains),
             self.options.outgoing_per_source,
