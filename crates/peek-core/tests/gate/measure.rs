@@ -1198,7 +1198,7 @@ pub fn measure_reach(corpus: &Corpus, graph: &Graph) -> Vec<Reach> {
             let correct_in_carriers = bind
                 .target
                 .as_ref()
-                .is_some_and(|target| graph.named(&bind.name).iter().any(|row| row.key() == target));
+                .is_some_and(|target| graph.named(&bind.name).iter().any(|row| row.key() == *target));
             Reach {
                 key: bind.key(),
                 carriers,
