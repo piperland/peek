@@ -43,6 +43,14 @@ use crate::store::{IndexUpdate, RepoId, Store, StoreError, UpdateStats, paths};
 /// code, and it is a named constant rather than a literal so that raising it is a visible act.
 const DISPLACED_EDGE_SCAN_LIMIT: usize = 2048;
 
+/// How many of the index's own paths a refresh reads when it has to rebuild the package roots.
+///
+/// A bound for the same reason as [`DISPLACED_EDGE_SCAN_LIMIT`], and with the same caveat attached:
+/// **a truncated read is not a smaller repository**, it is a partial view of the path list, and a
+/// caller given one must not conclude the missing files are not there. The only consequence here is
+/// that some file keeps the package name it had, which is the fallback rather than a wrong answer.
+const INDEXED_PATH_SCAN_LIMIT: usize = 1_000_000;
+
 /// Everything an indexing run produced, including what it could not do.
 ///
 /// Every counter here is measured. A number that cannot be measured is not reported — which is
@@ -63,6 +71,13 @@ pub struct IndexReport {
     /// a file entity plus every symbol in it, and reporting that as "2 files removed" is a lie a
     /// caller cannot check.
     pub files_removed: u64,
+    /// Files a refresh re-extracted **because a crate root appeared or disappeared**, not because
+    /// they changed.
+    ///
+    /// Reported because it is otherwise invisible: the file did not change, so nothing else in the
+    /// report says why it was read again, and a repository where this is a large number on every
+    /// save is a repository where "cost is proportional to what changed" is no longer true.
+    pub files_reindexed_for_package: u64,
     pub entities_written: u64,
     /// Entity rows deleted, which is the store's `entities_removed` measured directly.
     pub entities_removed: u64,
@@ -284,9 +299,16 @@ pub fn build_full(
 
     let mut update = IndexUpdate::empty();
 
+    // **The whole repository's paths, read once, before the first file is extracted.** Which
+    // files share a package is a property of the set of paths rather than of any one of them,
+    // and extraction is per-file, so the fact has to be built before the loop rather than
+    // discovered inside it. See `extract::modules::PackageRoots`.
+    let layout = crate::extract::modules::RepositoryLayout::new();
+    layout.observe_all(discovery.files().iter().map(|file| &file.path));
+
     for file in discovery.files() {
         let absolute = discovery.report().absolute(&file.path);
-        update = ingest(file, &absolute, update, &mut outcome);
+        update = ingest(file, &absolute, &layout, update, &mut outcome);
     }
 
     let stats = store.apply_update(update)?;
@@ -357,7 +379,10 @@ pub fn refresh(
     // The widest thing this batch wrote, so the pass below can be given a scope that reaches it.
     let mut scope = ScopeBounds::default();
 
-    for path in paths {
+    let batch = widen_to_package_moves(store, root, paths, &mut outcome)?;
+    let layout = package_layout(store, root, &batch)?;
+
+    for path in &batch {
         // **The repository-relative name, or nothing.** `strip_prefix` alone was not the question:
         // it says `Err` for a path outside the root, and the `unwrap_or` beside it handed the whole
         // path on — so an absolute path that was not under the root became the name the index held
@@ -445,7 +470,12 @@ pub fn refresh(
             continue;
         };
 
-        let extracted = crate::extract::extract_with(spec, relative.clone(), &text);
+        let extracted = crate::extract::extract_with_roots(
+            spec,
+            relative.clone(),
+            &text,
+            layout.roots(spec),
+        );
         scope.widen(&extracted);
         touched.push(relative);
         update = absorb_file(extracted, update, &mut outcome);
@@ -548,6 +578,130 @@ impl ScopeBounds {
     }
 }
 
+/// Read the repository's package roots, for a refresh.
+///
+/// # Why a refresh reads them at all, when most of them are the same as last time
+///
+/// **Adding or removing a crate's root module changes what package every other file in that
+/// directory belongs to, and a refresh is the only thing that will ever re-extract them.** The
+/// batch says `crates/core/main.rs` was created; every module row under `crates/core/` was written
+/// under the old answer and is now wrong, and no future refresh will revisit those files because
+/// they did not change. That is the same class of defect as the paging hole `ScopeBounds` exists
+/// to close: an incremental build disagreeing with a full one about the same tree.
+///
+/// So the store's own path list is the source, and the batch's paths are added on top — a file
+/// that has just been created is in `paths` and is not yet in `indexed_paths`, and a file that has
+/// just been deleted is in neither once the removal lands, which is the direction that matters.
+/// The read is skipped entirely when the batch is all `src/` files, because those never consult
+/// the roots (see [`crate::extract::modules::needs_package_roots`]); without that, every keystroke
+/// under `watch` on a workspace would cost a full scan of the path list to learn nothing.
+fn package_layout(
+    store: &Store,
+    root: &Path,
+    batch: &[PathBuf],
+) -> Result<crate::extract::modules::RepositoryLayout, IndexError> {
+    let mut layout = crate::extract::modules::RepositoryLayout::new();
+    let relative: Vec<RepoPath> = batch
+        .iter()
+        .filter_map(|path| relative_path(root, path))
+        .filter_map(|name| RepoPath::from_path(&name))
+        .collect();
+    let wanted = registry_rust_layout().is_some_and(|layout| {
+        crate::extract::modules::needs_package_roots(&relative, layout)
+    });
+    if wanted {
+        layout.observe_all(store.indexed_paths(INDEXED_PATH_SCAN_LIMIT)?.iter());
+    }
+    layout.observe_all(&relative);
+    Ok(layout)
+}
+
+/// The Rust module layout, for the one question `package_layout` asks of a path set.
+fn registry_rust_layout() -> Option<crate::extract::spec::ModuleLayout> {
+    crate::extract::registry::get(crate::model::Language::Rust)
+        .and_then(|spec| spec.module_layout())
+}
+
+/// Add every indexed file whose package changes to the batch a refresh will re-extract.
+///
+/// **Only files under a directory whose package root moved.** A file that keeps its package keeps
+/// its module row, its `Package` entity and its `Contains` edges, because none of the three
+/// mention the directory — the module's qualified name is the package name plus the segments below
+/// it, and none of those move. A file that does keep nothing, so it is re-extracted like any
+/// other changed file and the store removes its old rows before inserting the new ones.
+fn widen_to_package_moves(
+    store: &Store,
+    root: &Path,
+    paths: &[PathBuf],
+    outcome: &mut IndexOutcome,
+) -> Result<Vec<PathBuf>, IndexError> {
+    let mut batch: Vec<PathBuf> = paths.to_vec();
+    // A batch that creates or deletes no crate root moves no package, and that is the common case
+    // under `watch`. Deciding it from the batch's own paths rather than from the store is what
+    // keeps this off the per-keystroke path.
+    let moves = package_root_moves(root, paths);
+    if moves.is_empty() {
+        return Ok(batch);
+    }
+    let already: BTreeSet<PathBuf> = batch.iter().cloned().collect();
+    for path in store.indexed_paths(INDEXED_PATH_SCAN_LIMIT)? {
+        if moved_package_root(&moves, &path).is_none() {
+            continue;
+        }
+        let absolute = root.join(path.as_str());
+        if already.contains(&absolute) {
+            continue;
+        }
+        batch.push(absolute);
+        outcome.report.files_reindexed_for_package += 1;
+    }
+    Ok(batch)
+}
+
+/// The directories a batch adds a crate root to, or removes one from.
+///
+/// **Only a root module file can move a package**, and only the directory it sits in moves: a
+/// `crates/foo/main.rs` appearing or disappearing makes `crates/foo` a package directory or stops
+/// it being one, and that is what every module row under it was named from. A `mod.rs` appearing
+/// changes no package — it names a module inside the one that is already there — so it is not
+/// here, and a batch that is only `mod.rs` files does no store read at all.
+fn package_root_moves(root: &Path, paths: &[PathBuf]) -> BTreeSet<String> {
+    let Some(layout) = registry_rust_layout() else {
+        return BTreeSet::new();
+    };
+    let mut directories = BTreeSet::new();
+    for path in paths {
+        let name = path.file_name().unwrap_or_default();
+        let stem = match name.rsplit_once('.') {
+            Some((head, _)) if !head.is_empty() => head,
+            _ => name,
+        };
+        if !layout.package_roots.contains(&stem) {
+            continue;
+        }
+        // The *repository-relative* directory, because that is the spelling `PackageRoots` and
+        // `Store::indexed_paths` both use. An absolute parent would match nothing.
+        if let Some(parent) = relative_path(root, path)
+            && let Ok(relative) = RepoPath::from_path(&parent)
+        {
+            directories.insert(relative.as_str().to_owned());
+        }
+    }
+    directories
+}
+
+/// The nearest moved directory at or above `path`, if there is one.
+fn moved_package_root<'a>(moves: &'a BTreeSet<String>, path: &RepoPath) -> Option<&'a str> {
+    let mut current = path.parent();
+    while let Some(directory) = current {
+        if moves.contains(directory.as_str()) {
+            return Some(directory.as_str());
+        }
+        current = directory.parent();
+    }
+    None
+}
+
 /// Read every relation that arrives at an entity declared in `path`.
 ///
 /// Read before the removal that would null their targets. The store's demotion step is what
@@ -574,6 +728,7 @@ fn collect_incoming(
 fn ingest(
     file: &DiscoveredFile,
     absolute: &Path,
+    layout: &crate::extract::modules::RepositoryLayout,
     update: IndexUpdate,
     outcome: &mut IndexOutcome,
 ) -> IndexUpdate {
@@ -600,7 +755,12 @@ fn ingest(
         }
     };
 
-    let extracted = crate::extract::extract_with(spec, file.path.clone(), &text);
+    let extracted = crate::extract::extract_with_roots(
+        spec,
+        file.path.clone(),
+        &text,
+        layout.roots(spec),
+    );
     absorb_file(extracted, update, outcome)
 }
 

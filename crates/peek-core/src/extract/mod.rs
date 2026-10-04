@@ -14,4 +14,4 @@ pub mod spec;
 pub mod walker;
 
 pub use spec::{LanguageSpec, ModuleLayout, NameStrategy};
-pub use walker::{ExtractedFile, extract, extract_with};
+pub use walker::{ExtractedFile, extract, extract_in_repo, extract_with, extract_with_roots};

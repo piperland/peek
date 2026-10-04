@@ -32,7 +32,7 @@ use std::collections::HashMap;
 
 use tree_sitter::Node;
 
-use super::modules;
+use super::modules::{self, PackageRoots};
 use super::source::SourceText;
 use super::spec::{ImportRule, InheritanceStyle, LanguageSpec, NameStrategy, SymbolRule};
 use crate::model::{
@@ -187,10 +187,19 @@ struct Walker<'a> {
     /// Ordinals for entities sharing a kind and qualified name, so `impl Foo` blocks stay
     /// distinct identities without making line numbers part of the key.
     ordinals: HashMap<(EntityKind, String), u32>,
+    /// Where the repository roots its packages at, for the layouts whose rule needs it. A
+    /// walk of a file under a source root never reads it; see
+    /// [`super::modules::needs_package_roots`].
+    roots: &'a PackageRoots,
 }
 
 impl<'a> Walker<'a> {
-    fn new(spec: &'static LanguageSpec, path: RepoPath, text: &'a str) -> Self {
+    fn new(
+        spec: &'static LanguageSpec,
+        path: RepoPath,
+        text: &'a str,
+        roots: &'a PackageRoots,
+    ) -> Self {
         let file_id = EntityId::new(
             path.clone(),
             EntityKind::File,
@@ -217,6 +226,7 @@ impl<'a> Walker<'a> {
             module_ids: Vec::new(),
             scope: Vec::new(),
             ordinals: HashMap::new(),
+            roots,
         }
     }
 
@@ -507,6 +517,7 @@ impl<'a> Walker<'a> {
             &self.file_id,
             self.span_of(0..text.len()),
             text,
+            self.roots,
         );
         self.module_id = found.module.clone();
         for entity in found.entities {
@@ -1143,13 +1154,39 @@ fn count_defects(node: Node<'_>, errors: &mut usize, missing: &mut usize) -> Opt
 /// "no extraction rules for this language", never as "this file has no symbols" — conflating the
 /// two is how fourteen of Cortex's languages reported as supported while extracting nothing.
 pub fn extract(path: RepoPath, text: &str) -> Option<ExtractedFile> {
+    extract_in_repo(path, text, &PackageRoots::empty())
+}
+
+/// Extract a file using the spec registered for `path`'s language.
+pub fn extract_in_repo(
+    path: RepoPath,
+    text: &str,
+    roots: &PackageRoots,
+) -> Option<ExtractedFile> {
     let language = Language::from_extension(path.extension()?.as_str())?;
     let spec = crate::extract::registry::get(language)?;
-    Some(extract_with(spec, path, text))
+    Some(extract_with_roots(spec, path, text, roots))
 }
 
 /// Extract a file with an explicit spec.
 pub fn extract_with(spec: &'static LanguageSpec, path: RepoPath, text: &str) -> ExtractedFile {
+    extract_with_roots(spec, path, text, &PackageRoots::empty())
+}
+
+/// Extract a file with an explicit spec and the repository's package roots.
+///
+/// **This is the entry point for anything that has the repository's paths.** A file's package is
+/// a fact about a directory, and one file's path does not say which of its ancestor directories
+/// that is, so [`extract_with`] — which sees one file and nothing else — cannot answer it and
+/// falls back to naming the file for its own directory. A caller that has the path set and uses
+/// [`extract_with`] anyway gets that fallback silently, which is why this one exists rather than a
+/// note.
+pub fn extract_with_roots(
+    spec: &'static LanguageSpec,
+    path: RepoPath,
+    text: &str,
+    roots: &PackageRoots,
+) -> ExtractedFile {
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&(spec.grammar)()).is_err() {
         // A grammar that cannot be set is a programming error in the spec, not a runtime
@@ -1187,7 +1224,7 @@ pub fn extract_with(spec: &'static LanguageSpec, path: RepoPath, text: &str) -> 
     let mut missing = 0usize;
     let first_error = count_defects(tree.root_node(), &mut errors, &mut missing);
 
-    let mut walker = Walker::new(spec, path, text);
+    let mut walker = Walker::new(spec, path, text, roots);
     walker.run(tree.root_node());
 
     ExtractedFile {
