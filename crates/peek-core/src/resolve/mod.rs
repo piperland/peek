@@ -565,7 +565,9 @@ struct ModuleFileLookup {
     /// table had a package-prefixed spelling to offer.
     package_known: bool,
     /// Whether the path the table answered was one that named a package, rather than one the author
-    /// wrote as `crate::`/`self::` or with the importer's own package as its head.
+    /// wrote as `crate::`/`self::` or with the importer's own package as its head. That is the
+    /// route's question, and it is what the conflict rule turned on — not which spelling happened
+    /// to match, which is an implementation detail of the order.
     named: bool,
 }
 
@@ -1420,7 +1422,7 @@ impl<'s> Resolver<'s> {
                     asked,
                     outcome: ModuleFileOutcome::Table,
                     package_known: package.is_some(),
-                    named: package_name.is_some_and(|prefix| qualified.starts_with(prefix)),
+                    named: !crate_relative,
                 });
                 return Ok(found);
             }
