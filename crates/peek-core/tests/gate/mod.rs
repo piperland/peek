@@ -404,6 +404,46 @@ fn a_registered_language_with_a_fixture_is_measured_on_every_dimension() {
 }
 
 #[test]
+fn an_incremental_refresh_leaves_nothing_undecided_and_nothing_dangling() {
+    // The 348-relation lesson, asserted. An earlier A/B measurement found 348
+    // relations stranded as `pending` after refreshing one file of
+    // `rust-lang/regex`, and no test could see it because every test read the
+    // store after a *full* build. Three operations are run here — edit, delete,
+    // rename — and both the index's own count and the refresh's own report are
+    // required to be zero.
+    for (language, directory) in discovered() {
+        let outcome = incremental::run(&directory, language);
+        for operation in &outcome.operations {
+            assert_eq!(
+                operation.undecided, 0,
+                "{} for {}: {}",
+                operation.name,
+                language.as_str(),
+                operation.describe()
+            );
+            assert_eq!(
+                operation.orphans, 0,
+                "{} for {}: a refresh must demote the edges that pointed into the file it \
+                 rewrote, not leave them dangling",
+                operation.name,
+                language.as_str()
+            );
+        }
+        assert!(
+            outcome.is_clean(),
+            "{}: an incremental rebuild must agree with a full one:\n  {}",
+            language.as_str(),
+            outcome
+                .operations
+                .iter()
+                .map(incremental::Operation::describe)
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+    }
+}
+
+#[test]
 fn the_gate_writes_its_artefacts_when_asked() {
     // The write path is a test rather than a side effect of the reading one,
     // because a test suite that rewrites a committed file on every run is a test

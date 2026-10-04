@@ -266,10 +266,6 @@ impl Graph {
         &self.rows
     }
 
-    /// Whether the index holds an entity with this identity.
-    pub fn has(&self, key: &Key) -> bool {
-        self.by_key.contains_key(&key.render())
-    }
 
     /// The identity a question can name, taken from the store rather than rebuilt.
     ///
@@ -416,9 +412,6 @@ impl Scratch {
         Scratch { path }
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 
     /// A child of this scratch holding a copy of `from`.
     ///
