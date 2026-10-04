@@ -27,13 +27,13 @@
 // error and continuing would defeat the entire purpose of the probe.
 #![allow(clippy::expect_used, clippy::panic)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
 use peek_core::discover::DiscoveryOptions;
 use peek_core::indexer::{self, open_store};
-use peek_core::model::{EntityKind, Language, RelationKind, RepoPath, ResolutionState};
+use peek_core::model::{EntityKind, Evidence, Language, RelationKind, RepoPath, ResolutionState};
 
 /// The queries whose plans matter, with the shape each one is expected to take.
 ///
@@ -97,11 +97,19 @@ fn report_on_a_real_repository() {
     println!("report: {}", outcome.report().summary());
 
     report_file_outcomes(&outcome);
+    report_written_against_held(&root, &store);
     report_graph(&store, build_time);
+    // After the build, not somewhere earlier in the run. A full build's second pass reads the whole
+    // index, so it is the one operation that can be trusted to decide everything — and saying so
+    // here says nothing about the operations below, which is why each of those repeats the check.
+    assert_nothing_pending(&store, "a full build");
     report_a_real_symbol(&store, &root);
     report_query_plans(&store);
     report_incremental(&mut store, &root);
     report_deletion(&mut store, &root);
+    assert_nothing_pending(&store, "the whole probe cycle");
+    report_doctor(&store, &root);
+    report_eventual(&mut store, &root);
 
     match store.verify() {
         Ok(()) => println!("\nintegrity_check: ok"),
@@ -369,6 +377,16 @@ fn report_incremental(store: &mut peek_core::store::Store, root: &std::path::Pat
     );
     println!("generation: {} -> {}", before.generation, after.generation);
     println!("report:     {}", outcome.report().summary());
+    // **Here, not after the build.** This is the step that creates them: a refresh decides the
+    // files it was given, so a file larger than the pass's per-file read leaves its tail
+    // undecided. Measured on `BurntSushi/ripgrep`: refreshing a file of 1,363 entities left 348 of
+    // its 3,599 relations pending, and nothing afterwards decided them.
+    assert_nothing_pending(store, "an incremental refresh of one file");
+    assert_eq!(
+        outcome.report().relations_undecided,
+        0,
+        "the run must be able to say it left nothing behind, not only that the store agrees now"
+    );
     println!(
         "orphan check: {}",
         if after.orphan_relations == 0 {
@@ -413,6 +431,7 @@ fn report_deletion(store: &mut peek_core::store::Store, root: &std::path::Path) 
     println!("deleted:    {name}, and put back afterwards");
     println!("report:     {}", outcome.report().summary());
     println!("orphans:    {}", after.orphan_relations);
+    println!("pending after the deletion: {}", after.pending_relations);
     assert_eq!(
         after.orphan_relations, 0,
         "deleting a file must demote the edges that pointed into it, not leave them dangling"
@@ -430,6 +449,7 @@ fn report_deletion(store: &mut peek_core::store::Store, root: &std::path::Path) 
     )
     .expect("re-index the restored file");
     let restored = store.stats().expect("stats");
+    println!("pending after the restore:  {}", restored.pending_relations);
     // Compared against the count from *before* the deletion, not after. An earlier version of this
     // assertion compared against `after` and failed on correct behaviour: the deletion drops the
     // rows, the restoration brings them back, and the only count the restoration has to match is
@@ -440,6 +460,251 @@ fn report_deletion(store: &mut peek_core::store::Store, root: &std::path::Path) 
          {} deleted, {} restored, {} before",
         after.entity_count, restored.entity_count, before.entity_count
     );
+    report_pending(store, "a deletion and its restore");
+    // **Asserted once, here, over both steps, and not between them.** Asserting between the delete
+    // and the restore would stop the run with the repository it is measuring one file short, and the
+    // next run would index a smaller tree and read the difference as a trend. So the deletion's
+    // number is carried into the message instead: a failure says which of the two left them there.
+    assert_eq!(
+        (after.pending_relations, restored.pending_relations),
+        (0, 0),
+        "a deletion and its restore must leave nothing undecided: {} after the deletion, {} after \
+         the restore",
+        after.pending_relations,
+        restored.pending_relations
+    );
+}
+
+/// Say that nothing is awaiting a decision, and name the step that left anything there.
+///
+/// `Pending` is the one state that answers no question in either direction: the edge was extracted
+/// and never decided, so it is neither placed nor refused. Five states partitioning the relation
+/// count is consistent with that — the partition is a claim about *counting*, and a leak of
+/// undecided edges partitions perfectly.
+///
+/// The count is read from the store rather than from a report, because the report is the extractor's
+/// arithmetic and this is the index's own. The list is printed before the assertion so a failing run
+/// says which files to go and look at instead of only how many.
+fn assert_nothing_pending(store: &peek_core::store::Store, step: &str) {
+    let pending = store.stats().expect("stats").pending_relations;
+    println!("pending:    {pending}");
+    report_pending(store, step);
+    assert_eq!(
+        pending, 0,
+        "{pending} relation(s) are still pending after {step}; `report_pending` above names them"
+    );
+}
+
+/// Put the two counts of the graph side by side and say which one each is.
+///
+/// The build reports what it *wrote* and the store reports what it *holds*, and the two are not the
+/// same quantity: a write is an upsert statement, so two relations with the same natural key are two
+/// writes and one row. A reader who compares the numbers and sees them differ has three possible
+/// explanations — the index dropped rows, the index is stale, or the two numbers were never counting
+/// the same thing — and only the third is invisible in the numbers themselves.
+///
+/// So this measures the middle quantity: every discovered file is extracted again, and the
+/// extraction results are counted twice, once as emitted and once after collapsing on the key the
+/// store keys a row by. If the collapsed count is what the store holds, the index is right and the
+/// comparison was wrong, and that is a fact worth printing rather than leaving to be argued.
+fn report_written_against_held(root: &std::path::Path, store: &peek_core::store::Store) {
+    println!("\n=== what was written against what is held ===");
+    let discovery = peek_core::discover::FileDiscovery::new(root, DiscoveryOptions::default())
+        .discover()
+        .expect("discover the repository");
+
+    let mut entities_emitted = 0usize;
+    let mut entity_ids: BTreeSet<[String; 4]> = BTreeSet::new();
+    let mut relations_emitted = 0usize;
+    let mut relation_keys: BTreeSet<String> = BTreeSet::new();
+    for file in discovery.files() {
+        let absolute = discovery.report().absolute(&file.path);
+        let Some(spec) = peek_core::extract::registry::get(file.language) else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(&absolute) else {
+            continue;
+        };
+        let extracted = peek_core::extract::extract_with(spec, file.path.clone(), &text);
+        entities_emitted += extracted.entities.len();
+        for entity in &extracted.entities {
+            entity_ids.insert([
+                entity.id().path().as_str().to_owned(),
+                entity.id().kind().as_str().to_owned(),
+                entity.id().qualified_name().to_owned(),
+                entity.id().ordinal().to_string(),
+            ]);
+        }
+        relations_emitted += extracted.relations.len();
+        for relation in &extracted.relations {
+            // Collapsed on the key the store keys a row by, so this counts what the index can hold
+            // rather than what the extractor happened to emit.
+            relation_keys.insert(format!("{:?}", relation.natural_key()));
+        }
+    }
+
+    let stats = store.stats().expect("stats");
+    // **Labelled `extracted …`, not `entities:`/`relations:`.** `scripts/probe-real-repos.sh` pulls
+    // its table out of this log by grepping `^entities:` and `^relations:`, and it takes the first
+    // line that matches. A section that reused one of those labels would silently become the
+    // table's number — and the script's guard against a non-integer would answer it with a zero, so
+    // the damage would be a table of zeros that reads as a finding about the engine. The label is
+    // part of the measurement's contract, not a cosmetic choice.
+    println!(
+        "extracted entities:  {entities_emitted} emitted, {} distinct, {} held",
+        entity_ids.len(),
+        stats.entity_count
+    );
+    println!(
+        "extracted relations: {relations_emitted} emitted, {} distinct, {} held",
+        relation_keys.len(),
+        stats.relation_count
+    );
+    if entity_ids.len() as u64 != stats.entity_count
+        || relation_keys.len() as u64 != stats.relation_count
+    {
+        println!(
+            "the index does not hold one row per distinct key, so the gap above is not explained \
+             by collapsing duplicates and the store is worth a look"
+        );
+    } else if entities_emitted as u64 != stats.entity_count
+        || relations_emitted as u64 != stats.relation_count
+    {
+        println!(
+            "the index holds exactly one row per distinct key, so the gap between written and held \
+             is the extractor emitting the same key twice, not the store losing a row"
+        );
+    }
+}
+
+/// What `doctor` says about an index in the state this probe has left it in.
+///
+/// Asked *here*, while the relations are still outstanding, because `doctor` is a statement about
+/// the index as it is and the answer a few steps later describes a different one.
+fn report_doctor(store: &peek_core::store::Store, root: &std::path::Path) {
+    println!("\n=== what doctor says ===");
+    let repo = peek_core::store::RepoId::discover(root).expect("derive a repository id");
+    let diagnosis = peek_core::doctor::diagnose_open(store, root, &repo);
+    println!("{}", diagnosis.report());
+    println!(
+        "healthy: {}",
+        match diagnosis.is_healthy() {
+            true => "yes",
+            false => "no",
+        }
+    );
+}
+
+/// Ask whether anything ever decides the relations a refresh leaves behind, and answer it by
+/// measurement rather than by reading the resolver.
+///
+/// Two passes are run, in the order that discriminates the two explanations:
+///
+/// * a **second refresh of the same file** — a scoped pass that runs, on the file the undecided
+///   relations belong to. If it clears them then a refresh is merely late rather than blind, and a
+///   later edit would finish the job.
+/// * a **full re-resolve** — the pass a full build runs. If only this one clears them then the
+///   relations are not deferred, they are stranded: nothing the ordinary operations run will ever
+///   revisit them, and the only thing that decides them is a rebuild nobody asked for.
+fn report_eventual(store: &mut peek_core::store::Store, root: &std::path::Path) {
+    let before = store.stats().expect("stats").pending_relations;
+    println!("\n=== does anything decide them later ===");
+    println!("pending to begin with: {before}");
+    if before == 0 {
+        println!("nothing is outstanding, so there is nothing here to explain");
+        return;
+    }
+    let Some(path) = largest_rust_file(root) else {
+        println!("no Rust file found");
+        return;
+    };
+
+    indexer::refresh(
+        store,
+        root,
+        std::slice::from_ref(&path),
+        &DiscoveryOptions::default(),
+    )
+    .expect("a second refresh of the same file");
+    let after_refresh = store.stats().expect("stats").pending_relations;
+    println!("pending after another refresh of that file: {after_refresh}");
+
+    peek_core::resolve::resolve_all(store, peek_core::resolve::ResolutionOptions::default())
+        .expect("a full re-resolve");
+    let after_all = store.stats().expect("stats").pending_relations;
+    println!("pending after a full re-resolve:            {after_all}");
+}
+
+/// Say where any relation still awaiting a decision sits, and where it came from.
+///
+/// `Pending` is the one state that answers no question in either direction: the edge was extracted
+/// and never decided, so it is neither placed nor refused. The store counts it (which is why
+/// `doctor` can report it) but a count says only that an index is holding undecided edges, not
+/// which ones — and which ones is the difference between a limit that truncated a read and a
+/// pass that was never asked to look.
+///
+/// The source's position in its own file is printed for the same reason: a resolver that reads a
+/// bounded number of entities per file leaves the relations of everything past that bound
+/// undecided, and that is a claim worth being able to check rather than infer.
+fn report_pending(store: &peek_core::store::Store, step: &str) {
+    let pending = store
+        .relations_in_state(
+            &ResolutionState::Pending {
+                evidence: Evidence::NameOnly,
+                basis: String::new(),
+            },
+            usize::MAX,
+        )
+        .expect("pending relations");
+    if pending.is_empty() {
+        return;
+    }
+
+    let mut by_source: BTreeMap<(String, String), u64> = BTreeMap::new();
+    for relation in &pending {
+        *by_source
+            .entry((
+                relation.source.path().as_str().to_owned(),
+                relation.source.qualified_name().to_owned(),
+            ))
+            .or_default() += 1;
+    }
+    println!(
+        "\n{} relation(s) still pending after {step}:",
+        pending.len()
+    );
+    // How many entities each affected file holds, so a bounded per-file read can be told apart
+    // from a set of files the pass never visited.
+    let mut per_file: BTreeMap<&str, usize> = BTreeMap::new();
+    for (path, _) in by_source.keys() {
+        if per_file.contains_key(path.as_str()) {
+            continue;
+        }
+        let Some(repo_path) = RepoPath::new(path.as_str()) else {
+            continue;
+        };
+        let found = store
+            .entities_in_file(&repo_path, usize::MAX)
+            .expect("entities in file")
+            .len();
+        per_file.insert(path.as_str(), found);
+    }
+    for ((path, source), count) in &by_source {
+        let rank = store
+            .entities_in_file(
+                &RepoPath::new(path.as_str()).expect("a stored path"),
+                usize::MAX,
+            )
+            .expect("entities in file")
+            .iter()
+            .position(|entity| entity.id().qualified_name() == source)
+            .map_or_else(|| "?".to_owned(), |at| at.to_string());
+        println!(
+            "  {count:>5}  {path} ({}) entity #{rank} of {}",
+            source,
+            per_file.get(path.as_str()).copied().unwrap_or(0)
+        );
+    }
 }
 
 /// The largest Rust file that actually contains a function.
