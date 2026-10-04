@@ -233,7 +233,7 @@ fn a_reference_edge_changes_an_answer_that_nothing_else_answers() {
     for name in ["LIMIT", "STEP"] {
         let target = entity(&store, name);
         assert_eq!(
-            target.kind,
+            target.kind(),
             EntityKind::Constant,
             "`{name}` is a constant in this fixture"
         );
