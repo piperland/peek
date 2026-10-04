@@ -2911,7 +2911,7 @@ fn a_crowded_crate_root_still_names_its_own_package() {
         "and the rung is still the author's own import: {}",
         state_of(&item)
     );
-// The counter, not the placement: this path is crate-relative, so the guess answers it even
+    // The counter, not the placement: this path is crate-relative, so the guess answers it even
     // when the package is unknown and the placement above would pass either way. What must not
     // regress is the package lookup, because a path that names *another* package is answered by
     // the table and it has nothing to offer without one.
