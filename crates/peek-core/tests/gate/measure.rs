@@ -1236,7 +1236,7 @@ fn placement_coverage(corpus: &Corpus) -> (u64, u64) {
         // A claim covers a labelled relation once per occurrence: two labels for
         // one relation and two claims for it is a match, and anything else is
         // coverage the gate does not have.
-        covered += count.min(placed.get(key).copied().unwrap_or(0));
+        covered += (*count).min(placed.get(key).copied().unwrap_or(0));
     }
     (covered, labeled)
 }
