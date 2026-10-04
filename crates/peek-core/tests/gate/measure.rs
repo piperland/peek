@@ -204,9 +204,10 @@ impl RelationRow {
     /// count are not the same defect.
     pub fn describe_decided(&self) -> String {
         format!(
-            "{} from {} names `{}` and the {} rung placed it on {}",
+            "{} from {} | {} names `{}` and the {} rung placed it on {}",
             self.kind,
-            format!("{} | {}", self.source.path, self.source.qualified_name),
+            self.source.path,
+            self.source.qualified_name,
             self.target_name,
             self.evidence,
             match &self.target {
@@ -1299,11 +1300,8 @@ pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
         for row in &rows {
             if !row.is_decided() {
                 undecided.push(format!(
-                    "{} from {} names `{}` [{}]",
-                    bind.class,
-                    format!("{} | {}", row.source.path, row.source.qualified_name),
-                    bind.name,
-                    row.state
+                    "{} from {} | {} names `{}` [{}]",
+                    bind.class, row.source.path, row.source.qualified_name, bind.name, row.state
                 ));
                 continue;
             }
