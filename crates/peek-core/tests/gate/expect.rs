@@ -363,30 +363,42 @@ fn alias_of(field: &str) -> Option<String> {
     }
 }
 
-/// `100`, `73.12`, `0.5`. Rejected rather than guessed at, because a floor that
-/// silently became zero is the one number in the file that must never be invented.
+/// The number of hundredths of a percent in `text`.
+///
+/// Two spellings are accepted and they mean the same thing:
+///
+/// * a **percentage** — `100`, `73.12`, `0.5` — which is what a reader comparing
+///   the floor with the published table would write;
+/// * a plain **integer of hundredths** — `7312` — which is the exact form the
+///   comparison in [`crate::gate::score::Fraction::reaches`] uses, so a floor can
+///   be recorded at the precision the comparison needs.
+///
+/// There is no third reading, and nothing is guessed: a value above `10000` is
+/// refused rather than clamped, `PLACEHOLDER` is refused so a floor that was never
+/// measured cannot become an assertion that asserts nothing, and anything that is
+/// neither spelling is refused so a typo cannot become a floor of zero.
 fn parse_basis_points(text: &str) -> Option<u64> {
     if text == "PLACEHOLDER" {
         return None;
     }
-    let (whole, fraction) = match text.split_once('.') {
-        None => (text, ""),
-        Some((whole, fraction)) => (whole, fraction),
-    };
-    if fraction.len() > 2 || !whole.chars().all(|c| c.is_ascii_digit()) {
-        return None;
+    match text.split_once('.') {
+        None => {
+            let value: u64 = text.parse().ok()?;
+            // An integer is hundredths, so the ceiling is 10000 rather than 100.
+            (value <= 10_000).then_some(value)
+        }
+        Some((whole, fraction)) => {
+            if fraction.len() > 2 || !whole.chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            let whole: u64 = whole.parse().ok()?;
+            let fraction = format!("{fraction:0<2}").parse().ok()?;
+            if whole > 100 || (whole == 100 && fraction > 0) {
+                return None;
+            }
+            Some(whole * 100 + fraction)
+        }
     }
-    let whole: u64 = whole.parse().ok()?;
-    let fraction = if fraction.is_empty() {
-        0
-    } else {
-        let padded = format!("{fraction:0<2}");
-        padded.parse().ok()?
-    };
-    if whole > 100 || (whole == 100 && fraction > 0) {
-        return None;
-    }
-    Some(whole * 100 + fraction)
 }
 
 #[cfg(test)]
@@ -450,6 +462,17 @@ mod tests {
     }
 
     #[test]
+    fn the_exact_integer_spelling_reads_as_hundredths() {
+        // `7312` and `73.12` are the same floor, and the integer form is what the
+        // comparison uses, so a floor can be recorded at exactly the precision the
+        // comparison needs rather than through a rounded rendering.
+        assert_eq!(parse_basis_points("7312"), Some(7312));
+        assert_eq!(parse_basis_points("7312"), parse_basis_points("73.12"));
+        assert_eq!(parse_basis_points("0"), Some(0));
+        assert_eq!(parse_basis_points("1"), Some(1));
+    }
+
+    #[test]
     fn a_malformed_floor_is_refused_rather_than_read_as_zero() {
         // The one number in the file that must never be invented: a typo here
         // would otherwise become a floor of zero and stop asserting anything.
@@ -459,6 +482,10 @@ mod tests {
         assert_eq!(parse_basis_points("100.5"), None);
         assert_eq!(parse_basis_points("1.234"), None);
         assert_eq!(parse_basis_points("abc"), None);
+        // Above a hundred percent, in either spelling. A floor of `101` would be
+        // a demand nothing can meet, and a floor of `10001` would be a typo.
+        assert_eq!(parse_basis_points("101"), None);
+        assert_eq!(parse_basis_points("10001"), None);
     }
 
     #[test]

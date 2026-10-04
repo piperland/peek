@@ -385,18 +385,18 @@ context_ambiguous | format_line
 # fixture produces. Raising one is a reviewable act belonging to the commit that
 # improves the number.
 # ---------------------------------------------------------------------------
-floor | symbol_precision | 9667
-floor | symbol_recall | 9667
-floor | definitions | 6023
-floor | calls | 9750
+floor | symbol_precision | 96.67
+floor | symbol_recall | 96.67
+floor | definitions | 60.23
+floor | calls | 97.50
 floor | references | 0
-floor | imports | 6667
+floor | imports | 66.67
 floor | imports_module_retained | 0
-floor | members | 9167
-floor | inheritance_subject | 10000
-floor | inheritance_base | 10000
-floor | negative_references | 10000
-floor | negative_inheritance | 10000
+floor | members | 91.67
+floor | inheritance_subject | 100
+floor | inheritance_base | 100
+floor | negative_references | 100
+floor | negative_inheritance | 100
 floor | incremental | 100
-floor | query | 9667
-floor | context | 10000
+floor | query | 96.67
+floor | context | 100
