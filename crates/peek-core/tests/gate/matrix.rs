@@ -7,7 +7,7 @@
 //! it, and nobody can update it without a measurement behind them.
 //!
 //! The renderer never rounds away a number and never prints one without its
-//! denominator. A cell is `0.41 (34/83)`, and a language with no specification is
+//! denominator. A cell is `40.96 (34/83)`, and a language with no specification is
 //! `not extractable` rather than a row of dashes that could be misread as a
 //! failing measurement.
 
@@ -393,7 +393,7 @@ pub fn to_markdown(rows: &[Row], generated_note: &str) -> String {
 
     out.push_str(
         "\n## How to read a number\n\n\
-         Every cell is a figure over a stated population: `0.41 (34/83)` means 34 of 83.\n\
+         Every cell is a percentage over a stated population: `40.96 (34/83)` means 34 of 83, which is 40.96%.\n\
          A language with no registered specification is written **not extractable**, which is\n\
          the state the registry's own comment promises: no spec, no extraction rules, and no\n\
          claim that anything was measured. It is not a zero, and it is not a failure — there is\n\
