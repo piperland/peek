@@ -465,11 +465,18 @@ fn a_registered_language_with_a_fixture_is_measured_on_every_dimension() {
             // dimension it exists to measure. Checked against the kinds the
             // fixture declares in that file: a relation is written inside a
             // declaration the fixture already labels.
+            //
+            // **`file` is the one kind it never labels.** A `use` statement is at
+            // file level, so an `imports` relation is written in the file entity —
+            // and the file entity is held out of the symbol denominator on
+            // purpose, because labelling a file is labelling the harness's own
+            // layout rather than the language. So `file` is allowed here for the
+            // same reason it is excluded there, and no other kind is.
+            let kinds_the_fixture_declares = corpus.symbols.iter().filter(|symbol| {
+                symbol.path == bind.path && (symbol.kind == bind.kind || bind.kind == "file")
+            });
             assert!(
-                corpus
-                    .symbols
-                    .iter()
-                    .any(|symbol| symbol.path == bind.path && symbol.kind == bind.kind),
+                kinds_the_fixture_declares.count() > 0 || bind.kind == "file",
                 "{}: `{}` places a relation in a `{}`, and the fixture labels no such \
                  declaration in `{}`",
                 language.as_str(),
