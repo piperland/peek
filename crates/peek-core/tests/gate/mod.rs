@@ -160,7 +160,7 @@ fn all_rows() -> Vec<Row> {
     for language in Language::ALL {
         match discovered()
             .into_iter()
-            .find(|(candidate, _)| candidate == &language)
+            .find(|(candidate, _)| *candidate == *language)
         {
             Some((_, directory)) => rows.push(measure_language(*language, &directory)),
             None => rows.push(Row {
