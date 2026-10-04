@@ -276,7 +276,9 @@ fn absorb(corpus: &mut Corpus, keyword: &str, fields: &[&str]) -> Result<(), Str
         ));
     }
     match keyword {
-        "symbol" => corpus.symbols.push(Key::new(fields[1], fields[2], fields[3])),
+        "symbol" => corpus
+            .symbols
+            .push(Key::new(fields[1], fields[2], fields[3])),
         "member" => corpus.members.push(Labelled {
             path: fields[1].to_owned(),
             subject: fields[2].to_owned(),
@@ -345,8 +347,9 @@ fn absorb(corpus: &mut Corpus, keyword: &str, fields: &[&str]) -> Result<(), Str
         "context_ambiguous" => corpus.ambiguous_contexts.push(fields[1].to_owned()),
         "floor" => {
             let name = fields[1].to_owned();
-            let value = parse_basis_points(fields[2])
-                .ok_or_else(|| format!("`{}` is not a hundredths-of-a-percent figure", fields[2]))?;
+            let value = parse_basis_points(fields[2]).ok_or_else(|| {
+                format!("`{}` is not a hundredths-of-a-percent figure", fields[2])
+            })?;
             if corpus.floors.insert(name.clone(), value).is_some() {
                 return Err(format!("floor `{name}` is declared twice"));
             }
@@ -526,7 +529,10 @@ mod tests {
         let problems = super::parse(peek_core::model::Language::Rust, &directory)
             .expect_err("both lines are malformed");
         assert_eq!(problems.len(), 2);
-        assert!(problems[0].message.contains("takes 4 fields"), "{problems:?}");
+        assert!(
+            problems[0].message.contains("takes 4 fields"),
+            "{problems:?}"
+        );
         assert!(
             problems[1].message.contains("takes 5 fields"),
             "{problems:?}"
@@ -547,7 +553,10 @@ mod tests {
         let problems = super::parse(peek_core::model::Language::Rust, &directory)
             .expect_err("the keyword is not in the vocabulary");
         assert_eq!(problems[0].line, 1);
-        assert!(problems[0].message.contains("unknown keyword"), "{problems:?}");
+        assert!(
+            problems[0].message.contains("unknown keyword"),
+            "{problems:?}"
+        );
         let _ = std::fs::remove_dir_all(&directory);
     }
 

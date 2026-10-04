@@ -224,10 +224,7 @@ pub fn to_json(rows: &[Row]) -> String {
             let extractable = row.measurement.is_some();
             let mut entries: Vec<(&str, Json)> = vec![
                 ("language", Json::str(row.language.as_str())),
-                (
-                    "advertised_tier",
-                    Json::str(row.language.tier().as_str()),
-                ),
+                ("advertised_tier", Json::str(row.language.tier().as_str())),
                 ("advertisable", Json::Bool(row.language.is_advertisable())),
                 ("extractable", Json::Bool(extractable)),
                 ("spec_registered", Json::Bool(row.spec().is_some())),
@@ -244,14 +241,8 @@ pub fn to_json(rows: &[Row]) -> String {
                             ("symbol_rules", Json::Num(spec.symbols.len() as u64)),
                             ("call_rules", Json::Num(spec.calls.len() as u64)),
                             ("import_rules", Json::Num(spec.imports.len() as u64)),
-                            (
-                                "inheritance",
-                                Json::Bool(spec.inheritance.is_some()),
-                            ),
-                            (
-                                "references",
-                                Json::Bool(spec.references.is_some()),
-                            ),
+                            ("inheritance", Json::Bool(spec.inheritance.is_some())),
+                            ("references", Json::Bool(spec.references.is_some())),
                             ("module_layout", Json::Bool(spec.modules.is_some())),
                         ]),
                     ));
@@ -540,19 +531,13 @@ fn index_report(report: &peek_core::indexer::IndexReport) -> Json {
         ("generation", Json::Num(report.generation)),
         ("files_indexed", Json::Num(report.files_indexed)),
         ("files_skipped", Json::Num(report.files_skipped)),
-        (
-            "files_unsupported",
-            Json::Num(report.files_unsupported),
-        ),
+        ("files_unsupported", Json::Num(report.files_unsupported)),
         ("files_degraded", Json::Num(report.files_degraded)),
         ("files_removed", Json::Num(report.files_removed)),
         ("entities_written", Json::Num(report.entities_written)),
         ("entities_removed", Json::Num(report.entities_removed)),
         ("relations_written", Json::Num(report.relations_written)),
-        (
-            "relations_undecided",
-            Json::Num(report.relations_undecided),
-        ),
+        ("relations_undecided", Json::Num(report.relations_undecided)),
         ("tests_found", Json::Num(report.tests_found)),
     ])
 }
@@ -560,8 +545,16 @@ fn index_report(report: &peek_core::indexer::IndexReport) -> Json {
 /// The relation classes worth printing, in a fixed order.
 fn classes_of_interest(states: &BTreeMap<String, BTreeMap<String, u64>>) -> Vec<String> {
     const ORDER: &[&str] = &[
-        "defines", "contains", "owns", "imports", "exports", "reexports", "references", "calls",
-        "inherits", "implements",
+        "defines",
+        "contains",
+        "owns",
+        "imports",
+        "exports",
+        "reexports",
+        "references",
+        "calls",
+        "inherits",
+        "implements",
     ];
     ORDER
         .iter()

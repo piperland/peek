@@ -182,12 +182,8 @@ impl RelationRow {
     fn evidence_of(state: &ResolutionState) -> &'static str {
         match state {
             ResolutionState::Pending { evidence, .. }
-            | ResolutionState::Resolved {
-                by: evidence, ..
-            }
-            | ResolutionState::Inferred {
-                by: evidence, ..
-            } => evidence.class(),
+            | ResolutionState::Resolved { by: evidence, .. }
+            | ResolutionState::Inferred { by: evidence, .. } => evidence.class(),
             ResolutionState::Ambiguous { .. } | ResolutionState::Unresolved { .. } => "",
         }
     }
@@ -202,12 +198,8 @@ impl RelationRow {
     fn import_of(state: &ResolutionState) -> Option<(String, Option<String>)> {
         let evidence = match state {
             ResolutionState::Pending { evidence, .. }
-            | ResolutionState::Resolved {
-                by: evidence, ..
-            }
-            | ResolutionState::Inferred {
-                by: evidence, ..
-            } => evidence,
+            | ResolutionState::Resolved { by: evidence, .. }
+            | ResolutionState::Inferred { by: evidence, .. } => evidence,
             _ => return None,
         };
         match evidence {
@@ -274,10 +266,16 @@ impl Graph {
                 graph.relations.push(row);
             }
         }
-        graph.relations.sort_by(|left, right| left.render().cmp(&right.render()));
+        graph
+            .relations
+            .sort_by(|left, right| left.render().cmp(&right.render()));
 
         for (index, row) in graph.rows.iter().enumerate() {
-            graph.by_key.entry(row.key().render()).or_default().push(index);
+            graph
+                .by_key
+                .entry(row.key().render())
+                .or_default()
+                .push(index);
             if is_a_structure_kind(&row.kind) {
                 graph.structural.insert(index);
             }
@@ -302,7 +300,11 @@ impl Graph {
             })
             .collect();
         for (index, row) in graph.rows.iter().enumerate() {
-            let key = (row.path.clone(), row.kind.clone(), row.qualified_name.clone());
+            let key = (
+                row.path.clone(),
+                row.kind.clone(),
+                row.qualified_name.clone(),
+            );
             if row.kind == "module" && contained_by_a_file.contains(&key) {
                 graph.structural.insert(index);
             }
@@ -322,7 +324,6 @@ impl Graph {
     pub fn entities(&self) -> &[EntityRow] {
         &self.rows
     }
-
 
     /// The identity a question can name, taken from the store rather than rebuilt.
     ///
@@ -450,15 +451,12 @@ pub struct Scratch {
 impl Scratch {
     pub fn new(label: &str) -> Scratch {
         let unique = SCRATCH.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "peek-gate-{}-{label}-{unique}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("peek-gate-{}-{label}-{unique}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create the scratch directory");
         Scratch { path }
     }
-
 
     /// A child of this scratch holding a copy of `from`.
     ///
@@ -511,8 +509,8 @@ pub fn install_index_root() {
     static ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
         let unique = SCRATCH.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir()
-            .join(format!("peek-gate-index-{}-{unique}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("peek-gate-index-{}-{unique}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create the index root");
         peek_core::store::paths::set_root_override(Some(root));
@@ -524,7 +522,9 @@ pub fn build(root: &Path) -> (Store, IndexReport) {
     let mut store = indexer::open_store(root).expect("open the store for the fixture copy");
     let outcome = indexer::build_full(&mut store, root, DiscoveryOptions::default())
         .expect("a full build of the fixture");
-    store.verify().expect("the index verifies after a full build");
+    store
+        .verify()
+        .expect("the index verifies after a full build");
     (store, outcome.report().clone())
 }
 
@@ -668,7 +668,13 @@ pub fn measure(
         }
     }
     let symbols = Match::of(&truth, &found);
-    record_gaps(&mut missing, &mut spurious, "symbol_precision", &truth, &found);
+    record_gaps(
+        &mut missing,
+        &mut spurious,
+        "symbol_precision",
+        &truth,
+        &found,
+    );
 
     // -- definitions --------------------------------------------------------
     // Scored over distinct identities rather than over lines: two `impl` blocks
@@ -683,10 +689,7 @@ pub fn measure(
             .map(|key| key.render())
             .collect(),
     );
-    let defined = distinct
-        .iter()
-        .filter(|key| graph.is_defined(key))
-        .count() as u64;
+    let defined = distinct.iter().filter(|key| graph.is_defined(key)).count() as u64;
 
     // -- calls --------------------------------------------------------------
     let call_truth = call_multiset(&corpus.calls);
@@ -701,7 +704,13 @@ pub fn measure(
         ));
     }
     let calls = Match::of(&call_truth, &call_found);
-    record_gaps(&mut missing, &mut spurious, "calls", &call_truth, &call_found);
+    record_gaps(
+        &mut missing,
+        &mut spurious,
+        "calls",
+        &call_truth,
+        &call_found,
+    );
 
     // -- references ---------------------------------------------------------
     // Matched on path, source qualified name and name — not on the source's kind.
@@ -769,15 +778,18 @@ pub fn measure(
         ));
     }
     let imports = Match::of(&import_truth, &import_found);
-    record_gaps(&mut missing, &mut spurious, "imports", &import_truth, &import_found);
+    record_gaps(
+        &mut missing,
+        &mut spurious,
+        "imports",
+        &import_truth,
+        &import_found,
+    );
     if import_evidenceless > 0 {
-        missing
-            .entry("imports")
-            .or_default()
-            .push(format!(
-                "{import_evidenceless} import relation(s) carry no module, because their resolution \
+        missing.entry("imports").or_default().push(format!(
+            "{import_evidenceless} import relation(s) carry no module, because their resolution \
                  state holds no evidence"
-            ));
+        ));
     }
 
     // -- imports: does the module survive resolution? -------------------------
@@ -789,14 +801,11 @@ pub fn measure(
     let mut module_retained = 0u64;
     let mut module_lost: Vec<String> = Vec::new();
     for import in &corpus.import_no_modules {
-        let bound = graph
-            .relations
-            .iter()
-            .find(|relation| {
-                relation.kind == "imports"
-                    && relation.source.path == import.path
-                    && relation.target_name == import.subject
-            });
+        let bound = graph.relations.iter().find(|relation| {
+            relation.kind == "imports"
+                && relation.source.path == import.path
+                && relation.target_name == import.subject
+        });
         match bound {
             Some(relation) if relation.module.is_some() => module_retained += 1,
             Some(relation) => module_lost.push(format!(
@@ -883,17 +892,13 @@ pub fn measure(
     // Negative controls: a type that names no base must carry no inheritance edge.
     let mut negative_inherit_violations = Vec::new();
     for control in &corpus.no_inherits {
-        let violated = graph
-            .relations
-            .iter()
-            .any(|relation| {
-                matches!(relation.kind, "inherits" | "implements")
-                    && relation.source.path == control.path
-                    && relation.source.qualified_name == control.subject
-            });
+        let violated = graph.relations.iter().any(|relation| {
+            matches!(relation.kind, "inherits" | "implements")
+                && relation.source.path == control.path
+                && relation.source.qualified_name == control.subject
+        });
         if violated {
-            negative_inherit_violations
-                .push(format!("{} | {}", control.path, control.subject));
+            negative_inherit_violations.push(format!("{} | {}", control.path, control.subject));
         }
     }
     missing.insert("negative_inheritance", negative_inherit_violations);
@@ -907,12 +912,12 @@ pub fn measure(
         dimension("imports", imports.recall()),
         dimension(
             "imports_module_retained",
-            Fraction::new(
-                module_retained,
-                corpus.import_no_modules.len() as u64,
-            ),
+            Fraction::new(module_retained, corpus.import_no_modules.len() as u64),
         ),
-        dimension("members", Fraction::new(members_matched, corpus.members.len() as u64)),
+        dimension(
+            "members",
+            Fraction::new(members_matched, corpus.members.len() as u64),
+        ),
         dimension("inheritance_subject", inheritance_subject.recall()),
         dimension("inheritance_base", inheritance_base.recall()),
         dimension(
@@ -982,13 +987,7 @@ fn labelled_multiset(labelled: &[Labelled]) -> Multiset {
 }
 
 fn render_import(path: &str, local: &str, module: &str, alias: Option<&str>) -> String {
-    format!(
-        "{}|{}|{}|{}",
-        path,
-        local,
-        module,
-        alias.unwrap_or("-")
-    )
+    format!("{}|{}|{}|{}", path, local, module, alias.unwrap_or("-"))
 }
 
 /// Name the labels the engine missed and the relations it produced that no label
@@ -1154,8 +1153,7 @@ pub fn score_context(corpus: &Corpus, store: &Store) -> (Fraction, Vec<String>) 
                 if named_expected {
                     passed += 1;
                 } else {
-                    let names: Vec<String> =
-                        pack.unit_ids().into_iter().map(render_id).collect();
+                    let names: Vec<String> = pack.unit_ids().into_iter().map(render_id).collect();
                     failures.push(format!(
                         "peek({:?}) did not name {}; it named {names:?}",
                         context.question,
@@ -1163,10 +1161,7 @@ pub fn score_context(corpus: &Corpus, store: &Store) -> (Fraction, Vec<String>) 
                     ));
                 }
             }
-            Err(error) => failures.push(format!(
-                "peek({:?}) failed: {error}",
-                context.question
-            )),
+            Err(error) => failures.push(format!("peek({:?}) failed: {error}", context.question)),
         }
     }
 

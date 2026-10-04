@@ -249,7 +249,10 @@ fn every_registered_language_meets_its_recorded_floor() {
     // state, per language and per dimension, what it does and what it does not,
     // and it has not gone backwards since the floor was recorded.
     let rows = all_rows();
-    let measured: Vec<&Row> = rows.iter().filter(|row| row.measurement.is_some()).collect();
+    let measured: Vec<&Row> = rows
+        .iter()
+        .filter(|row| row.measurement.is_some())
+        .collect();
     assert!(
         !measured.is_empty(),
         "no language has a fixture, so the gate measures nothing and every cell in the matrix \
@@ -303,7 +306,8 @@ fn the_published_matrix_is_the_current_measurement() {
         )
     });
     assert_eq!(
-        committed_markdown, markdown,
+        committed_markdown,
+        markdown,
         "{} does not match a fresh measurement; run ./scripts/language-gate.sh to regenerate it",
         markdown_path.display()
     );
@@ -316,7 +320,8 @@ fn the_published_matrix_is_the_current_measurement() {
         )
     });
     assert_eq!(
-        committed_json, json,
+        committed_json,
+        json,
         "{} does not match a fresh measurement; run ./scripts/language-gate.sh to regenerate it",
         json_path.display()
     );
@@ -380,8 +385,8 @@ fn a_registered_language_with_a_fixture_is_measured_on_every_dimension() {
     // A dimension that is measured and then omitted is a column of zeroes. The
     // dimension list, the floor file and the measurement are checked to agree.
     for (language, directory) in discovered() {
-        let corpus = expect::parse(language, &directory)
-            .unwrap_or_else(|problems| panic!("{problems:?}"));
+        let corpus =
+            expect::parse(language, &directory).unwrap_or_else(|problems| panic!("{problems:?}"));
         let missing: Vec<&str> = DIMENSIONS
             .iter()
             .copied()
@@ -418,14 +423,16 @@ fn an_incremental_refresh_leaves_nothing_undecided_and_nothing_dangling() {
         let outcome = incremental::run(&directory, language);
         for operation in &outcome.operations {
             assert_eq!(
-                operation.undecided, 0,
+                operation.undecided,
+                0,
                 "{} for {}: {}",
                 operation.name,
                 language.as_str(),
                 operation.describe()
             );
             assert_eq!(
-                operation.orphans, 0,
+                operation.orphans,
+                0,
                 "{} for {}: a refresh must demote the edges that pointed into the file it \
                  rewrote, not leave them dangling",
                 operation.name,

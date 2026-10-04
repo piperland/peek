@@ -316,7 +316,10 @@ mod tests {
         // measurement that has not moved. Found by doing exactly that.
         let measured = Fraction::new(87, 90);
         assert_eq!(measured.render(), "96.67 (87/90)");
-        assert!(!measured.reaches(9667), "the rounded rendering is not a floor");
+        assert!(
+            !measured.reaches(9667),
+            "the rounded rendering is not a floor"
+        );
         assert!(measured.reaches(9666), "the truncated value is");
     }
 
