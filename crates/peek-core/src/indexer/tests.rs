@@ -309,10 +309,18 @@ fn a_refresh_touches_only_the_file_that_changed() {
 ///
 /// The distinction is the containment edge the extractor writes from the file to the module it is,
 /// so this reads that edge rather than filtering on names: a name filter is a guess about which
-/// rows are which, and it would break the day a module is legitimately called `flags`.
+/// rows are which, and it would break the day a module is legitimately called `flags`. The file
+/// entity is spelled the way the walker spells it — path, kind, **file name**, ordinal 0 — because
+/// `EntityId` is a primary key and a file entity reached under any other spelling is not found at
+/// all, which is what an empty list here would mean.
 fn modules_in(store: &Store, path: &str) -> Vec<String> {
     let file = RepoPath::new(path).expect("valid path");
-    let file_id = EntityId::new(file.clone(), EntityKind::File, path, 0);
+    let file_id = EntityId::new(
+        file.clone(),
+        EntityKind::File,
+        file.file_name(),
+        0,
+    );
     let mut names: Vec<String> = store
         .outgoing(&file_id, Some(RelationKind::Contains), 64)
         .expect("query")
