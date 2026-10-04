@@ -376,6 +376,15 @@ fn alias_of(field: &str) -> Option<String> {
 /// clamped, `PLACEHOLDER` is refused so a floor that was never measured cannot
 /// become an assertion that asserts nothing, and anything else is refused so a typo
 /// cannot become a floor of zero.
+/// The floor a spelling declares, in hundredths of a percent.
+///
+/// Exposed so `score`'s tests can check that the floor a fraction hands out is one
+/// this accepts and can reach, which is the pairing that is easy to get wrong: a
+/// floor and a measurement are written by different hands and compared by neither.
+pub fn floor_of(text: &str) -> Option<u64> {
+    parse_basis_points(text)
+}
+
 fn parse_basis_points(text: &str) -> Option<u64> {
     if text == "PLACEHOLDER" {
         return None;

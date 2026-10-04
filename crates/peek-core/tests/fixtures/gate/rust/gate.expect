@@ -46,10 +46,18 @@
 # entities with the same path, kind and qualified name and different ordinals, so
 # two lines mean two entities and the engine is scored on how many it emits.
 #
-# `floor` is a ratchet in hundredths of a percent: `floor symbol_recall 7312` means
-# recall of 73.12%. Every floor here is a measured value rather than a target, and
-# `README.md` records the measurement each one came from. Raising one is a
-# reviewable act that belongs in the commit which improves the number.
+# `floor` is a ratchet expressed as a percentage: `floor symbol_recall 73.12`
+# means "recall must not fall below 73.12%".
+#
+# **Every floor is truncated, never rounded.** 87/90 is 96.666…%, which renders as
+# `96.67`, and a floor transcribed from that rendering asks for more than the
+# measurement is — so the gate fails on a measurement that has not changed. That is
+# what a floor is: a lower bound, and the only safe lower bound at a given precision
+# is the value rounded down. `Fraction::floor_spelling` produces these spellings.
+#
+# Every floor here is a measured value rather than a target, and `README.md` records
+# the measurement each one came from. Raising one is a reviewable act that belongs
+# in the commit which improves the number.
 #
 # Kinds are the engine's `EntityKind` spellings. An `impl` block is `module`
 # because that is what the Rust spec maps `impl_item` to, and a `mod` declaration is
@@ -385,18 +393,18 @@ context_ambiguous | format_line
 # fixture produces. Raising one is a reviewable act belonging to the commit that
 # improves the number.
 # ---------------------------------------------------------------------------
-floor | symbol_precision | 96.67
-floor | symbol_recall | 96.67
-floor | definitions | 60.23
+floor | symbol_precision | 96.66
+floor | symbol_recall | 96.66
+floor | definitions | 60.22
 floor | calls | 97.50
 floor | references | 0
-floor | imports | 66.67
+floor | imports | 66.66
 floor | imports_module_retained | 0
-floor | members | 91.67
+floor | members | 91.66
 floor | inheritance_subject | 100
 floor | inheritance_base | 100
 floor | negative_references | 100
 floor | negative_inheritance | 100
 floor | incremental | 100
-floor | query | 96.67
+floor | query | 96.66
 floor | context | 100

@@ -71,12 +71,42 @@ impl Fraction {
     /// Compared as `n * 10000 >= floor * d` in `u128`, so a floor of `100.00`
     /// means exactly "every element", and a floor is never satisfied by an empty
     /// population.
+    ///
+    /// **A floor must be truncated, never rounded.** 87/90 is 96.666…%, which
+    /// [`Self::hundredths`] renders as `96.67`, and a floor written as `96.67`
+    /// asks for more than 87/90 is — so the gate fails on a measurement that has not
+    /// changed at all. That is not a rounding curiosity: it is what a floor *is*.
+    /// A floor is a lower bound, and the only safe lower bound at a given
+    /// precision is the value rounded down.
     pub fn reaches(&self, floor_hundredths: u64) -> bool {
         if self.denominator == 0 {
             return false;
         }
         u128::from(self.numerator) * 10_000
             >= u128::from(floor_hundredths) * u128::from(self.denominator)
+    }
+
+    /// The largest floor this fraction reaches, in hundredths of a percent.
+    ///
+    /// Truncated, which is what [`Self::reaches`] needs, and exactly what a person
+    /// copying [`Self::hundredths`] into a floor file gets **wrong**. The method
+    /// exists so the floor in the file can be derived rather than transcribed.
+    pub fn truncatable_hundredths(&self) -> Option<u64> {
+        if self.denominator == 0 {
+            return None;
+        }
+        let n = u128::from(self.numerator);
+        let d = u128::from(self.denominator);
+        Some((n * 10_000 / d) as u64)
+    }
+
+    /// The floor as it must be written in an expectation file.
+    pub fn floor_spelling(&self) -> String {
+        match self.truncatable_hundredths() {
+            None => "n/a".to_owned(),
+            Some(hundredths) if hundredths == 10_000 => "100".to_owned(),
+            Some(hundredths) => format!("{}.{:02}", hundredths / 100, hundredths % 100),
+        }
     }
 
     /// `1.00 (34/83)` — the figure and its denominator, always together.
@@ -277,6 +307,48 @@ mod tests {
         assert!(third.reaches(3333));
         assert!(!third.reaches(3334));
         assert!(third.reaches(0));
+    }
+
+    #[test]
+    fn the_rounded_figure_is_not_always_a_reachable_floor() {
+        // 87/90 renders as 96.67 and *is* 96.666…, so a floor transcribed from the
+        // rendering asks for more than the measurement is and the gate fails on a
+        // measurement that has not moved. Found by doing exactly that.
+        let measured = Fraction::new(87, 90);
+        assert_eq!(measured.render(), "96.67 (87/90)");
+        assert!(!measured.reaches(9667), "the rounded rendering is not a floor");
+        assert!(measured.reaches(9666), "the truncated value is");
+    }
+
+    #[test]
+    fn the_floor_spelling_is_the_one_a_measurement_can_reach() {
+        // Derived rather than transcribed, so the two cannot drift.
+        for (value, floor) in [
+            (Fraction::new(87, 90), "96.66"),
+            (Fraction::new(53, 88), "60.22"),
+            (Fraction::new(39, 40), "97.50"),
+            (Fraction::new(10, 15), "66.66"),
+            (Fraction::new(22, 24), "91.66"),
+            (Fraction::new(29, 30), "96.66"),
+            (Fraction::new(1200, 1200), "100"),
+            (Fraction::new(0, 18), "0.00"),
+        ] {
+            assert_eq!(value.floor_spelling(), floor);
+            let parsed = super::super::expect::floor_of(&floor).expect("the spelling parses");
+            assert!(
+                value.reaches(parsed),
+                "{floor} is the floor for {} and must be reachable",
+                value.render()
+            );
+        }
+    }
+
+    #[test]
+    fn an_unmeasured_fraction_has_no_floor() {
+        let empty = Fraction::new(0, 0);
+        assert_eq!(empty.floor_spelling(), "n/a");
+        assert_eq!(empty.truncatable_hundredths(), None);
+        assert!(!empty.reaches(0));
     }
 
     #[test]

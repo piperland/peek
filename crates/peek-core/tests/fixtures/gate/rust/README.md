@@ -27,26 +27,32 @@ the figure the same run produced.
 
 | Dimension | Measured | Floor |
 |---|---|---|
-| `symbol_precision` | 96.67% (87/90) | 96.67 |
-| `symbol_recall` | 96.67% (87/90) | 96.67 |
-| `definitions` | 60.23% (53/88) | 60.23 |
+| `symbol_precision` | 96.67% (87/90) | 96.66 |
+| `symbol_recall` | 96.67% (87/90) | 96.66 |
+| `definitions` | 60.23% (53/88) | 60.22 |
 | `calls` | 97.50% (39/40) | 97.50 |
 | `references` | 0.00% (0/18) | 0.00 |
-| `imports` | 66.67% (10/15) | 66.67 |
+| `imports` | 66.67% (10/15) | 66.66 |
 | `imports_module_retained` | 0.00% (0/3) | 0.00 |
-| `members` | 91.67% (22/24) | 91.67 |
+| `members` | 91.67% (22/24) | 91.66 |
 | `inheritance_subject` | 100.00% (5/5) | 100.00 |
 | `inheritance_base` | 100.00% (5/5) | 100.00 |
 | `negative_references` | 100.00% (14/14) | 100.00 |
 | `negative_inheritance` | 100.00% (3/3) | 100.00 |
 | `incremental` | 100.00% (1200/1200) | 100.00 |
-| `query` | 96.67% (29/30) | 96.67 |
+| `query` | 96.67% (29/30) | 96.66 |
 | `context` | 100.00% (7/7) | 100.00 |
 
 A floor is a ratchet, not a target. It says "do not go below this without saying so in
-a commit". `references` and `imports_module_retained` sit at zero because that is what
-the engine measures, and a floor of zero asserts nothing about them — so the numbers
-that matter for those two are the ones in `../LANGUAGE_MATRIX.md`, not the pass.
+a commit". Two of them sit at zero because that is what the engine measures, and a
+floor of zero asserts nothing about them — so for those two the number that matters is
+the measurement, not the pass. The full table with denominators is
+`../../../LANGUAGE_MATRIX.md`, generated from the measurement.
+
+Every floor is **truncated**, so it is always reachable: 87/90 is 96.666…% and its floor
+is 96.66, not the 96.67 the rendered figure shows. That is not a quibble — it is what
+a lower bound is, and the gate found it by failing on a transcription of its own
+output.
 
 ## What the low numbers are
 
