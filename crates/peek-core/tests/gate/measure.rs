@@ -1373,7 +1373,7 @@ fn placement_coverage(corpus: &Corpus) -> (u64, u64) {
     for (class, path, subject, name) in labelled_sites(corpus) {
         labeled += 1;
         if placed
-            .get(&site_of(class, &path, &subject, &name))
+            .get(&site_of(class, path, subject, name))
             .is_some_and(|claims| *claims > 0)
         {
             covered += 1;
