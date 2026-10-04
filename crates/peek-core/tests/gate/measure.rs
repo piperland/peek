@@ -150,7 +150,7 @@ impl RelationRow {
     /// A stable identity for counting, independent of row ordering.
     pub fn render(&self) -> String {
         format!(
-            "{} from {} to {} [{}|{}|{}]",
+            "{} from {} to {} [{}|{}|{}{}]",
             self.kind,
             self.source.render(),
             if self.target_name.is_empty() {
@@ -163,6 +163,16 @@ impl RelationRow {
             match &self.target {
                 None => "<unbound>".to_owned(),
                 Some(row) => row.render(),
+            },
+            // The module and alias an import names are the whole provenance of the
+            // binding, and a state that does not hold them shows up here as
+            // nothing rather than as a wrong value — which is the finding.
+            match &self.module {
+                None => String::new(),
+                Some(module) => format!(
+                    " module={module} alias={}",
+                    self.alias.clone().unwrap_or_else(|| "-".to_owned())
+                ),
             }
         )
     }
