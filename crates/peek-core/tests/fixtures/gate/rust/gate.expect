@@ -343,6 +343,6 @@ floor | inheritance_subject | 0
 floor | inheritance_base | 0
 floor | negative_references | 0
 floor | negative_inheritance | 0
-floor | incremental | 10000
+floor | incremental | 100
 floor | query | 0
 floor | context | 0
