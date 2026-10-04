@@ -301,15 +301,28 @@ fn a_refresh_touches_only_the_file_that_changed() {
 // tests below are the cases where getting that wrong shows up as a stale row.
 // ---------------------------------------------------------------------------
 
-/// The qualified names of the module entities a file owns.
+/// The qualified names of the modules a file **is**.
+///
+/// **Not every module entity the file holds.** A `mod flags;` in `core/main.rs` is a module entity
+/// too — the declaration — and a helper that returned both would make every assertion here about
+/// the file's own place in the tree a comparison against a list with an extra name in it.
+///
+/// The distinction is the containment edge the extractor writes from the file to the module it is,
+/// so this reads that edge rather than filtering on names: a name filter is a guess about which
+/// rows are which, and it would break the day a module is legitimately called `flags`.
 fn modules_in(store: &Store, path: &str) -> Vec<String> {
-    store
-        .entities_in_file(&RepoPath::new(path).expect("valid path"), 512)
+    let file = RepoPath::new(path).expect("valid path");
+    let file_id = EntityId::new(file.clone(), EntityKind::File, path, 0);
+    let mut names: Vec<String> = store
+        .outgoing(&file_id, Some(RelationKind::Contains), 64)
         .expect("query")
         .into_iter()
-        .filter(|entity| entity.kind() == EntityKind::Module)
-        .map(|entity| entity.id.qualified_name().to_owned())
-        .collect()
+        .filter_map(|relation| relation.target)
+        .filter(|target| target.kind() == EntityKind::Module)
+        .map(|target| target.qualified_name().to_owned())
+        .collect();
+    names.sort();
+    names
 }
 
 #[test]

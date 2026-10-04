@@ -700,8 +700,13 @@ fn package_root_moves(root: &Path, paths: &[PathBuf]) -> BTreeSet<String> {
             continue;
         }
         // The *repository-relative* directory, because that is the spelling `PackageRoots` and
-        // `Store::indexed_paths` both use. An absolute parent would match nothing.
-        if let Some(relative) = relative_path(root, path).as_deref()
+        // `Store::indexed_paths` both use. An absolute parent would match nothing, and the root
+        // has to come off the *parent*: `relative_path(root, file)` answers "the file's name under
+        // the root", which is the file and not the directory holding it.
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        if let Some(relative) = relative_path(root, parent).as_deref()
             && let Some(relative) = RepoPath::from_path(relative)
         {
             directories.insert(relative.as_str().to_owned());
