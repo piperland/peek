@@ -173,9 +173,9 @@ pub fn inner() -> u32 {
     );
     assert_eq!(
         counts.get("values").copied(),
-        Some(3),
-        "the local is named by the `let`, read as the receiver of `first`, and read again as the \
-         receiver of `copied`; the reference counts are {counts:?}"
+        Some(2),
+        "the local is named by the `let` and read once as the receiver of `first`, which is the \
+         only place the source names it again; the reference counts are {counts:?}"
     );
     assert_eq!(
         counts.get("vec").copied(),
@@ -184,9 +184,9 @@ pub fn inner() -> u32 {
     );
     assert_eq!(
         counts.get("first").copied(),
-        Some(2),
-        "`values.first()` appears twice, once as the receiver of `copied` and once as the \
-         statement; the reference counts are {counts:?}"
+        Some(1),
+        "`values.first()` is written once and `copied`'s receiver is that call rather than the \
+         local; the reference counts are {counts:?}"
     );
     assert!(
         !counts.contains_key("outer"),
