@@ -254,13 +254,16 @@
 //!
 //! The measurement is specific enough to check. On `BurntSushi/ripgrep`, `crates/core/flags/defs.rs`
 //! holds 1,363 entities; a refresh of it decided 2,121 of its 3,599 relations and left **348**
-//! pending. `2,121 examined + 348 undecided = 2,469`, and that is the file's non-structural relation
-//! total — so the missing work was exactly the part outside the pass, not a class of relation the
-//! ladder declined. The lowest-ranked pending source was **#514**, one row past the bound. A second
-//! scoped refresh of that file changed nothing (348 → 348), because the bound cut the same tail off
-//! again; only [`resolve_all`] clears them, `build_full` is its only caller, and `watch` calls
-//! `refresh` — so the leak accumulated one large file at a time on exactly the operation that runs
-//! on every keystroke.
+//! pending. `2,121 examined + 348 undecided = 2,469`, which is the whole of what that pass was
+//! responsible for — the 3,599 also counts the containment edges the walker settles at extraction
+//! and no pass examines ([`is_resolvable`]). So the missing work was exactly the part outside the
+//! pass, not a class of relation the ladder declined. The lowest-ranked pending source was **#514**,
+//! one row past the bound, which is what discriminates the two explanations: a rung that declined a
+//! class of relation would not line up with the position of the bound. A second scoped refresh of
+//! that file changed nothing (348 → 348), because the bound cut the same tail off again; only
+//! [`resolve_all`] clears them, `build_full` is its only caller, and `watch` calls `refresh` — so
+//! the leak accumulated one large file at a time on exactly the operation that runs on every
+//! keystroke.
 //!
 //! The pass now **pages** that read: `all_entities_in_file` asks for one page and asks again until
 //! a page comes back short. So `entities_page` is a page size and nothing else — the size of one

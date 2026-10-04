@@ -2477,10 +2477,11 @@ fn every_decision(store: &Store) -> Vec<String> {
 fn a_file_larger_than_the_page_is_read_to_the_end_and_leaves_nothing_pending() {
     // The defect, as it was measured. On `BurntSushi/ripgrep`, `crates/core/flags/defs.rs` holds
     // 1,363 entities; a refresh of it decided 2,121 of the file's 3,599 relations and left **348**
-    // `Pending` — extracted, never placed, never refused. The lowest-ranked pending source was
-    // #514, one row past the bound of 512, and `2,121 + 348 = 2,469` is the file's non-structural
-    // relation total, so the missing work was the part outside the pass rather than a class of
-    // relation the ladder declined.
+    // `Pending` — extracted, never placed, never refused. `2,121 + 348 = 2,469` is the whole of
+    // what that pass was responsible for, and the lowest-ranked pending source was #514, one row
+    // past the bound of 512. Both halves matter: the sum says the missing work was the part outside
+    // the pass rather than a class of relation the ladder declined, and the rank says *why* — a
+    // declined class would not line up with the position of the bound.
     //
     // A second refresh of that file changed nothing (348 → 348), because the bound cut the same
     // tail off again, and only `resolve_all` clears them — which `build_full` alone calls. So the

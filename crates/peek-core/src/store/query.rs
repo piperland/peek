@@ -37,25 +37,20 @@ pub(crate) const ENTITIES_NAMED: &str =
 
 /// One page of a file's entities, starting after `after`.
 ///
-/// Two spellings because a row value cannot be built from a `NULL`: binding `NULL`s for the three
-/// cursor columns and comparing `(kind, qualified_name, entity_ordinal) > (NULL, NULL, NULL)` is
-/// never true, so a first page read that way returns nothing at all. The cursor-free form is
-/// therefore the whole of [`Store::entities_in_file_after`] with `after = None`, which is what makes
-/// "page until the page comes back short" a loop over two statements rather than over one.
+/// A second statement rather than one statement with a nullable cursor: binding `NULL`s for the
+/// three cursor columns and comparing `(kind, qualified_name, entity_ordinal) > (NULL, NULL, NULL)`
+/// is never true, so a first page read that way would return nothing at all. Two statements also
+/// keeps the first-page read — the one every caller makes and most callers make only once — on the
+/// cheaper path, with a fixed parameter list and no per-read allocation.
 ///
 /// The row-value comparison is what keeps this an index range rather than a scan: the primary key
 /// is `(path, kind, qualified_name, entity_ordinal)`, so `path = ?1` fixes the leading column and
 /// the row value bounds the trailing three, and `LIMIT` stops the walk inside the index. The
 /// query-plan test in `store::tests` pins that, because a page read that degrades to a scan turns
 /// a linear walk into a quadratic one and nothing else in the build would notice.
-pub(crate) fn entities_in_file_after_sql(cursor: bool) -> String {
-    match cursor {
-        false => ENTITIES_IN_FILE.to_owned(),
-        true => "WHERE path = ?1 AND (kind, qualified_name, entity_ordinal) > (?2, ?3, ?4) \
-                 ORDER BY kind, qualified_name, entity_ordinal LIMIT ?5"
-            .to_owned(),
-    }
-}
+pub(crate) const ENTITIES_IN_FILE_AFTER: &str =
+    "WHERE path = ?1 AND (kind, qualified_name, entity_ordinal) > (?2, ?3, ?4) \
+     ORDER BY kind, qualified_name, entity_ordinal LIMIT ?5";
 
 /// Every entity owning `qualified_name`, ordered so `LIMIT` stops inside its index.
 pub(crate) const ENTITIES_WITH_QUALIFIED_NAME: &str =
@@ -150,15 +145,20 @@ impl Store {
         path: &RepoPath,
         limit: usize,
     ) -> Result<Vec<Entity>, StoreError> {
-        self.entities_in_file_after(path, None, limit)
+        self.entities_where(
+            ENTITIES_IN_FILE,
+            params![path.as_str(), limit_value(limit)],
+            "entities_in_file",
+        )
     }
 
     /// Fetch one page of the entities declared in one file, in identity order, strictly after
     /// `after`.
     ///
     /// `after` is the exclusive lower bound of the page, so a caller walks a file by handing back
-    /// the last row of each page. `None` starts at the first entity, which makes this the same
-    /// read [`Store::entities_in_file`] performs — same statement, same index, same order.
+    /// the last row of each page. `None` starts at the first entity, which is exactly the read
+    /// [`Store::entities_in_file`] performs — it is dispatched straight there rather than through
+    /// this method's own statement, so a caller that never pages pays nothing for the capability.
     ///
     /// This is the paging primitive, and it exists because the store has no cursor and the
     /// alternative to paging was truncation. Every other read here is bounded by one `LIMIT` and a
@@ -175,23 +175,25 @@ impl Store {
         after: Option<&EntityId>,
         limit: usize,
     ) -> Result<Vec<Entity>, StoreError> {
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(path.as_str().to_owned())];
-        if let Some(after) = after {
-            if after.path() != path {
-                return Err(StoreError::Query(format!(
-                    "entities_in_file_after: the cursor is from {} but the page is from {}",
-                    after.path().as_str(),
-                    path.as_str()
-                )));
-            }
-            params.push(Box::new(row::kind_to_sql(after.kind())?));
-            params.push(Box::new(after.qualified_name().to_owned()));
-            params.push(Box::new(i64::from(after.ordinal())));
+        let Some(after) = after else {
+            return self.entities_in_file(path, limit);
+        };
+        if after.path() != path {
+            return Err(StoreError::Query(format!(
+                "entities_in_file_after: the cursor is from {} but the page is from {}",
+                after.path().as_str(),
+                path.as_str()
+            )));
         }
-        params.push(Box::new(limit_value(limit)));
         self.entities_where(
-            &entities_in_file_after_sql(after.is_some()),
-            rusqlite::params_from_iter(params),
+            ENTITIES_IN_FILE_AFTER,
+            params![
+                path.as_str(),
+                row::kind_to_sql(after.kind())?,
+                after.qualified_name(),
+                i64::from(after.ordinal()),
+                limit_value(limit),
+            ],
             "entities_in_file_after",
         )
     }

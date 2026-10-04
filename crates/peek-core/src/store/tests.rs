@@ -18,8 +18,8 @@ use crate::model::relation::{Evidence, Relation, RelationKind, ResolutionState, 
 use crate::model::span::Span;
 
 use super::query::{
-    ENTITIES_IN_FILE, ENTITIES_NAMED, ENTITIES_WITH_QUALIFIED_NAME, ENTITY_BY_ID,
-    entities_in_file_after_sql, incoming_sql, outgoing_sql, relations_in_state_sql,
+    ENTITIES_IN_FILE, ENTITIES_IN_FILE_AFTER, ENTITIES_NAMED, ENTITIES_WITH_QUALIFIED_NAME,
+    ENTITY_BY_ID, incoming_sql, outgoing_sql, relations_in_state_sql,
 };
 use super::row::ENTITY_COLUMNS;
 use super::{Durability, IndexUpdate, RepoId, SCHEMA_VERSION, Store, StoreError, schema};
@@ -1095,10 +1095,7 @@ fn a_paged_file_listing_is_still_an_index_range() {
     let store = open(&dir);
     let plan = plan_of(
         &store,
-        &format!(
-            "SELECT {ENTITY_COLUMNS} FROM entity {}",
-            entities_in_file_after_sql(true)
-        ),
+        &format!("SELECT {ENTITY_COLUMNS} FROM entity {ENTITIES_IN_FILE_AFTER}"),
     );
     assert!(plan.contains("USING INDEX"), "plan: {plan}");
     assert!(plan.contains("sqlite_autoindex_entity_1"), "plan: {plan}");
