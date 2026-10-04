@@ -121,9 +121,12 @@
 //! then the local name an import binds, and R1 is the rung that knows which file it came from.
 //! [`Resolver::via_imported_receiver`] is the whole of that hand-off.
 //!
-//! Turning a module path into a file is [`Resolver::module_files`] — the module table first, the
-//! path guess as its fallback — and the guess's limits are documented at [`files_for_module`]
-//! because they are real.
+//! Turning a module path into a file is [`Resolver::module_files`], and it asks **both** routes —
+//! the module table and the path guess — because a controlled comparison across five repositories
+//! found that the table is worth +2.5pp of resolved relations on one and -1.1pp on another, the
+//! difference being cross-package reach against intra-crate displacement. [`module_files`] states
+//! the rule and the limits of the guess are documented at [`files_for_module`] because they are
+//! real.
 //!
 //! ## R2 — receiver
 //!
@@ -493,11 +496,115 @@ pub fn rung_name(evidence: &Evidence) -> &'static str {
     }
 }
 
+/// What one module lookup did.
+///
+/// The inputs [`Resolver::module_files`] has, kept as a record rather than as arguments to five
+/// counters, so that the classification is written once. `blind` and `misspelled` are only
+/// meaningful for a lookup the table got wrong, and are only counted there.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ModuleFileLookup {
+    /// How many qualified names the table was asked for.
+    asked: usize,
+    /// Whether the table named a file.
+    table_answered: bool,
+    /// How many files the guess added that the table had not named.
+    added: usize,
+    /// The table named nothing, and an added file carries no `Module` row at all.
+    blind: bool,
+    /// The table named nothing, and an added file's `Module` rows are all named by qualified names
+    /// the lookup did not ask for.
+    misspelled: bool,
+}
+
+/// How the module table and the path guess compared, counted over one pass.
+///
+/// **This exists because the recorded measurement said what the table was worth and not why it was
+/// worth less than it looked.** The intra-crate regressions were attributed to "the table's answer
+/// displaces a guess that was working", which is an observation about which rung won and not a
+/// mechanism: the table can miss a file because the index holds no row for it, because the row is
+/// named by a spelling the lookup never tried, or because the seek for a spelling it did try
+/// returned nothing — and those have nothing in common with each other and very much in common with
+/// each other's fixes. A number per outcome separates them; prose does not.
+///
+/// The two sub-counts are of the `guess_only` lookups and are **not** exhaustive: a lookup in which
+/// every added file carries a `Module` row the lookup did ask for is neither, and
+/// `guess_only - blind - misspelled` is that remainder. A non-zero remainder is a finding rather
+/// than a category: it means the lookup asked for a name the index holds and the seek did not find
+/// it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ModuleFileReport {
+    /// Qualified-name seeks the table was asked for, which is one indexed lookup each.
+    pub asked: u64,
+    /// Lookups where the table named a file and the guess added nothing.
+    pub table_only: u64,
+    /// Lookups where the table named nothing and the guess named at least one file.
+    pub guess_only: u64,
+    /// Lookups where the table named a file and the guess added at least one it had not named.
+    pub disagreed: u64,
+    /// Lookups where neither route named a file.
+    pub neither: u64,
+    /// Of [`Self::guess_only`], the ones where an added file has no `Module` row for the table to
+    /// find. A language with no module layout, or a file this build did not extract.
+    pub guess_only_blind: u64,
+    /// Of [`Self::guess_only`], the ones where every added file's `Module` rows are named by
+    /// qualified names the lookup did not ask for — the spelling, not the index, is what missed.
+    pub guess_only_misspelled: u64,
+}
+
+impl ModuleFileReport {
+    /// Lookups of any kind, so a reader can divide one count by the total.
+    pub fn lookups(&self) -> u64 {
+        self.table_only + self.guess_only + self.disagreed + self.neither
+    }
+
+    /// A one-line summary for [`ResolutionReport::summary`], empty when there is nothing to say.
+    fn clause(&self) -> String {
+        let lookups = self.lookups();
+        if lookups == 0 {
+            return String::new();
+        }
+        let remainder = self
+            .guess_only
+            .saturating_sub(self.guess_only_blind)
+            .saturating_sub(self.guess_only_misspelled);
+        format!(
+            ", module files: {lookups} lookup(s) and {asked} seek(s), table {table}, \
+             guess {guess}, both {both}, neither {neither}; of the guess-only, {blind} with no \
+             module row and {misspelled} misspelled and {remainder} asked for and missed",
+            lookups = lookups,
+            asked = self.asked,
+            table = self.table_only,
+            guess = self.guess_only,
+            both = self.disagreed,
+            neither = self.neither,
+            blind = self.guess_only_blind,
+            misspelled = self.guess_only_misspelled,
+        )
+    }
+
+    /// Record one lookup.
+    fn record(&mut self, lookup: ModuleFileLookup) {
+        self.asked += lookup.asked as u64;
+        match (lookup.table_answered, lookup.added) {
+            (true, 0) => self.table_only += 1,
+            (true, _) => self.disagreed += 1,
+            (false, 0) => self.neither += 1,
+            (false, _) => self.guess_only += 1,
+        }
+        if lookup.blind {
+            self.guess_only_blind += 1;
+        }
+        if lookup.misspelled {
+            self.guess_only_misspelled += 1;
+        }
+    }
+}
+
 /// What one resolution pass did, measured.
 ///
 /// Every number here is counted. A number that cannot be counted is not reported, because a
-/// plausible zero is how the predecessor's `explain()` came to describe an empty caller list as
-/// a fact.
+/// plausible zero is how the predecessor's `explain()` came to describe an empty caller list as a
+/// fact.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolutionReport {
     /// Relations the pass looked at.
@@ -554,6 +661,16 @@ pub struct ResolutionReport {
     pub committed: bool,
     /// The store generation after the pass.
     pub generation: u64,
+    /// How the module table and the path guess compared over the pass.
+    ///
+    /// Reported because the two routes are asked about the same question on every import, only one
+    /// of them used to answer, and a reader cannot otherwise tell which one did. **It is a pass
+    /// total and not a per-relation record**: a relation carries the rung that placed it and not the
+    /// lookup that located the file, and `Evidence::ImportBinding` has room for the module as
+    /// written and no field for a file set. Adding one is a change to `model::Evidence` and to the
+    /// stored `resolution_json` on every decided relation, which is a wider contract change than
+    /// this one is.
+    pub module_files: ModuleFileReport,
 }
 
 impl ResolutionReport {
@@ -610,6 +727,7 @@ impl ResolutionReport {
                 0 => String::new(),
                 other => format!(", {other} lookup(s) truncated at a bound"),
             },
+            self.module_files.clause(),
         )
     }
 }
@@ -784,6 +902,10 @@ struct Resolver<'s> {
     files: BTreeMap<RepoPath, Arc<Vec<crate::model::Entity>>>,
     /// Lookups abandoned at a limit, carried into the report rather than hidden.
     truncated: u64,
+    /// How the table and the guess compared, read out into the report at the end of the pass for the
+    /// same reason `truncated` is: a counter owned by the resolver and read out of the scope that
+    /// owns it cannot be forgotten at the point of construction and silently report zero.
+    module_files: ModuleFileReport,
 }
 
 impl<'s> Resolver<'s> {
@@ -794,6 +916,7 @@ impl<'s> Resolver<'s> {
             imports: BTreeMap::new(),
             files: BTreeMap::new(),
             truncated: 0,
+            module_files: ModuleFileReport::default(),
         }
     }
 
@@ -1088,51 +1211,170 @@ impl<'s> Resolver<'s> {
         Ok(found)
     }
 
-    /// The files a module path could name, asked of the module table first.
+    /// The files a module path could name: the module table's answer, and the path guess's.
     ///
-    /// The extractor now writes a `Module` entity for every file it reads, with a qualified name
-    /// that is the path from the package's source root. That turns "which file does `alpha::gateway`
+    /// The extractor writes a `Module` entity for every file it reads, with a qualified name that
+    /// is the path from the package's source root. That turns "which file does `alpha::gateway`
     /// name" from a question answered by guessing at paths — a handful of primary-key seeks per
     /// anchor, per reading, with no way to cross a package boundary — into **one indexed seek** on
     /// `entities_with_qualified_name`.
     ///
-    /// The guess is kept as a fallback, not deleted. A module table only covers files this build
-    /// extracted, so a repository that is partly indexed, or a language whose layout the extractor
-    /// does not yet know, still needs the old path. Order matters: the table is asked first
-    /// because it is exact, and a hit from it is a `Resolved` answer rather than a guess.
+    /// ## Why both are asked, which is a change and not a symmetry
     ///
-    /// [`ResolutionOptions::use_module_table`] turns the table off, which is how the two arms of
-    /// the measurement in `.agent/EVIDENCE/MULTI-REPO-SPREAD.md` come out of one build.
+    /// This used to return the table's answer *instead of* the guess's whenever the table answered
+    /// at all, on the reasoning that the table is exact and a guess is not. The controlled
+    /// comparison in `.agent/EVIDENCE/MODULE-TABLE.md` measured that policy across five
+    /// repositories and found the reasoning wrong in a way that was not visible from any single
+    /// repository: the table is worth **+2.5pp** of resolved relations on `rust-lang/cargo` and
+    /// **-1.1pp** on `serde-rs/serde`, and the split is monotone in the count of cross-package
+    /// references. Its value is cross-package reach, and its cost is on the intra-crate references
+    /// it is consulted about anyway — `module_qualified_names` strips `crate` and `self`, so the
+    /// table is asked about *every* intra-crate import, and the answer it gave there displaced a
+    /// guess that was working. On ripgrep 243 intra-crate proofs were lost that way, and 197 of
+    /// them fell to `unique_name`, the one rung that can only claim.
     ///
-    /// `super::` is the one shape the table answers better than the guess did, because a relative
-    /// climb is defined in terms of the *importer's own module*, which the table knows and the
-    /// guess had to infer from the directory name.
+    /// **The rule, then, is both, with the importer's own directory tree as the conflict rule:**
+    ///
+    /// 1. **The table answers first**, and everything it names is kept. It is exact, and a file it
+    ///    names is a file the index already says this module path is written in.
+    /// 2. **The guess is consulted only while the table's answer is a file the guess could have
+    ///    named too.** [`files_for_module`] is a pure function of the module path and the
+    ///    importer's directory: it joins the module's segments onto that directory and each of its
+    ///    ancestors, so every path it can produce lies inside the importer's own tree. A file it
+    ///    cannot produce is therefore a file outside that tree, and a module path that lands there
+    ///    is a **cross-package** path — the one shape the guess has never been able to answer, at
+    ///    any anchor depth, because `src` is not a segment of a module path. So the check is
+    ///    `files ⊆ guess_paths`, which costs nothing: the guess's paths are computed anyway, and no
+    ///    read, no package identity and no heuristic is involved.
+    /// 3. **Otherwise the guess's paths are added**, minus the ones already found and minus the
+    ///    ones the index does not hold. Dropping a path that is not indexed cannot lose anything,
+    ///    because a candidate is an entity and there are none in a file the index does not have.
+    /// 4. **Two files from either route are an `Ambiguous`**, which is the rule every rung in this
+    ///    file already applies to two equally supported candidates (D-0004) and is not a new
+    ///    invention here.
+    ///
+    /// Step 3 is the whole of the change and it is deliberately the narrowest form of "try both"
+    /// that keeps the wins. Step 4 is why this is not "the table's answer and, failing that, the
+    /// guess's": a union with a *pick* between them would have to say which file is the real one,
+    /// and neither route is in a position to say so — the table is a spelling and the guess is a
+    /// directory. Reporting both is a result; picking one is a guess wearing the table's clothes.
+    ///
+    /// **Why the tree and not the package.** A package is not a thing this function can read: the
+    /// package of a file is a per-file approximation the extractor takes from the directory above
+    /// its source root, and a file's entities hold several namespace rows — its own module, every
+    /// inline `mod`, and a row per `impl` block — so "which row is the file's own" is a question
+    /// with no cheap exact answer here. The tree is the same boundary stated in the one currency
+    /// this function already has, and it is *tighter*: a file in another package is outside the
+    /// importer's directory chain by construction, whereas a file in the same package is inside it.
+    ///
+    /// **What the losing candidate is good for, stated so this is not read as "the table wins".**
+    /// The guess is the only route that can express `super::`, which is a climb defined against
+    /// the *importer's own module* and which [`Resolver::module_qualified_names`] declines to
+    /// answer at all. And it is the only route that finds a file the table's own naming cannot
+    /// spell the way the import needs: a binary target, an integration test, an example, or a
+    /// package at the checkout root is given a package name derived from its stem or from the
+    /// directory above its source root, and no `use` statement ever writes that. Those are the
+    /// intra-crate files the table displaced, and step 3 gives them back.
+    ///
+    /// [`ResolutionOptions::use_module_table`] turns the whole of this off, which is how the two
+    /// arms of the measurement come out of one build. **The off arm is
+    /// [`files_for_module`] alone, exactly as it was** — not the same union with the table part
+    /// removed — because a baseline that moves is not a baseline, and the recorded per-rung figures
+    /// were read against it.
     fn module_files(
         &mut self,
         module: &str,
         importer: &RepoPath,
         strip_last: bool,
     ) -> Result<Vec<RepoPath>, StoreError> {
-        let mut via_table = Vec::new();
-        if self.options.use_module_table {
-            for qualified in self.module_qualified_names(module, importer, strip_last) {
-                for entity in self
-                    .store
-                    .entities_with_qualified_name(&qualified, self.options.modules_per_lookup)?
-                {
-                    if entity.kind() == EntityKind::Module {
-                        let path = entity.path().clone();
-                        if !via_table.contains(&path) {
-                            via_table.push(path);
-                        }
-                    }
+        if !self.options.use_module_table {
+            return Ok(files_for_module(module, importer, strip_last));
+        }
+
+        // The importer's own package, so `crate::a::b` becomes `package::a::b`. Taken from the
+        // module entity for the importing file, which is the only place the package name is
+        // recorded — a directory name would be a guess, and a guess here is what produced
+        // `no_candidate` for 343 of 344 edges on a real cross-crate repository. Read once and
+        // shared by both spellings, because both routes are asked the same question about the same
+        // path.
+        let package = self.package_of(importer);
+
+        let mut asked: Vec<String> = Vec::new();
+        let mut files: Vec<RepoPath> = Vec::new();
+        for qualified in self.module_qualified_names(module, package.as_deref(), strip_last) {
+            asked.push(qualified.clone());
+            for entity in self
+                .store
+                .entities_with_qualified_name(&qualified, self.options.modules_per_lookup)?
+            {
+                if entity.kind() == EntityKind::Module {
+                    push_new(&mut files, entity.path().clone());
                 }
             }
         }
-        if !via_table.is_empty() {
-            return Ok(via_table);
+
+        // The guess's paths, and step 2. Pure, so it is computed once and costs nothing to test.
+        let guess_paths = files_for_module(module, importer, strip_last);
+        let table_answered = !files.is_empty();
+        let within_the_tree = files.iter().all(|path| guess_paths.contains(path));
+        if table_answered && !within_the_tree {
+            self.module_files.record(ModuleFileLookup {
+                asked: asked.len(),
+                table_answered,
+                added: 0,
+                blind: false,
+                misspelled: false,
+            });
+            return Ok(files);
         }
-        Ok(files_for_module(module, importer, strip_last))
+
+        // Step 3. The path is inside the importer's own tree — or the table had nothing to say
+        // about it — so the guess has something to add and cannot reach anything the table should
+        // have answered instead.
+        let mut added: Vec<RepoPath> = Vec::new();
+        let mut blind = false;
+        let mut misspelled = false;
+        for path in guess_paths {
+            if files.contains(&path) {
+                continue;
+            }
+            // A path the index does not hold can never contribute a candidate, and it is the
+            // overwhelming majority of what the guess produces: a three-segment path from a file
+            // four directories down is a dozen anchors of which at most one exists. The read is
+            // cached and `targets_of` would have made the same one, so this costs no lookup the
+            // guess-only arm did not already pay.
+            let entities = self.entities_in_file(&path)?;
+            if entities.is_empty() {
+                continue;
+            }
+            // Which of the ways the table can miss a file the guess found, counted rather than
+            // guessed at: the file has no namespace row the lookup could have hit, or it has rows
+            // and none of their qualified names is one the lookup asked for. Neither of those is
+            // a fact about the *index* — both are facts about the *spelling*, which is the thing
+            // the intra-crate regressions were never explained by.
+            let named: Vec<&str> = entities
+                .iter()
+                .filter(|entity| entity.kind() == EntityKind::Module)
+                .map(|entity| entity.id.qualified_name())
+                .collect();
+            if !named.is_empty() {
+                misspelled |= !named
+                    .iter()
+                    .any(|name| asked.iter().any(|qualified| qualified == name));
+            } else {
+                blind = true;
+            }
+            added.push(path);
+        }
+        self.module_files.record(ModuleFileLookup {
+            asked: asked.len(),
+            table_answered,
+            added: added.len(),
+            blind: blind && !table_answered,
+            misspelled: misspelled && !table_answered,
+        });
+        files.extend(added);
+        Ok(files)
     }
 
     /// The qualified names a module path could have, in the order they should be tried.
@@ -1142,10 +1384,14 @@ impl<'s> Resolver<'s> {
     /// named from the package root, so `crate::a::b` is `package::a::b` and the leading `crate`
     /// has no counterpart. `super` is a climb, which only the path guess can express, so a path
     /// that contains one is left to the guess entirely rather than being half-answered.
+    ///
+    /// `package` is passed rather than read here so that one lookup answers it for both routes,
+    /// and `&str` rather than `&RepoPath` because the guess's inputs and the table's inputs are
+    /// different things and this one needs only the first segment of a qualified name.
     fn module_qualified_names(
         &self,
         module: &str,
-        importer: &RepoPath,
+        package: Option<&str>,
         strip_last: bool,
     ) -> Vec<String> {
         if module.split("::").any(|part| part == "super") {
@@ -1158,12 +1404,6 @@ impl<'s> Resolver<'s> {
         if segments.is_empty() || segments.len() > MAX_MODULE_SEGMENTS {
             return Vec::new();
         }
-
-        // The importer's own package, so `crate::a::b` becomes `package::a::b`. Taken from the
-        // module entity for the importing file, which is the only place the package name is
-        // recorded — a directory name would be a guess, and a guess here is what produced
-        // `no_candidate` for 343 of 344 edges on a real cross-crate repository.
-        let package = self.package_of(importer);
 
         let mut readings: Vec<Vec<&str>> = vec![segments.clone()];
         if strip_last && segments.len() > 1 {
@@ -1186,11 +1426,9 @@ impl<'s> Resolver<'s> {
             // cost a wrong answer, because a hit has to be a `Module` entity and the caller
             // re-checks the target's own name — but it does cost a lookup, so the reading that is
             // more likely correct goes first.
-            let mut with_package: Vec<String> = Vec::new();
-            if let Some(package) = &package {
-                with_package.push(package.clone());
-            }
-            with_package.extend(reading.iter().map(|part| (*part).to_owned()));
+            let mut with_package: Vec<&str> = Vec::with_capacity(reading.len() + 1);
+            with_package.extend(package);
+            with_package.extend(reading.iter().copied());
             for candidate in [with_package.join("::"), reading.join("::")] {
                 if !qualified.contains(&candidate) {
                     qualified.push(candidate);
@@ -1205,6 +1443,13 @@ impl<'s> Resolver<'s> {
     /// `None` when the file is not in the index or has no module, in which case the qualified name
     /// is tried without a package prefix — which is exactly how a non-workspace repository spells
     /// it, so this is a fallback that is right rather than a degraded mode.
+    ///
+    /// **Left reading the store directly rather than through [`Resolver::entities_in_file`], on
+    /// purpose.** The cache returns a file's entities ordered for a name lookup and read to the
+    /// end; this reads the first [`ResolutionOptions::modules_per_lookup`] of them. That is a
+    /// different list, it can name a different namespace row, and every qualified name the table is
+    /// ever asked for is built from what this returns. Saving one bounded seek is not worth moving
+    /// the spellings the recorded measurements were taken with.
     fn package_of(&self, importer: &RepoPath) -> Option<String> {
         let entity = self
             .store
@@ -2141,6 +2386,7 @@ fn decide_and_commit(
         // Read out of the scope that owns the resolver, so the counter cannot be forgotten at
         // the point of construction and silently report zero.
         report.truncated = resolver.truncated;
+        report.module_files = resolver.module_files;
     }
 
     if !update.is_empty() {
