@@ -175,7 +175,19 @@ for slug_dir in "$OUT"/*.log; do
   [ -e "$slug_dir" ] || continue
   slug=$(basename "$slug_dir" .log | tr "__" "/")
   grep -q "^orphans: *0$" "$slug_dir" || { echo "  ORPHANS: $slug"; failures=$((failures+1)); }
-  grep -q "^pending: *0$" "$slug_dir" || { echo "  PENDING REMAINS: $slug"; failures=$((failures+1)); }
+  # **Every `pending:` line, not the first.** The probe prints one after each step it takes — a full
+  # build, an incremental refresh, a deletion, a restore — and an earlier version of this check
+  # asked only whether *some* line read `pending: 0`. The build's line did, so the check passed on
+  # runs whose refresh had left 348 relations extracted and never decided, on both arms. A check that
+  # reads the index before the operations it is about cannot see the state those operations create,
+  # and a probe that passes because it looked too early is worse than no probe, because it is
+  # evidence.
+  stale=$(grep -cE '^pending: *[1-9]' "$slug_dir" || true)
+  if [ "$stale" -ne 0 ]; then
+    echo "  PENDING REMAINS: $slug"
+    grep -E '^pending: *[1-9]' "$slug_dir" | sed 's/^/    /'
+    failures=$((failures+1))
+  fi
   grep -q "integrity_check: ok" "$slug_dir" || { echo "  INTEGRITY: $slug"; failures=$((failures+1)); }
   # A repository that indexes 0 relations proves nothing about traversal, so treat it as suspect
   # rather than as a pass.
