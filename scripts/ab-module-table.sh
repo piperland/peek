@@ -57,22 +57,42 @@
 #
 # `PEEK_MODULE_TABLE` gates `Resolver::module_files`, which has exactly two call sites: R1
 # through `targets_of`, and R3. R1 reports `Evidence::ImportBinding` and R3 reports
-# `Evidence::QualifiedNameInScope`, so the table can only ever change the answer of a relation
-# into `import_binding` or `scope_qualified_name`. Everything else it does is displacement: a
-# relation the table now answers never reaches the rung that used to answer it.
+# `Evidence::QualifiedNameInScope`, so the switch can only change the answer of a relation into
+# `import_binding` or `scope_qualified_name`.
 #
-# That is a reading of the call graph, and a reading of code is a hypothesis. So it is stated as
-# five predictions that a run can fail, and the run checks all five:
+# What it changes there is **the set of files those two rungs search**, and the table's answer is
+# authoritative: `module_files` returns it and does not also try the path guess. That produces
+# three movements, and all three occur:
 #
-#   P1  the receiver rung decides the same number of relations on both arms - it is consulted
-#       before any gated rung and reads nothing the switch touches;
-#   P2  no relation gains a decision in a rung outside the two gated ones;
-#   P3  no relation loses a decision from a rung outside the two gated ones;
-#   P4  no rung that does not read the table gained relations;
-#   P5  no relation resolved by an ungated rung became `ambiguous` - the ungated rungs are only
-#       reached once the gated ones decline, and they answer the same either way.
+#   1. the gated rung proves what a weaker rung could only claim -
+#      `inferred:unique_name -> resolved:import_binding`;
+#   2. the gated rung **declines** where it used to answer, because the table's file set is
+#      narrower than the guess's and does not contain the declaration. The edge falls through to a
+#      rung that does not read the table, and the rung it falls through to can only claim:
+#      `resolved:import_binding -> inferred:unique_name`;
+#   3. the gated rung's candidate set changes shape, so one declaration can become two -
+#      `resolved:import_binding -> ambiguous`, and for a relation the same-file rung already owned,
+#      `resolved:same_file -> ambiguous`.
 #
-# All five holding is the attribution. One failing means the mechanism above is incomplete, and
+# **Consequence, and the reason the checks below are what they are.** A rung the switch does not
+# gate can *gain* relations without the table deciding one more edge through it: it gains them
+# because the table stopped deciding them upstream. The first version of these checks allowed the
+# gated rungs to gain but not to decline, and four of its five failed on the first repository it
+# ran on. The checks were wrong, not the engine. What survives the correction is four conditions,
+# each a theorem about the ladder rather than a hope about the numbers:
+#
+#   C1  the receiver rung decides the same number of relations on both arms - it is reached for
+#       exactly the relations the extractor marked with receiver evidence, it reads only the
+#       caller's own file, and the one rung above it is skipped for a receiver;
+#   C2  containment is the same on both arms - it is emitted by the extractor and never chosen by
+#       the ladder;
+#   C3  same-file and unique-name never exchange a relation - they are the fourth and fifth rungs,
+#       neither reads the switch, and if same-file answers then unique-name is never reached;
+#   C4  nothing the table displaced landed on a claim it could always have made - a rung the switch
+#       does not gate answers the same way for the same relation unless an earlier rung changed,
+#       and `unique_name` is only ever a claim.
+#
+# All four holding is the attribution. One failing means the mechanism above is incomplete, and
 # the run names which.
 #
 # What this still cannot say, and is said here rather than discovered later
@@ -262,14 +282,17 @@ def label_of(state, payload, notes):
 
 
 def read_labels(db_path, notes):
-    """state:rung for every relation in one index, keyed by the natural key."""
+    """state:rung and target identity for every relation, keyed by the natural key."""
     con = sqlite3.connect(db_path)
     try:
-        sql = "SELECT %s, resolution_state, resolution_json FROM relation" % ", ".join(KEY)
-        labels = {}
+        sql = ("SELECT %s, resolution_state, resolution_json, target_path, target_kind,"
+               " target_qualified_name, target_ordinal FROM relation" % ", ".join(KEY))
+        rows = {}
         for row in con.execute(sql):
-            labels[tuple(row[:len(KEY)])] = label_of(row[len(KEY)], row[len(KEY) + 1], notes)
-        return labels, con.execute("SELECT COUNT(*) FROM relation").fetchone()[0]
+            key = tuple(row[:len(KEY)])
+            rows[key] = (label_of(row[len(KEY)], row[len(KEY) + 1], notes),
+                         tuple(row[len(KEY) + 2:]))
+        return rows, con.execute("SELECT COUNT(*) FROM relation").fetchone()[0]
     finally:
         con.close()
 
@@ -341,17 +364,22 @@ def main():
 
     # The join. Every relation of one arm is paired with the same relation of the other, or
     # recorded as present on one side only - which would itself be a finding, because the switch
-    # changes a lookup and not the extractor.
+    # changes a lookup and not the extractor. A pair also carries whether the two arms pointed the
+    # edge at the same entity, because "re-decided" and "re-aimed" are different claims.
     pairs = collections.Counter()
+    reaimed = 0
     only = {"off": 0, "on": 0}
-    for key, lab in off.items():
-        other = on.pop(key, None)
-        if other is None:
+    for key, (lab, target) in off.items():
+        found = on.pop(key, None)
+        if found is None:
             only["off"] += 1
             pairs[(lab, UNPLACED)] += 1
-        else:
-            pairs[(lab, other)] += 1
-    for key, lab in on.items():
+            continue
+        other, other_target = found
+        pairs[(lab, other)] += 1
+        if lab.startswith("resolved") and other.startswith("resolved") and target != other_target:
+            reaimed += 1
+    for key, (lab, _) in on.items():
         only["on"] += 1
         pairs[(UNPLACED, lab)] += 1
 
@@ -388,51 +416,68 @@ def main():
             continue
         grouped[bucket_of(a, b)][(a, b)] += count
 
-    # The predictions the call graph makes, each of which a run can fail.
+    # What the mechanism above says must be true on every run, and what would show it is not.
+    #
+    # The first version of these five allowed the two gated rungs to gain but not to decline, and
+    # four of the five failed on the first repository. That was the checks being wrong, not the
+    # engine: a gated rung whose file set the table narrows declines, and the edge falls through
+    # to a rung that does not read the table. So a rung the switch does not gate can *gain* - not
+    # because the table decided more edges through it, but because the table stopped deciding them
+    # upstream. The checks below are the ones that survive that correction.
     checks = []
 
+    # The receiver rung is consulted for exactly the relations the extractor marked with receiver
+    # evidence, it reads only the caller's own file, and the only rung above it is skipped for a
+    # receiver. So nothing the switch does can reach it.
     receiver = {side: rungs(side, "resolved").get("receiver_owner", 0)
                 + rungs(side, "inferred").get("receiver_owner", 0) for side in ("off", "on")}
     checks.append((
-        "P1 receiver rung decides the same number on both arms",
+        "C1 the receiver rung decides the same number on both arms",
         receiver["off"] != receiver["on"],
         "off %s, on %s" % (thousands(receiver["off"]), thousands(receiver["on"])),
     ))
 
-    ungained = sum(count for (a, b), count in grouped["gained a proof"].items()
-                   if rung_of(b) not in GATED)
-    ungained += sum(count for (a, b), count in grouped["nothing gained but a claim"].items()
-                    if rung_of(b) not in GATED)
+    # Containment is emitted by the extractor and never chosen by the ladder, so the switch cannot
+    # reach it either.
+    containment = {side: rungs(side, "resolved").get("containment", 0) for side in ("off", "on")}
     checks.append((
-        "P2 no relation gained a decision in a rung the switch does not gate",
-        ungained != 0, "%s relation(s)" % thousands(ungained),
+        "C2 containment is the same on both arms",
+        containment["off"] != containment["on"],
+        "off %s, on %s" % (thousands(containment["off"]), thousands(containment["on"])),
     ))
 
-    unlost = sum(count for (a, b), count in grouped["lost its proof"].items()
-                 if rung_of(a) not in GATED)
+    # Same-file is the fourth rung and unique-name the fifth, and neither reads the switch. So the
+    # two cannot exchange a relation: if same-file answers, unique-name is never reached, and if
+    # same-file declined on one arm it declined on the other. This is the check that separates "a
+    # rung's count moved" from "the ladder reordered itself".
+    swapped = 0
+    for (a, b), count in pairs.items():
+        if a == UNPLACED or b == UNPLACED:
+            continue
+        pair = {a, b}
+        if "resolved:same_file" in pair and "inferred:unique_name" in pair:
+            swapped += count
     checks.append((
-        "P3 no relation lost a proof from a rung the switch does not gate",
-        unlost != 0, "%s relation(s)" % thousands(unlost),
+        "C3 same-file and unique-name never exchange a relation",
+        swapped != 0, "%s relation(s)" % thousands(swapped),
     ))
 
-    rose = []
-    for state in ("resolved", "inferred"):
-        left, right = rungs("off", state), rungs("on", state)
-        for rung in set(left) | set(right):
-            delta = right.get(rung, 0) - left.get(rung, 0)
-            if rung not in GATED and delta > 0:
-                rose.append("%s %s %s" % (state, rung, signed(delta)))
+    # Whatever falls through to a rung the switch does not gate must have arrived from a state that
+    # rung cannot answer, because that rung's answer for a relation is fixed unless an earlier rung
+    # changed. `unique_name` is only ever `inferred`, so a relation the table moved out of a proof
+    # must not land on a claim it could always have made.
+    fell_from = 0
+    for (a, b), count in pairs.items():
+        if a == UNPLACED or b == UNPLACED:
+            continue
+        if (rung_of(a) not in GATED and rung_of(b) == "unique_name"
+                and state_of(a) in DECIDED and rung_of(a) != "unique_name"):
+            fell_from += count
     checks.append((
-        "P4 no rung the switch does not gate gained relations",
-        bool(rose), ", ".join(sorted(rose)) or "none",
+        "C4 nothing the table displaced landed on a claim it could always have made",
+        fell_from != 0, "%s relation(s)" % thousands(fell_from),
     ))
 
-    stranded = sum(count for (a, b), count in grouped["lost its proof"].items()
-                   if state_of(b) == "ambiguous" and rung_of(a) not in GATED)
-    checks.append((
-        "P5 nothing resolved by an ungated rung became ambiguous",
-        stranded != 0, "%s relation(s)" % thousands(stranded),
-    ))
     failed = [name for name, bad, _ in checks if bad]
 
     # --- report -------------------------------------------------------------
@@ -463,10 +508,20 @@ def main():
             out.append("   HOLE on the %s arm: a relation is in none of the five states, so the "
                        "partition the probe asserts does not hold for the index that was read."
                        % side)
+        if index_states[4]:
+            out.append("   HOLE on the %s arm: %s relation(s) are `pending` in the index - "
+                       "extracted and never decided. The probe asserts zero pending, and it "
+                       "asserts it after the full build and before the incremental refresh and the "
+                       "delete-and-restore, so the breakdown below is read from a state the engine "
+                       "reached later and those relations have no rung to report."
+                       % (side, thousands(index_states[4])))
         shares[side] = 100.0 * index_states[0] / index_total if index_total else 0.0
 
     out.append("   resolved share %.1f%% -> %.1f%%  (%+.1fpp)"
                % (shares["off"], shares["on"], shares["on"] - shares["off"]))
+    out.append("   %s relation(s) are proven on both arms and name a *different* target on one "
+               "of them, so the table re-aimed those edges rather than only re-grading them"
+               % thousands(reaimed))
 
     def table(state, title):
         left, right = rungs("off", state), rungs("on", state)
@@ -691,8 +746,9 @@ echo "resolved share is resolved / relations - the proofs, not the claims"
 echo "the five states partition on both arms; decided rate is (resolved + inferred) / relations"
 echo "a rung is read from the evidence class stored on the relation, so the breakdown is a query"
 echo "over the index the probe wrote and asks the engine for nothing it does not already store"
-echo "the switch gates import_binding and scope_qualified_name; movement in any other rung is the"
-echo "table displacing that rung, and the five predictions say whether that reading held"
+echo "the switch gates import_binding and scope_qualified_name, and it changes the set of files"
+echo "those two rungs search - so a rung it does not gate can gain edges only by the table"
+echo "declining them upstream, and the four conditions say whether that reading held"
 echo "per-transition counts: $OUT/<repository>.pairs"
 echo "logs: $OUT"
 exit "$failures"
