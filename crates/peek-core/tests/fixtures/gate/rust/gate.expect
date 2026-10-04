@@ -1,0 +1,348 @@
+# Gate expectations for Rust — the hand-written ground truth.
+#
+# Every line below was written by reading the fixture sources in `src/`, not by
+# reading the engine's output. A line is a claim about what the source says, and
+# the gate measures the engine against it. If a line here is wrong, the fix is to
+# correct this file and say why in the commit; changing it to match the engine
+# turns the gate into a snapshot of whatever the engine happens to do, which is
+# the thing this crate exists to prevent.
+#
+# Format: `keyword | field | field | ...`. `#` starts a comment. Fields are
+# trimmed. A field written `-` means "this one does not apply". An entity is
+# named by `path | kind | qualified_name`, which is `EntityId` without the
+# ordinal; an ordinal is only ever implied, where a source declares the same
+# identity twice.
+#
+# Keywords and their fields:
+#
+#   symbol            | path | kind | qualified_name
+#   member            | path | owner_qname | member_qname
+#   call              | path | source_kind | source_qname | callee
+#   import            | path | local | module | alias
+#   reference         | path | source_qname | name
+#   no_reference      | path | source_qname | name
+#   inherits          | path | subject_qname | base
+#   implements        | path | subject_qname | trait
+#   no_inherits       | path | subject_qname | -
+#   callers           | target_key | expected_caller_key
+#   callees           | target_key | expected_callee_key
+#   implementations   | target_key | expected_key
+#   context           | target_string | expected_key
+#   context_ambiguous | target_string
+#   floor             | dimension | basis_points
+#
+# `symbol` is a multiset, not a set. Two `impl` blocks for one type produce two
+# entities with the same path, kind and qualified name and different ordinals, so
+# two lines mean two entities and the engine is scored on how many it emits.
+#
+# `floor` is a ratchet in hundredths of a percent: `floor symbol_recall 7312`
+# means recall of 73.12%. Every floor here is a measured value rather than a
+# target, and `README.md` records the measurement each one came from. Raising one
+# is a reviewable act that belongs in the commit which improves the number.
+#
+# Kinds are the engine's `EntityKind` spellings. An `impl` block is `module`
+# because that is what the Rust spec maps `impl_item` to, and a `mod` declaration
+# is also `module`; the spec tells them apart with `module_nodes`, not with the
+# kind, which is why both spellings appear here.
+#
+# `member` means a member of a **type**: a field, a method, an associated type or
+# a type parameter. A function parameter is a member of its function, which the
+# model also says, but "does member resolution see through to the owning type" is
+# the question E4 asks, so that is what is labelled here.
+
+# ---------------------------------------------------------------------------
+# src/lib.rs
+# ---------------------------------------------------------------------------
+symbol | src/lib.rs | module | model
+symbol | src/lib.rs | module | report
+symbol | src/lib.rs | module | service
+symbol | src/lib.rs | module | traits
+symbol | src/lib.rs | constant | MAX_ROWS
+symbol | src/lib.rs | static | RETRY_LIMIT
+symbol | src/lib.rs | type_alias | Threshold
+symbol | src/lib.rs | function | summarise
+symbol | src/lib.rs | parameter | summarise.entries
+symbol | src/lib.rs | macro | counted
+symbol | src/lib.rs | function | counted
+symbol | src/lib.rs | parameter | counted.body
+symbol | src/lib.rs | module | outer
+symbol | src/lib.rs | module | outer.inner
+symbol | src/lib.rs | function | outer.inner.deep
+
+import | src/lib.rs | Entry | model::Entry | -
+import | src/lib.rs | Clock | traits | -
+import | src/lib.rs | Saveable | traits | -
+
+call | src/lib.rs | function | summarise | iter
+call | src/lib.rs | function | summarise | take
+call | src/lib.rs | function | summarise | cloned
+call | src/lib.rs | function | summarise | format_line
+call | src/lib.rs | function | summarise | len
+call | src/lib.rs | function | summarise | describe
+call | src/lib.rs | function | summarise | render
+call | src/lib.rs | function | summarise | push_str
+call | src/lib.rs | function | counted | counted
+call | src/lib.rs | function | counted | body
+call | src/lib.rs | function | outer.inner.deep | summarise
+call | src/lib.rs | function | outer.inner.deep | len
+
+# `kept`, `out` and `MAX_ROWS` are uses inside a function body. A use of a name is
+# a reference wherever it appears.
+reference | src/lib.rs | summarise | kept
+reference | src/lib.rs | summarise | out
+reference | src/lib.rs | summarise | MAX_ROWS
+reference | src/lib.rs | counted | body
+
+# A declaration's own name is not a use of that name, and neither is the name of a
+# declaration that encloses the use.
+no_reference | src/lib.rs | summarise | summarise
+no_reference | src/lib.rs | summarise | entries
+no_reference | src/lib.rs | counted | counted
+no_reference | src/lib.rs | MAX_ROWS | MAX_ROWS
+no_reference | src/lib.rs | summarise | lib.rs
+
+# ---------------------------------------------------------------------------
+# src/model.rs
+# ---------------------------------------------------------------------------
+symbol | src/model.rs | struct | Entry
+symbol | src/model.rs | field | Entry.label
+symbol | src/model.rs | field | Entry.count
+symbol | src/model.rs | enum | Severity
+symbol | src/model.rs | constant | Severity.Quiet
+symbol | src/model.rs | constant | Severity.Loud
+symbol | src/model.rs | union | Pair
+symbol | src/model.rs | type_parameter | Pair.T
+symbol | src/model.rs | field | Pair.left
+symbol | src/model.rs | field | Pair.right
+symbol | src/model.rs | type_alias | Alias
+symbol | src/model.rs | function | entry
+symbol | src/model.rs | parameter | entry.label
+symbol | src/model.rs | parameter | entry.count
+symbol | src/model.rs | module | Pair
+symbol | src/model.rs | type_parameter | Pair.U
+symbol | src/model.rs | method | Pair.first
+symbol | src/model.rs | function | first
+
+member | src/model.rs | Entry | Entry.label
+member | src/model.rs | Entry | Entry.count
+member | src/model.rs | Pair | Pair.T
+member | src/model.rs | Pair | Pair.left
+member | src/model.rs | Pair | Pair.right
+member | src/model.rs | Pair | Pair.U
+member | src/model.rs | Pair | Pair.first
+
+call | src/model.rs | function | entry | to_owned
+
+reference | src/model.rs | entry | label
+reference | src/model.rs | entry | count
+no_reference | src/model.rs | entry | entry
+no_reference | src/model.rs | Entry | Entry
+
+# ---------------------------------------------------------------------------
+# src/traits.rs
+# ---------------------------------------------------------------------------
+symbol | src/traits.rs | trait | Clock
+symbol | src/traits.rs | method | Clock.now
+symbol | src/traits.rs | trait | Saveable
+symbol | src/traits.rs | method | Saveable.save
+symbol | src/traits.rs | type_alias | Saveable.Receipt
+symbol | src/traits.rs | method | Saveable.receipt
+symbol | src/traits.rs | struct | Store
+symbol | src/traits.rs | field | Store.written
+symbol | src/traits.rs | struct | Ticks
+symbol | src/traits.rs | field | Ticks.origin
+symbol | src/traits.rs | module | Ticks
+symbol | src/traits.rs | method | Ticks.now
+symbol | src/traits.rs | module | Ticks
+symbol | src/traits.rs | method | Ticks.save
+symbol | src/traits.rs | method | Ticks.receipt
+symbol | src/traits.rs | struct | Meters
+symbol | src/traits.rs | field | Meters.elapsed
+symbol | src/traits.rs | module | Meters
+symbol | src/traits.rs | method | Meters.now
+symbol | src/traits.rs | module | Meters
+symbol | src/traits.rs | method | Meters.save
+symbol | src/traits.rs | method | Meters.receipt
+
+member | src/traits.rs | Clock | Clock.now
+member | src/traits.rs | Saveable | Saveable.save
+member | src/traits.rs | Saveable | Saveable.Receipt
+member | src/traits.rs | Saveable | Saveable.receipt
+member | src/traits.rs | Store | Store.written
+member | src/traits.rs | Ticks | Ticks.origin
+member | src/traits.rs | Ticks | Ticks.now
+member | src/traits.rs | Ticks | Ticks.save
+member | src/traits.rs | Ticks | Ticks.receipt
+member | src/traits.rs | Meters | Meters.elapsed
+member | src/traits.rs | Meters | Meters.now
+member | src/traits.rs | Meters | Meters.save
+member | src/traits.rs | Meters | Meters.receipt
+
+# `Saveable: Clock` is a supertrait clause. `Clock` names no base at all.
+inherits | src/traits.rs | Saveable | Clock
+implements | src/traits.rs | Ticks | Clock
+implements | src/traits.rs | Ticks | Saveable
+implements | src/traits.rs | Meters | Clock
+implements | src/traits.rs | Meters | Saveable
+
+# The negative half of the inheritance gate: an edge whose subject is one of
+# these is a false positive whatever it points at.
+no_inherits | src/traits.rs | Clock | -
+no_inherits | src/traits.rs | Pair | -
+no_inherits | src/traits.rs | Store | -
+
+reference | src/traits.rs | Saveable.save | entry
+reference | src/traits.rs | Ticks.save | entry
+no_reference | src/traits.rs | Clock.now | now
+no_reference | src/traits.rs | Saveable | Saveable
+
+# ---------------------------------------------------------------------------
+# src/report.rs
+# ---------------------------------------------------------------------------
+symbol | src/report.rs | struct | Sink
+symbol | src/report.rs | field | Sink.text
+symbol | src/report.rs | module | Sink
+symbol | src/report.rs | method | Sink.push
+symbol | src/report.rs | function | format_line
+symbol | src/report.rs | parameter | format_line.tag
+symbol | src/report.rs | parameter | format_line.count
+symbol | src/report.rs | function | format_line_inner
+symbol | src/report.rs | parameter | format_line_inner.entry
+symbol | src/report.rs | function | render
+symbol | src/report.rs | parameter | render.entries
+symbol | src/report.rs | parameter | render.out
+symbol | src/report.rs | function | loud
+symbol | src/report.rs | function | renamed
+
+member | src/report.rs | Sink | Sink.text
+member | src/report.rs | Sink | Sink.push
+
+import | src/report.rs | Severity | crate::model::Severity | -
+import | src/report.rs | Renamed | crate::model::Alias | Renamed
+import | src/report.rs | entry | crate::model | -
+import | src/report.rs | Entry | crate::model | -
+import | src/report.rs | * | crate::traits | -
+
+call | src/report.rs | function | format_line | entry
+call | src/report.rs | function | format_line_inner | clone
+call | src/report.rs | function | render | new
+call | src/report.rs | function | render | push
+call | src/report.rs | function | render | format_line
+call | src/report.rs | function | render | len
+call | src/report.rs | function | render | push_str
+call | src/report.rs | function | render | new
+call | src/report.rs | function | render | now
+call | src/report.rs | function | render | receipt
+call | src/report.rs | function | render | push_str
+call | src/report.rs | function | renamed | entry
+
+reference | src/report.rs | format_line | owned
+reference | src/report.rs | format_line_inner | entry
+reference | src/report.rs | render | sink
+reference | src/report.rs | render | entries
+no_reference | src/report.rs | format_line | format_line
+no_reference | src/report.rs | format_line_inner | format_line_inner
+no_reference | src/report.rs | Sink | Sink
+
+# ---------------------------------------------------------------------------
+# src/service.rs
+# ---------------------------------------------------------------------------
+symbol | src/service.rs | struct | Runner
+symbol | src/service.rs | field | Runner.attempts
+symbol | src/service.rs | module | Runner
+symbol | src/service.rs | method | Runner.run
+symbol | src/service.rs | parameter | Runner.run.body
+symbol | src/service.rs | parameter | Runner.run.limit
+symbol | src/service.rs | function | format_line
+symbol | src/service.rs | parameter | format_line.tag
+symbol | src/service.rs | parameter | format_line.count
+symbol | src/service.rs | function | describe
+symbol | src/service.rs | parameter | describe.entry
+symbol | src/service.rs | function | retry
+symbol | src/service.rs | parameter | retry.last
+symbol | src/service.rs | function | with_clock
+symbol | src/service.rs | parameter | with_clock.body
+
+member | src/service.rs | Runner | Runner.attempts
+member | src/service.rs | Runner | Runner.run
+
+import | src/service.rs | entry | crate::model | -
+import | src/service.rs | Entry | crate::model | -
+import | src/service.rs | Sink | crate::report | -
+import | src/service.rs | Clock | crate::traits | -
+import | src/service.rs | Saveable | crate::traits | -
+import | src/service.rs | Ticks | crate::traits | -
+
+# `Runner.run` is a method and `with_clock` is a function, and both names are
+# bare. The kind is on the line because a query can only name one entity, and a
+# gate that guessed which one would be measuring its own guess.
+call | src/service.rs | method | Runner.run | body
+call | src/service.rs | method | Runner.run | retry
+call | src/service.rs | function | format_line | push
+call | src/service.rs | function | format_line | to_string
+call | src/service.rs | function | describe | format_line
+call | src/service.rs | function | with_clock | entry
+call | src/service.rs | function | with_clock | save
+call | src/service.rs | function | with_clock | now
+call | src/service.rs | function | with_clock | new
+call | src/service.rs | function | with_clock | body
+
+reference | src/service.rs | Runner.run | body
+reference | src/service.rs | Runner.run | last
+reference | src/service.rs | format_line | sink
+reference | src/service.rs | describe | entry
+reference | src/service.rs | with_clock | ticks
+no_reference | src/service.rs | format_line | format_line
+no_reference | src/service.rs | describe | describe
+
+# ---------------------------------------------------------------------------
+# Query correctness: questions the surface has to answer correctly.
+#
+# Each expectation names the target and the entity the answer must contain. A
+# query that returns a superset still passes, because a walk is allowed to reach
+# more than was asked for; a query that omits the named entity fails.
+# ---------------------------------------------------------------------------
+callers | src/service.rs | function | retry | src/service.rs | method | Runner.run
+callers | src/report.rs | method | Sink.push | src/report.rs | function | render
+callers | src/model.rs | function | entry | src/report.rs | function | format_line
+callers | src/model.rs | function | entry | src/report.rs | function | renamed
+callers | src/traits.rs | method | Ticks.now | src/report.rs | function | render
+callers | src/traits.rs | method | Ticks.receipt | src/report.rs | function | render
+callees | src/lib.rs | function | summarise | src/service.rs | function | describe
+callees | src/service.rs | function | describe | src/service.rs | function | format_line
+implementations | src/traits.rs | trait | Clock | src/traits.rs | struct | Ticks
+implementations | src/traits.rs | trait | Saveable | src/traits.rs | struct | Meters
+
+# ---------------------------------------------------------------------------
+# Context quality: a target an agent would type, and the entity the pack has to
+# contain for the answer to be any use.
+# ---------------------------------------------------------------------------
+context | summarise | src/lib.rs | function | summarise
+context | Sink.push | src/report.rs | method | Sink.push
+context | src/model.rs | src/model.rs | file | model.rs
+context | MAX_ROWS | src/lib.rs | constant | MAX_ROWS
+context | Runner.run | src/service.rs | method | Runner.run
+
+# `format_line` is declared in two files. The surface must refuse the bare name
+# and offer both candidates rather than silently pick one.
+context_ambiguous | format_line
+
+# ---------------------------------------------------------------------------
+# Floors. Ratchets in hundredths of a percent, each set from the measurement this
+# fixture produces. Raising one is a reviewable act belonging to the commit that
+# improves the number.
+# ---------------------------------------------------------------------------
+floor | symbol_precision | PLACEHOLDER
+floor | symbol_recall | PLACEHOLDER
+floor | definitions | PLACEHOLDER
+floor | calls | PLACEHOLDER
+floor | references | PLACEHOLDER
+floor | imports | PLACEHOLDER
+floor | members | PLACEHOLDER
+floor | inheritance_subject | PLACEHOLDER
+floor | inheritance_base | PLACEHOLDER
+floor | negative_references | PLACEHOLDER
+floor | negative_inheritance | PLACEHOLDER
+floor | incremental | 10000
+floor | query | PLACEHOLDER
+floor | context | PLACEHOLDER
