@@ -1402,7 +1402,7 @@ impl<'s> Resolver<'s> {
         // could answer; taking the union instead is what let a declaration site's `mod x;` row
         // answer a path about the module's own file.
         let mut asked = 0usize;
-        for qualified in self.module_qualified_names(module, package_name, strip_last) {
+        for qualified in self.module_qualified_names(module, package_name, strip_last, crate_relative) {
             asked += 1;
             let mut found: Vec<RepoPath> = Vec::new();
             for entity in self
@@ -1489,6 +1489,7 @@ impl<'s> Resolver<'s> {
         module: &str,
         package: Option<&str>,
         strip_last: bool,
+        crate_relative: bool,
     ) -> Vec<String> {
         if module.split("::").any(|part| part == "super") {
             return Vec::new();
@@ -1505,29 +1506,28 @@ impl<'s> Resolver<'s> {
         if strip_last && segments.len() > 1 {
             readings.push(segments[..segments.len() - 1].to_vec());
         }
-
         let mut qualified = Vec::new();
         for reading in readings {
-            // **Both** spellings, and this is the whole cross-crate case. `use alpha::gateway::X`
-            // written in `beta` names the *other* package, so `alpha` is already a package
-            // segment and prefixing the importer's own package produces `beta::alpha::gateway`,
-            // which names nothing. Prefixing is right for `crate::a::b` and wrong for a path
-            // whose head is a different package, and which one a path is cannot be told from the
-            // path alone — so both are tried, cheapest first, and a miss is a miss rather than a
-            // wrong answer.
-            //
-            // The unprefixed reading comes second for a reason that is not arbitrary: for
-            // `crate::a::b` the unprefixed form is `a::b`, which in a workspace is a perfectly
-            // valid qualified name belonging to some *other* package. Trying it second does not
-            // cost a wrong answer, because a hit has to be a `Module` entity and the caller
-            // re-checks the target's own name — but it does cost a lookup, so the reading that is
-            // more likely correct goes first.
+            // **Both spellings of every reading, and which comes first is what the path says.**
+            // `crate::a::b` means this crate's `a::b`, so `package::a::b` is tried first and the
+            // bare `a::b`, which in a workspace is a perfectly valid qualified name belonging to
+            // some *other* package, is the fallback. `alpha::a::b` means the package `alpha`, so
+            // the bare spelling goes first and `package::alpha::a::b`, which is a coincidence of
+            // the importing crate happening to have a module of that name, is the fallback.
+            // Swapping the two orderings costs a wrong answer rather than a lookup, because only
+            // the first spelling that names a file is used.
             let mut with_package: Vec<&str> = Vec::with_capacity(reading.len() + 1);
             with_package.extend(package);
             with_package.extend(reading.iter().copied());
-            for candidate in [with_package.join("::"), reading.join("::")] {
-                if !qualified.contains(&candidate) {
-                    qualified.push(candidate);
+            let prefixed = with_package.join("::");
+            let bare = reading.join("::");
+            let spellings: [&str; 2] = match crate_relative {
+                true => [&prefixed, &bare],
+                false => [&bare, &prefixed],
+            };
+            for candidate in spellings {
+                if !qualified.contains(&candidate.to_owned()) {
+                    qualified.push(candidate.to_owned());
                 }
             }
         }

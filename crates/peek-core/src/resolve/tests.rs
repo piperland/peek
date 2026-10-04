@@ -2911,6 +2911,10 @@ fn a_crowded_crate_root_still_names_its_own_package() {
         "and the rung is still the author's own import: {}",
         state_of(&item)
     );
+// The counter, not the placement: this path is crate-relative, so the guess answers it even
+    // when the package is unknown and the placement above would pass either way. What must not
+    // regress is the package lookup, because a path that names *another* package is answered by
+    // the table and it has nothing to offer without one.
     assert_eq!(
         report.module_files.package_unknown, 0,
         "every lookup named the importer's package, which is what the crowded crate root used to \
@@ -2920,31 +2924,96 @@ fn a_crowded_crate_root_still_names_its_own_package() {
 }
 
 #[test]
-fn a_declaration_row_does_not_answer_a_path_about_the_module() {
-    // Both spellings of `crate::util::Item` name a file in this index: `app::util` is the module
-    // row of `src/util.rs`, and `util` is the `mod util;` **declaration** row of `src/lib.rs`.
-    // Collecting the union of them hands the rung two candidate files, and `Item` is declared in
-    // both, so the answer is an `Ambiguous` — uncertainty manufactured by the lookup rather than
-    // found in the code. The first spelling that names a file is the answer, and the prefixed one
-    // comes first.
-    let tree = TempTree::new("first-spelling-wins");
-    tree.write("src/util.rs", "pub struct Item;\n");
+fn a_crowded_crate_root_still_names_its_own_package_for_the_table() {
+    // The same crowded crate root, read through the route that needs the package. A path naming
+    // another package is answered by the table, and the table builds every spelling it searches
+    // from the importing file's package; with the package unknown it falls through to the bare
+    // spelling, and the bare spelling of `alpha::gateway::Gateway` is a row this index holds for
+    // something else.
+    let tree = TempTree::new("crowded-crate-root-cross");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write("crates/alpha/src/gateway.rs", "pub struct Gateway;\n");
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
     tree.write(
-        "src/lib.rs",
-        "pub mod util;\nuse crate::util::Item;\npub fn go() -> Item { Item }\n",
+        "crates/beta/src/lib.rs",
+        &crowded_crate_root("use alpha::gateway::Gateway;\npub fn go() -> Gateway { Gateway }\n"),
     );
     let mut store = tree.index_without_resolving();
-    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+    let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
-    let item = relations_of(&store, RelationKind::Imports)
+    let gateway = relations_of(&store, RelationKind::Imports)
         .into_iter()
-        .find(|relation| relation.target_name == "Item")
-        .expect("the import of Item was extracted");
+        .find(|relation| relation.target_name == "Gateway")
+        .expect("the import of Gateway was extracted");
     assert_eq!(
-        item.target,
-        Some(id("src/util.rs", EntityKind::Struct, "Item")),
-        "the prefixed spelling answered and the declaration row was never consulted: {}",
-        state_of(&item)
+        gateway.target,
+        Some(id(
+            "crates/alpha/src/gateway.rs",
+            EntityKind::Struct,
+            "Gateway"
+        )),
+        "ten declarations in the importing file did not stop the table naming the package the \
+         import means: {}",
+        state_of(&gateway)
+    );
+    assert_eq!(
+        report.module_files.package_unknown, 0,
+        "and the report says the prefix was available for every lookup: {:?}",
+        report.module_files
+    );
+}
+
+#[test]
+fn a_declaration_row_does_not_answer_a_path_about_the_module() {
+    // Both spellings of `alpha::gateway::Gateway` name a file in this index: `beta::alpha::gateway`
+    // is `crates/beta/src/alpha/gateway.rs` and `alpha::gateway` is
+    // `crates/alpha/src/gateway.rs`. The path names the package `alpha`, so the bare spelling is
+    // the one that means it and the prefixed one is a coincidence — and collecting the union of
+    // them hands the rung two candidate files, which is an `Ambiguous` rather than an answer.
+    //
+    // `Gateway` is declared in both files, so the union is a real ambiguity rather than a lucky
+    // single hit, and the edge belongs in `alpha` because the import says so.
+    let tree = TempTree::new("first-spelling-wins");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write(
+        "crates/alpha/src/gateway.rs",
+        "pub struct Gateway;\npub fn here() {}\n",
+    );
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    tree.write("crates/beta/src/lib.rs", "pub mod alpha;\n");
+    tree.write(
+        "crates/beta/src/alpha/gateway.rs",
+        "pub struct Gateway;\npub fn here() {}\n",
+    );
+    tree.write(
+        "crates/beta/src/app.rs",
+        "use alpha::gateway::Gateway;\npub fn go() -> Gateway { Gateway }\n",
+    );
+    let mut store = tree.index_without_resolving();
+    let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let gateway = relations_of(&store, RelationKind::Imports)
+        .into_iter()
+        .find(|relation| relation.target_name == "Gateway")
+        .expect("the import of Gateway was extracted");
+    assert_eq!(
+        gateway.target,
+        Some(id(
+            "crates/alpha/src/gateway.rs",
+            EntityKind::Struct,
+            "Gateway"
+        )),
+        "the spelling that means the package the path named answered, and the importing crate's \
+         own module of the same name did not: {}",
+        state_of(&gateway)
+    );
+    assert_eq!(
+        report.module_files.table_answered_named > 0,
+        true,
+        "and the table is what answered a path that named a package: {:?}",
+        report.module_files
     );
 }
 
