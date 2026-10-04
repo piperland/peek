@@ -505,7 +505,7 @@ pub fn rung_name(evidence: &Evidence) -> &'static str {
 /// nothing — and a file with no row cannot be asked about at all. Collapsing the two would make
 /// "this index records no packages" and "this package is called nothing" the same fact, and they
 /// answer differently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Package {
     /// The package name, with the `::` a qualified name needs already appended.
     Prefixed(String),
