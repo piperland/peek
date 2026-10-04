@@ -2559,13 +2559,17 @@ fn the_page_size_is_a_page_size_and_does_not_change_the_answer() {
     let roomy = wide_file("page-roomy");
 
     let mut narrow_store = narrow.index_without_resolving();
-    let narrow_report =
-        resolve_all(&mut narrow_store, ResolutionOptions::default().with_entities_page(1))
-            .expect("resolve one entity at a time");
+    let narrow_report = resolve_all(
+        &mut narrow_store,
+        ResolutionOptions::default().with_entities_page(1),
+    )
+    .expect("resolve one entity at a time");
     let mut roomy_store = roomy.index_without_resolving();
-    let roomy_report =
-        resolve_all(&mut roomy_store, ResolutionOptions::default().with_entities_page(4096))
-            .expect("resolve in one page");
+    let roomy_report = resolve_all(
+        &mut roomy_store,
+        ResolutionOptions::default().with_entities_page(4096),
+    )
+    .expect("resolve in one page");
 
     assert_eq!(
         narrow_report.truncated,
