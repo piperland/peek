@@ -22,7 +22,7 @@
 //! Removals precede upserts inside one transaction, so a path that is removed and re-added in the
 //! same batch ends up present. That is what lets a refresh replace a whole directory in one commit.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,7 @@ use crate::discover::{
     DiscoveredFile, DiscoveryOptions, DiscoveryStats, FileDiscovery, WalkIssue, WalkIssueReason,
 };
 use crate::extract::ExtractedFile;
-use crate::model::{Language, Relation, RelationKey, RepoPath, ResolutionState};
+use crate::model::{EntityId, Language, Relation, RelationKey, RepoPath, ResolutionState};
 use crate::resolve::{self, ResolutionOptions, ResolutionReport};
 use crate::store::{IndexUpdate, RepoId, Store, StoreError, UpdateStats, paths};
 
@@ -81,6 +81,18 @@ pub struct IndexReport {
     pub relations_resolved: u64,
     /// Relations bound to a target by inference rather than direct observation.
     pub relations_inferred: u64,
+    /// Relations the index still holds awaiting a decision, measured after the resolution pass.
+    ///
+    /// **Zero is the only value a correct run produces.** It is measured from the store rather than
+    /// taken from [`Self::relations_pending`], because those are two different populations: that one
+    /// is what the extractor emitted, this one is what survived the pass.
+    ///
+    /// For a full build they are the same set — the store held nothing beforehand. For a refresh
+    /// this is the whole index's outstanding total, which is zero unless an earlier run left work
+    /// behind. Reporting the index's total is the deliberate choice: "this run decided everything
+    /// it wrote" and "this index has nothing outstanding" are different claims, and only the second
+    /// is one a reader of the index can rely on.
+    pub relations_undecided: u64,
     /// Entities that are test cases.
     pub tests_found: u64,
     /// Size of the write-ahead log after the run, in bytes.
@@ -111,7 +123,7 @@ impl IndexReport {
         format!(
             "generation {}: {} files indexed ({} skipped, {} unsupported, {} degraded), \
              {} removed, {} entities, {} relations ({} resolved, {} pending, {} ambiguous, \
-             {} unresolved, {} inferred), {} tests, wal {} bytes{}, {:?}",
+             {} unresolved, {} inferred), {} tests, wal {} bytes{}{}, {:?}",
             self.generation,
             self.files_indexed,
             self.files_skipped,
@@ -130,6 +142,15 @@ impl IndexReport {
             self.resolution
                 .as_ref()
                 .map_or(String::new(), |r| format!("; {}", r.summary())),
+            // Named apart from the `pending` in the parenthesis above, because that one is the
+            // extractor's output and this one is what the index is left holding. A summary that
+            // printed only the first would report a clean run over an index that cannot answer
+            // questions about its own edges, and the two differ exactly when a scoped pass did not
+            // reach everything it was given.
+            match self.relations_undecided {
+                0 => String::new(),
+                other => format!("; {other} left undecided"),
+            },
             self.elapsed
         )
     }
@@ -288,9 +309,27 @@ pub fn build_full(
     // recorded as a measured WAL size rather than as an error, and `.ok()`-swallowed. The
     // difference matters: the number is now visible, where before there was no signal at all.
     let _ = store.checkpoint();
-    outcome.report.wal_bytes = store.stats().map(|stats| stats.wal_size_bytes).unwrap_or(0);
+    measure(&mut outcome.report, store);
     outcome.report.elapsed = started.elapsed();
     Ok(outcome)
+}
+
+/// Fill in the two numbers only the store can measure, from one pass over it.
+///
+/// One call rather than two because [`Store::stats`] costs a scan of both tables, and a refresh
+/// runs it per keystroke under `watch`. Both fields are measured rather than inferred: the log size
+/// because a refused checkpoint leaves a real one, and the undecided count because the whole point
+/// is that it can disagree with the report's own pending figure.
+fn measure(report: &mut IndexReport, store: &Store) {
+    let Ok(stats) = store.stats() else {
+        // Both fields stay zero. That is a real limitation rather than a measurement: the write has
+        // already committed, so failing the run here would report an indexing failure on the
+        // grounds of a diagnostic that did not take. A caller that needs these numbers reads the
+        // store itself.
+        return;
+    };
+    report.wal_bytes = stats.wal_size_bytes;
+    report.relations_undecided = stats.pending_relations;
 }
 
 /// Refresh only `paths`, which is what `watch` calls.
@@ -315,6 +354,8 @@ pub fn refresh(
     // The edges that are about to point at nothing. Read *before* the write, because the write
     // demotes them to a null target and they stop being findable by target afterwards.
     let mut displaced: Vec<Relation> = Vec::new();
+    // The widest thing this batch wrote, so the pass below can be given a scope that reaches it.
+    let mut scope = ScopeBounds::default();
 
     for path in paths {
         // **The repository-relative name, or nothing.** `strip_prefix` alone was not the question:
@@ -405,6 +446,7 @@ pub fn refresh(
         };
 
         let extracted = crate::extract::extract_with(spec, relative.clone(), &text);
+        scope.widen(&extracted);
         touched.push(relative);
         update = absorb_file(extracted, update, &mut outcome);
     }
@@ -418,8 +460,10 @@ pub fn refresh(
     // Both halves are needed: the first decides the new edges, the second repairs the old ones
     // whose targets no longer exist. Neither is a full re-resolve, so a refresh stays
     // proportional to what changed.
-    let resolution =
-        resolve::resolve_paths(store, &touched, &displaced, ResolutionOptions::default())?;
+    //
+    // The scope is widened to what this batch actually wrote. A default bound is the wrong shape
+    // for a scoped pass here: see [`ScopeBounds`].
+    let resolution = resolve::resolve_paths(store, &touched, &displaced, scope.resolve_options())?;
     outcome.report.generation = store.generation();
     outcome.report.resolution = Some(resolution);
 
@@ -427,9 +471,73 @@ pub fn refresh(
     // truncated on a timer regardless; paying a full checkpoint for every save would be the
     // dominant cost of watching. The size is still reported, so a watcher that is somehow not
     // checkpointing shows up as a number rather than as silence.
-    outcome.report.wal_bytes = store.stats().map(|stats| stats.wal_size_bytes).unwrap_or(0);
+    measure(&mut outcome.report, store);
     outcome.report.elapsed = started.elapsed();
     Ok(outcome)
+}
+
+/// The per-file reads a resolution pass makes, sized from the batch that was just written.
+///
+/// # Why a default is the wrong shape here
+///
+/// [`resolve::resolve_paths`] decides the relations of the files it is given by enumerating each
+/// file's entities through [`crate::store::Store::entities_in_file`], which is bounded. The default
+/// bound is 512 entities, and a file with more than that leaves its tail outside the pass entirely:
+/// the relations of those entities are extracted, never placed, and never refused — `Pending`, an
+/// edge that answers no question in either direction.
+///
+/// On `BurntSushi/ripgrep` that is not hypothetical. A refresh of `crates/core/flags/defs.rs`, a
+/// file of 1,363 entities, decided 2,121 of the 3,599 relations it wrote and left **348** pending.
+/// Nothing later revisits them: a second refresh of the same file left the count at 348, and only a
+/// full re-resolve — the pass `build_full` runs and nothing else does — cleared it. `watch` calls
+/// `refresh`, so on a watched repository the leak accumulates one large file at a time.
+///
+/// So the caller measures the shape of what it wrote and widens the bound to match. That is a
+/// measured bound rather than a larger constant: it scales with the file instead of guessing at it,
+/// and a repository of ordinary files is unaffected.
+///
+/// # The one above the count
+///
+/// The resolver records a lookup as truncated when the read returns exactly as many rows as the
+/// limit allowed. A bound equal to the row count therefore reports a truncation that did not
+/// happen, so the bound is one higher — which also means it cannot truncate at all, which is the
+/// property being asked for.
+///
+/// `incoming_per_entity` is deliberately left alone: it bounds the *re-decision* of edges that
+/// already point into a changed file, and an edge left stale there is a different defect from one
+/// left undecided.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ScopeBounds {
+    /// The most entities any file in the batch declares.
+    entities_per_file: usize,
+    /// The most relations any one entity in the batch is the source of.
+    outgoing_per_source: usize,
+}
+
+impl ScopeBounds {
+    /// Take one file's extraction into the bound.
+    ///
+    /// Counting the extraction results rather than the stored rows, so the bound is an upper bound
+    /// on what the store now holds: two results sharing an identity become one row, never two.
+    fn widen(&mut self, extracted: &ExtractedFile) {
+        self.entities_per_file = self.entities_per_file.max(extracted.entities.len());
+        let mut per_source: BTreeMap<&EntityId, usize> = BTreeMap::new();
+        for relation in &extracted.relations {
+            *per_source.entry(&relation.source).or_default() += 1;
+        }
+        let widest = per_source.values().copied().max().unwrap_or(0);
+        self.outgoing_per_source = self.outgoing_per_source.max(widest);
+    }
+
+    /// Options whose per-file scope reaches everything this batch wrote.
+    fn resolve_options(&self) -> ResolutionOptions {
+        let base = ResolutionOptions::default();
+        ResolutionOptions {
+            entities_per_file: base.entities_per_file.max(self.entities_per_file + 1),
+            outgoing_per_source: base.outgoing_per_source.max(self.outgoing_per_source + 1),
+            ..base
+        }
+    }
 }
 
 /// Read every relation that arrives at an entity declared in `path`.

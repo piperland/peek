@@ -892,6 +892,171 @@ fn a_refresh_of_a_file_repairs_the_edges_that_pointed_into_it() {
 }
 
 #[test]
+fn a_refresh_of_a_large_file_leaves_no_relation_undecided() {
+    // The defect this pins, measured on `BurntSushi/ripgrep`: a refresh of
+    // `crates/core/flags/defs.rs`, a file of 1,363 entities, wrote 3,599 relations and the
+    // resolution pass decided 2,121 of them. The other 348 stayed `Pending` — extracted, never
+    // placed, never refused — because the pass enumerates a file's entities through a bounded read
+    // whose default bound is 512, and everything past it was never in scope.
+    //
+    // Nothing afterwards decided them. A second refresh of the same file left the count at 348, and
+    // only a full re-resolve cleared it, which is the pass `build_full` runs and no other operation
+    // does. So on a watched repository the leak grew one large file at a time and the index carried
+    // edges that answered no question in either direction.
+    //
+    // The fixture is built past the default bound on purpose: a file small enough to fit inside it
+    // would pass whether or not the scope were sized from the batch.
+    let tree = TempTree::new("refresh-large-file");
+    let past_the_default_bound = 512;
+    let mut source = String::from("struct Wide;\nimpl Wide {\n");
+    for index in 0..past_the_default_bound {
+        source.push_str(&format!("    fn m{index}(&self) {{ let _ = {index}; }}\n"));
+    }
+    source.push_str("}\nfn caller() { let wide = Wide; wide.m0(); }\n");
+    tree.write("src/wide.rs", &source);
+
+    let mut store = open_store(&tree);
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first build");
+    let entities = store
+        .entities_in_file(&RepoPath::new("src/wide.rs").expect("valid path"), 10_000)
+        .expect("entities in file");
+    assert!(
+        entities.len() > past_the_default_bound,
+        "the fixture must exceed the bound it is testing, and it holds {}",
+        entities.len()
+    );
+
+    // Re-index it with nothing changed at all. The cheapest refresh there is, and the one a watcher
+    // issues on every save.
+    let outcome = refresh(
+        &mut store,
+        tree.path(),
+        &[tree.path().join("src/wide.rs")],
+        &DiscoveryOptions::default(),
+    )
+    .expect("refresh");
+
+    let stats = store.stats().expect("stats");
+    assert_eq!(
+        stats.pending_relations,
+        0,
+        "a refresh must decide every relation it wrote, and this one wrote {} entities",
+        entities.len()
+    );
+    // The report's own figure, not only the store's: a caller reads the report, and a run that
+    // leaves work behind has to be able to say so without a second query.
+    assert_eq!(
+        outcome.report().relations_undecided,
+        0,
+        "the report must measure what the index was left holding: {}",
+        outcome.report().summary()
+    );
+
+    // And the same file, deleted and restored, must land in the same place: the restore re-extracts
+    // the file, so it re-creates exactly the situation the refresh above survived.
+    let path = tree.path().join("src/wide.rs");
+    let original = fs::read(&path).expect("read before deleting");
+    fs::remove_file(&path).expect("delete");
+    refresh(
+        &mut store,
+        tree.path(),
+        std::slice::from_ref(&path),
+        &DiscoveryOptions::default(),
+    )
+    .expect("refresh after a deletion");
+    assert_eq!(
+        store.stats().expect("stats").pending_relations,
+        0,
+        "a deletion leaves nothing to decide: the file's rows went with it"
+    );
+
+    fs::write(&path, &original).expect("put the file back");
+    refresh(
+        &mut store,
+        tree.path(),
+        &[path],
+        &DiscoveryOptions::default(),
+    )
+    .expect("re-index the restored file");
+    assert_eq!(
+        store.stats().expect("stats").pending_relations,
+        0,
+        "restoring a large file must decide it, exactly as the refresh above did"
+    );
+}
+
+#[test]
+fn the_summary_names_what_a_run_left_undecided() {
+    // Two different numbers, and the reason the summary carries both. `relations_pending` is what
+    // the extractor emitted; `relations_undecided` is what the index is left holding once the pass
+    // has run. On a clean run the first is large and the second is zero, so a summary that printed
+    // only the first would report thousands of outstanding edges on every healthy build.
+    let tree = TempTree::new("summary-undecided");
+    tree.write("src/orders.rs", "pub fn charge() {}\n");
+    tree.write("src/app.rs", "fn go() { charge(); }\n");
+
+    let mut store = open_store(&tree);
+    let outcome = build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
+    let report = outcome.report();
+    assert_eq!(
+        report.relations_undecided, 0,
+        "a full build decides everything it wrote"
+    );
+    let summary = report.summary();
+    assert!(
+        !summary.contains("left undecided"),
+        "a clean run must not carry a clause about work it did not leave: {summary}"
+    );
+
+    // The clause appears when the number is non-zero, and the number comes from the store. A
+    // hand-written report claiming otherwise would be the exact dishonesty the field exists to
+    // prevent, so the only honest way to show the clause is to make it true.
+    let mut forged = report.clone();
+    forged.relations_undecided = 7;
+    let summary = forged.summary();
+    assert!(
+        summary.contains("7 left undecided"),
+        "a run that left work behind must say so: {summary}"
+    );
+    // And the real thing: the clause appears because the store holds an undecided relation, not
+    // because a report said so. It is written into `src/orders.rs`, and the refresh below touches
+    // only `src/app.rs`, so the relation survives the run — which is the point of the field. It is
+    // the index's outstanding total rather than this run's, so work an earlier run left behind is
+    // visible to a caller reading this report rather than hidden behind a run that did its own.
+    store
+        .apply_update(IndexUpdate::empty().with_relation(Relation::pending(
+            RelationKind::Calls,
+            id("src/orders.rs", EntityKind::Function, "charge"),
+            "never_decided",
+            Span::new(0, 4, 1, 1, 1, 5).expect("a forward span is valid"),
+            Evidence::NameOnly,
+            "extracted, not yet resolved",
+        )))
+        .expect("commit a pending relation");
+    let outcome = refresh(
+        &mut store,
+        tree.path(),
+        &[tree.path().join("src/app.rs")],
+        &DiscoveryOptions::default(),
+    )
+    .expect("refresh over a store that already holds undecided work");
+    assert_eq!(
+        outcome.report().relations_undecided,
+        1,
+        "the outstanding total is the index's, not this run's, so an earlier run's leak is visible: \
+         {}",
+        outcome.report().summary()
+    );
+    // Which also means the summary now names it, from the measurement rather than from the report's
+    // own arithmetic.
+    assert!(
+        outcome.report().summary().contains("1 left undecided"),
+        "{}",
+        outcome.report().summary()
+    );
+}
+
+#[test]
 fn the_summary_reports_the_generation_and_the_uncertainty_counts() {
     // `peek status` and the MCP `index_status` primitive read this string, so it has to carry
     // the honest counts rather than a reassuring one.
