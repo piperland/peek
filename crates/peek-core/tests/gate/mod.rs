@@ -186,6 +186,24 @@ fn print_measurement(measurement: &Measurement, incremental: &incremental::Incre
     }
     println!("  index: {}", measurement.index_report.summary());
     println!(
+        "  placement: {} of {} decided relations point at the entity the fixture names; \
+         {} decided and wrong, {} undecided, {} labelled with no relation, {} of {} labelled \
+         relations carry a placement claim",
+        measurement.placement.correct,
+        measurement.placement.decided,
+        measurement.placement.wrong.len(),
+        measurement.placement.undecided.len(),
+        measurement.placement.absent.len(),
+        measurement.placement.covered,
+        measurement.placement.labeled,
+    );
+    for edge in measurement.placement.wrong.iter().take(10) {
+        println!("  decided and wrong: {edge}");
+    }
+    for gap in measurement.placement.absent.iter().take(6) {
+        println!("  labelled, no relation: {gap}");
+    }
+    println!(
         "  entities held out of the symbol denominator (file, package, module layout): {}",
         measurement.structural_entities
     );
@@ -408,6 +426,23 @@ fn a_registered_language_with_a_fixture_is_measured_on_every_dimension() {
             "{} records a floor for {extra:?}, which is not a dimension the gate measures",
             language.as_str()
         );
+        // A placement label naming a file the fixture does not contain cannot be
+        // checked by anybody, so it is refused here rather than scored as a
+        // failure. A *relation* that no `reference`, `call` or `import` line
+        // claims is a different matter: the `binds` population is written out in
+        // full so it can name relations the existence dimensions deliberately do
+        // not score, and it is cross-checked against the file rather than against
+        // those lines. Forcing the two to be identical would mean adding existence
+        // labels to reach a placement label, and would move a published dimension
+        // for a change to an unrelated one.
+        for bind in &corpus.binds {
+            assert!(
+                corpus.directory.join(&bind.path).is_file(),
+                "{}: `{}` places a relation in a file the fixture does not contain",
+                language.as_str(),
+                bind.key(),
+            );
+        }
     }
 }
 

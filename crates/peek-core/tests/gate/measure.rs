@@ -37,6 +37,7 @@ pub const DIMENSIONS: &[&str] = &[
     "definitions",
     "calls",
     "references",
+    "resolution_correctness",
     "imports",
     "imports_module_retained",
     "members",
@@ -71,6 +72,12 @@ pub struct Measurement {
     pub missing: BTreeMap<&'static str, Vec<String>>,
     /// Relations the engine produced that no label accounts for, per class.
     pub spurious: BTreeMap<&'static str, Vec<String>>,
+    /// Decided relations that point somewhere other than the labelled entity,
+    /// and the labelled ones left undecided. Kept apart from [`Self::missing`]
+    /// because they are different failures with different remedies: a gap is fixed
+    /// by extracting more, and a wrong edge by resolving differently or not at
+    /// all. Merging them into one figure would hide the second behind the first.
+    pub placement: Placement,
     /// The query assertions that failed, in full.
     pub query_failures: Vec<String>,
     /// The context assertions that failed, in full.
@@ -174,6 +181,37 @@ impl RelationRow {
                     " module={module} alias={}",
                     self.alias.clone().unwrap_or_else(|| "-".to_owned())
                 ),
+            }
+        )
+    }
+
+    /// Whether the engine committed to a target: the two states that name one.
+    ///
+    /// **`Pending` is not one of them.** A pending relation is awaiting a decision
+    /// and carries a target only as an aspiration, so scoring it as a placement
+    /// would count an intention as an answer — and would make `Pending` and
+    /// `Unresolved` read alike, when one is work outstanding and the other is a
+    /// rung that declined to guess.
+    pub fn is_decided(&self) -> bool {
+        matches!(self.state, "resolved" | "inferred")
+    }
+
+    /// The same relation, written the way a reader wants to hear about a wrong
+    /// edge: what it names, where it is written, and where it lands.
+    ///
+    /// The rung is in the string because "wrong" and "wrong by the weakest rung
+    /// available" are different diagnoses, and four edges that look identical in a
+    /// count are not the same defect.
+    pub fn describe_decided(&self) -> String {
+        format!(
+            "{} from {} names `{}` and the {} rung placed it on {}",
+            self.kind,
+            format!("{} | {}", self.source.path, self.source.qualified_name),
+            self.target_name,
+            self.evidence,
+            match &self.target {
+                None => "<nothing>".to_owned(),
+                Some(row) => row.render(),
             }
         )
     }
@@ -374,6 +412,52 @@ impl Graph {
                     && relation.source.path == path
                     && relation.source.qualified_name == qualified_name
             })
+            .collect()
+    }
+
+    /// Whether the entity at `key` exists in this index at all.
+    ///
+    /// Asked before "is this edge wrong", because the answer separates two
+    /// defects that look identical in a count. An edge pointing at something that
+    /// is not in the index cannot be a misplacement — there is nothing there to
+    /// have placed — while an edge pointing at a *real* entity that the label says
+    /// is the wrong one is a placement the engine got wrong with the right
+    /// material in hand.
+    pub fn holds(&self, key: &Key) -> bool {
+        self.by_key.contains_key(&key.render())
+    }
+
+    /// Every entity carrying one declared name anywhere in the index.
+    ///
+    /// The population R5 asks about, read the same way R5 asks about it: by the
+    /// declared name, across every file. Used to tell "exactly one entity carries
+    /// this name" — the claim R5 stores — from the truth about the name.
+    pub fn named(&self, name: &str) -> Vec<&EntityRow> {
+        self.rows
+            .iter()
+            .filter(|row| row.qualified_name.rsplit('.').next() == Some(name))
+            .collect()
+    }
+
+    /// The `contains` edges pointing **into** this identity, as owner qualified
+    /// names.
+    ///
+    /// Read through the public store rather than recomputed from the source: the
+    /// question "which declarations contain this one" is a question about the
+    /// graph, and a gate that answered it from the source text would be measuring
+    /// its own reading of the fixture rather than the index.
+    pub fn contained_by(&self, key: &Key, relations: &[RelationRow]) -> Vec<String> {
+        let rendered = key.render();
+        relations
+            .iter()
+            .filter(|relation| {
+                matches!(relation.kind, "contains" | "defines")
+                    && relation
+                        .target
+                        .as_ref()
+                        .is_some_and(|target| target.key().render() == rendered)
+            })
+            .map(|relation| relation.source.qualified_name.clone())
             .collect()
     }
 }
@@ -735,6 +819,15 @@ pub fn measure(
         &reference_found,
     );
 
+    // -- placement: does a decided edge point at the right entity -------------
+    // A different question from the one above, and the one the other dimensions
+    // cannot ask. An edge can exist, be the right edge, and still name the wrong
+    // entity: `summarise -> out` is a real use of a name that no declaration
+    // anywhere carries, and placing it on `render.out` turns a missing edge into a
+    // claim. The wrong edges are reported by name, and the undecided ones are
+    // counted beside them rather than scored as failures.
+    let placement = score_placement(corpus, graph);
+
     // Negative controls: a declaration's own name is not a use of that name.
     let mut negative_reference_violations = Vec::new();
     for control in &corpus.no_references {
@@ -907,6 +1000,7 @@ pub fn measure(
         dimension("definitions", Fraction::new(defined, distinct.len() as u64)),
         dimension("calls", calls.recall()),
         dimension("references", references.recall()),
+        dimension("resolution_correctness", placement.fraction()),
         dimension("imports", imports.recall()),
         dimension(
             "imports_module_retained",
@@ -948,6 +1042,7 @@ pub fn measure(
         context_failures: Vec::new(),
         index_report: report,
         structural_entities,
+        placement,
     }
 }
 
@@ -963,6 +1058,206 @@ impl Measurement {
 
 fn dimension(name: &'static str, value: Fraction) -> Dimension {
     Dimension { name, value }
+}
+
+// ---------------------------------------------------------------------------
+// Placement: does a decided edge point at the right entity
+// ---------------------------------------------------------------------------
+
+/// What one decided relation got right, or what it got wrong.
+#[derive(Debug, Clone)]
+pub struct Placement {
+    /// Decided relations that point at the entity the fixture names.
+    pub correct: u64,
+    /// Every decided relation carrying a placement label. The denominator.
+    pub decided: u64,
+    /// Labelled relations the engine left undecided: a gap, not a wrong edge.
+    pub undecided: Vec<String>,
+    /// Decided relations pointing somewhere else, each named.
+    pub wrong: Vec<String>,
+    /// Placement labels with no matching relation at all, each named.
+    pub absent: Vec<String>,
+    /// Of the fixture's labelled relations of a scored class, how many carry a
+    /// placement claim. Published, because a label with no claim is a relation
+    /// whose placement nobody is checking.
+    pub covered: u64,
+    /// The labelled relations of a scored class, counted with multiplicity.
+    pub labeled: u64,
+}
+
+impl Placement {
+    /// The fraction of decided relations that are right.
+    ///
+    /// **The denominator is the decided relations, not the labelled ones.** That is
+    /// the whole point of the column: it is the population the engine claims to
+    /// have answered, so every member of it is a claim being checked. Scoring over
+    /// the labelled population instead would let the engine raise the figure by
+    /// deciding *less* — the exact move this column exists to make unattractive.
+    /// The undecided count is therefore reported beside it and never folded in.
+    pub fn fraction(&self) -> Fraction {
+        Fraction::new(self.correct, self.decided)
+    }
+}
+
+/// Score placement over every labelled relation that carries a `binds` label.
+///
+/// The population is the intersection of the placement labels and the labelled
+/// relations, so a `binds` line for something no other label names cannot
+/// silently become its own denominator. It is matched on class, path, subject
+/// **and name**: a reference to `count` and a call to `count` from the same
+/// function are two relations with two answers, and scoring them as one would
+/// report whichever was checked last.
+pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
+    let mut correct = 0u64;
+    let mut decided = 0u64;
+    let mut undecided = Vec::new();
+    let mut wrong = Vec::new();
+    let mut absent = Vec::new();
+
+    for bind in &corpus.binds {
+        let rows: Vec<&RelationRow> = graph
+            .relations
+            .iter()
+            .filter(|relation| {
+                relation.kind == bind.class
+                    && relation.source.path == bind.path
+                    && relation.source.qualified_name == bind.subject
+                    && relation.target_name == bind.name
+            })
+            .collect();
+
+        if rows.is_empty() {
+            absent.push(format!(
+                "{} | {} | {} names `{}`, and no relation does",
+                bind.class, bind.path, bind.subject, bind.name
+            ));
+            continue;
+        }
+
+        // Every row for one label has to agree. A source that uses a name twice
+        // produces two rows, and scoring the first and ignoring the second would
+        // report the engine right on the strength of one of two answers.
+        let mut right = 0u64;
+        let mut claimed = 0u64;
+        for row in &rows {
+            if !row.is_decided() {
+                undecided.push(format!(
+                    "{} from {} names `{}` [{}]",
+                    bind.class,
+                    format!("{} | {}", row.source.path, row.source.qualified_name),
+                    bind.name,
+                    row.state
+                ));
+                continue;
+            }
+            claimed += 1;
+            if placement_holds(bind.target.as_ref(), row.target.as_ref()) {
+                right += 1;
+            } else {
+                wrong.push(format!(
+                    "{}; the label says {}",
+                    row.describe_decided(),
+                    match &bind.target {
+                        None => "no entity is the referent".to_owned(),
+                        Some(key) => format!("`{}`", key.render()),
+                    }
+                ));
+            }
+        }
+        decided += claimed;
+        correct += right;
+    }
+
+    undecided.sort();
+    undecided.dedup();
+    wrong.sort();
+    wrong.dedup();
+    absent.sort();
+    let (covered, labeled) = placement_coverage(corpus);
+    Placement {
+        correct,
+        decided,
+        undecided,
+        wrong,
+        absent,
+        covered,
+        labeled,
+    }
+}
+
+/// The relation classes whose placement the gate scores.
+const PLACED_CLASSES: &[&str] = &["references", "calls", "imports"];
+
+/// How much of the labelled population the placement labels actually cover.
+///
+/// **Counted, not asserted.** A labelled relation with no `binds` line is a
+/// relation whose placement the gate does not check, which is a fact about the
+/// gate's coverage rather than a defect in the engine; an assertion here could
+/// only fail once every fixture were complete, and would make the check that
+/// fires on an engine change depend on an editorial decision about the fixture.
+fn placement_coverage(corpus: &Corpus) -> (u64, u64) {
+    let mut labeled = 0u64;
+    let mut covered = 0u64;
+    let mut seen: BTreeMap<String, u64> = BTreeMap::new();
+    for reference in &corpus.references {
+        *seen.entry(format!(
+            "references|{}|{}|{}",
+            reference.path, reference.subject, reference.object
+        ))
+        .or_default() += 1;
+    }
+    for call in &corpus.calls {
+        *seen.entry(format!("calls|{}|{}|{}", call.path, call.subject, call.object))
+            .or_default() += 1;
+    }
+    for import in &corpus.imports {
+        // An import relation's source is the file entity, and a file entity's
+        // qualified name is the file's own name. A fact about the model, not a
+        // guess about the fixture.
+        let file = Path::new(&import.path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        *seen.entry(format!("imports|{}|{}|{}", import.path, file, import.local))
+            .or_default() += 1;
+    }
+    let placed: BTreeMap<String, u64> = corpus
+        .binds
+        .iter()
+        .fold(BTreeMap::new(), |mut counts, bind| {
+            *counts.entry(bind.key()).or_default() += 1;
+            counts
+        });
+    for (key, count) in &seen {
+        if !PLACED_CLASSES.contains(&key.split('|').next().unwrap_or_default()) {
+            continue;
+        }
+        labeled += count;
+        // A claim covers a labelled relation once per occurrence: two labels for
+        // one relation and two claims for it is a match, and anything else is
+        // coverage the gate does not have.
+        covered += count.min(placed.get(key).copied().unwrap_or(0));
+    }
+    (covered, labeled)
+}
+
+/// Whether one placed target satisfies one placement label.
+///
+/// A label naming no entity is satisfied **only** by a relation that named none,
+/// which cannot happen for a decided relation — so every decided relation under a
+/// `binds_nothing` line is a wrong edge, and that is the intended reading rather
+/// than a special case worked around.
+fn placement_holds(want: Option<&Key>, got: Option<&EntityRow>) -> bool {
+    let (Some(want), Some(got)) = (want, got) else {
+        return false;
+    };
+    // Three fields, equal in all three. **Not** a near miss: two declarations of
+    // one identity are two rows with the same path, kind and qualified name and
+    // different ordinals, so comparing on the qualified name alone would let
+    // `Pair<U>.first` pass for `Pair.first`. This is the same identity rule
+    // `definitions` is scored on, and using one rule in both places is what stops
+    // the two dimensions disagreeing about what a name means.
+    got.key() == *want
 }
 
 fn call_multiset(calls: &[LabelledCall]) -> Multiset {

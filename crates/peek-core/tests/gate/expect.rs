@@ -85,6 +85,53 @@ pub struct LabelledImport {
     pub alias: Option<String>,
 }
 
+/// Where a labelled relation is required to point, when it is decided at all.
+///
+/// **The question this answers is "when the engine says it knows, is it right",
+/// and nothing else.** The other relation dimensions ask whether an edge exists.
+/// An edge can exist, be the right edge, and still name the wrong entity — a
+/// confidently wrong claim, which is worse than a missing one, because a missing
+/// edge is an absence a reader can see.
+///
+/// It **annotates a label that already exists** rather than declaring a population
+/// of its own. The class, path, subject and name name a relation some `reference`
+/// or `call` line has already claimed, and the score is over the intersection. So
+/// the denominator is a population somebody wrote down in the ordinary way, and
+/// adding a placement claim cannot change any other dimension: a `binds` line for
+/// a relation no other line names is a parse error rather than a new population,
+/// and the labels with no placement claim are counted and printed rather than
+/// quietly dropped.
+///
+/// The target is [`Option`] because the honest answer is sometimes that **no
+/// entity is the referent**: `let mut out = ...` is a use of the name `out` and
+/// nothing in the repository declares it. A line of that shape does not forbid the
+/// relation — the fixture still says a use of a name is a reference wherever it
+/// appears — it says that deciding it would be a false claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bind {
+    /// The relation class, spelled as the store spells it: `references`,
+    /// `calls`, `imports`, `inherits` or `implements`.
+    pub class: String,
+    /// Repository-relative path of the file the relation is written in.
+    pub path: String,
+    /// The enclosing symbol's qualified name, or the file's name at file level.
+    pub subject: String,
+    /// The name the relation is about.
+    pub name: String,
+    /// The entity a decided relation must point at, or `None` when none can.
+    pub target: Option<Key>,
+}
+
+impl Bind {
+    /// The identity of the relation this label is about, as the store keys it.
+    pub fn key(&self) -> String {
+        format!(
+            "{}|{}|{}|{}",
+            self.class, self.path, self.subject, self.name
+        )
+    }
+}
+
 /// A pair of entity identities: a question and the answer that satisfies it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelledPair {
@@ -116,6 +163,8 @@ pub struct Corpus {
     pub inherits: Vec<Labelled>,
     pub implements: Vec<Labelled>,
     pub no_inherits: Vec<Labelled>,
+    /// Where each labelled relation has to point if it is decided at all.
+    pub binds: Vec<Bind>,
     pub callers: Vec<LabelledPair>,
     pub callees: Vec<LabelledPair>,
     pub implementations: Vec<LabelledPair>,
@@ -177,12 +226,28 @@ const KEYWORDS: &[&str] = &[
     "inherits",
     "implements",
     "no_inherits",
+    "binds",
+    "binds_nothing",
     "callers",
     "callees",
     "implementations",
     "context",
     "context_ambiguous",
     "floor",
+];
+
+/// The relation classes a `binds` line may name.
+///
+/// Checked rather than accepted, because a class the store never spells is a
+/// line that can never be matched against a row: the label would sit in the file,
+/// look like ground truth, and shrink the denominator of the dimension it exists
+/// to measure. A typo there is otherwise invisible.
+pub const CLASSES: &[&str] = &[
+    "references",
+    "calls",
+    "imports",
+    "inherits",
+    "implements",
 ];
 
 /// Parse one `gate.expect`.
@@ -210,6 +275,7 @@ pub fn parse(language: Language, directory: &Path) -> Result<Corpus, Vec<Problem
         inherits: Vec::new(),
         implements: Vec::new(),
         no_inherits: Vec::new(),
+        binds: Vec::new(),
         callers: Vec::new(),
         callees: Vec::new(),
         implementations: Vec::new(),
@@ -256,6 +322,8 @@ fn arity(keyword: &str) -> usize {
     match keyword {
         "symbol" => 4,
         "member" | "reference" | "no_reference" | "inherits" | "implements" | "no_inherits" => 4,
+        "binds" => 8,
+        "binds_nothing" => 5,
         "call" => 5,
         "import" => 5,
         "import_no_module" => 3,
@@ -326,6 +394,26 @@ fn absorb(corpus: &mut Corpus, keyword: &str, fields: &[&str]) -> Result<(), Str
             subject: fields[2].to_owned(),
             object: fields[3].to_owned(),
         }),
+        "binds" => {
+            let class = checked_class(fields[1])?;
+            corpus.binds.push(Bind {
+                class,
+                path: fields[2].to_owned(),
+                subject: fields[3].to_owned(),
+                name: fields[4].to_owned(),
+                target: Some(Key::new(fields[5], fields[6], fields[7])),
+            });
+        }
+        "binds_nothing" => {
+            let class = checked_class(fields[1])?;
+            corpus.binds.push(Bind {
+                class,
+                path: fields[2].to_owned(),
+                subject: fields[3].to_owned(),
+                name: fields[4].to_owned(),
+                target: None,
+            });
+        }
         "callers" | "implementations" => {
             let pair = LabelledPair {
                 target: Key::new(fields[1], fields[2], fields[3]),
@@ -357,6 +445,17 @@ fn absorb(corpus: &mut Corpus, keyword: &str, fields: &[&str]) -> Result<(), Str
         _ => return Err(format!("unhandled keyword `{keyword}`")),
     }
     Ok(())
+}
+
+/// One of the classes a `binds` line may name, or the error saying it is not one.
+fn checked_class(field: &str) -> Result<String, String> {
+    if CLASSES.contains(&field) {
+        Ok(field.to_owned())
+    } else {
+        Err(format!(
+            "`{field}` is not a relation class; expected one of {CLASSES:?}"
+        ))
+    }
 }
 
 fn alias_of(field: &str) -> Option<String> {
@@ -461,6 +560,85 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0);
+    }
+
+    #[test]
+    fn every_binds_line_names_a_file_the_fixture_actually_contains() {
+        // A placement label naming a file that does not exist cannot be checked by
+        // anybody, and a label nothing can check is worse than no label: it sits in
+        // the file looking like ground truth.
+        let parsed = corpus();
+        assert!(!parsed.binds.is_empty());
+        for bind in &parsed.binds {
+            assert!(
+                parsed.directory.join(&bind.path).is_file(),
+                "a placement label names a file the fixture does not contain: {}",
+                bind.key()
+            );
+        }
+    }
+
+    #[test]
+    fn a_binds_line_says_where_and_a_binds_nothing_line_says_nowhere() {
+        // The two shapes of the claim, and the difference between them. `binds`
+        // names one entity; `binds_nothing` says the name is a real use with no
+        // referent, so **any** decided edge on it is a false claim.
+        let parsed = corpus();
+        let named: Vec<&super::Bind> = parsed
+            .binds
+            .iter()
+            .filter(|bind| bind.target.is_some())
+            .collect();
+        let anonymous: Vec<&super::Bind> = parsed
+            .binds
+            .iter()
+            .filter(|bind| bind.target.is_none())
+            .collect();
+        assert!(
+            !named.is_empty() && !anonymous.is_empty(),
+            "both shapes are load-bearing: a fixture with only `binds` could not tell a \
+             misplacement from a missing declaration"
+        );
+        for bind in named {
+            let target = bind.target.as_ref().expect("a `binds` target");
+            assert!(
+                !target.path.is_empty() && !target.kind.is_empty(),
+                "`{}` has an incomplete target, so it can never match a row",
+                bind.key()
+            );
+        }
+        // And the shape of the key itself, so a class typo is caught here rather
+        // than by a dimension quietly scoring nothing.
+        for bind in &parsed.binds {
+            assert!(
+                super::CLASSES.contains(&bind.class.as_str()),
+                "`{}` names class `{}`, which the store never spells",
+                bind.key(),
+                bind.class
+            );
+        }
+    }
+
+    #[test]
+    fn a_class_the_store_does_not_spell_is_a_parse_error() {
+        let directory = std::env::temp_dir().join(format!(
+            "peek-gate-class-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&directory).expect("create the scratch directory");
+        std::fs::write(
+            directory.join("gate.expect"),
+            "binds | reference | src/lib.rs | summarise | out | a | b | c\n",
+        )
+        .expect("write the expectation file");
+        let problems = super::parse(peek_core::model::Language::Rust, &directory)
+            .expect_err("`reference` is not the store's spelling");
+        assert!(
+            problems[0].message.contains("not a relation class"),
+            "{problems:?}"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

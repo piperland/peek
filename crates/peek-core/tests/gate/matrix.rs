@@ -51,6 +51,11 @@ pub const MEANINGS: &[(&str, &str, &str)] = &[
         "labelled uses of a name",
     ),
     (
+        "resolution_correctness",
+        "of the decided relations the fixture says where they must point, how many point at the entity it names",
+        "labelled relations the engine placed in a `resolved` or `inferred` state; a relation left undecided is a gap and is counted beside this figure, never inside it",
+    ),
+    (
         "imports",
         "of the labelled import bindings, how many produced an import relation carrying the same module and alias",
         "labelled import bindings",
@@ -341,6 +346,31 @@ pub fn to_json(rows: &[Row]) -> String {
                         ),
                     ));
                     entries.push(("index_report", index_report(&measurement.index_report)));
+                    // The two placement counts beside the fraction, because the
+                    // fraction alone is the number that can be improved by
+                    // declining to answer. A reader who sees `resolution_correctness`
+                    // with no denominator beside it cannot tell a resolver that got
+                    // its decided edges right from one that decided three and got
+                    // them right, and those are very different engines.
+                    entries.push((
+                        "placement",
+                        Json::obj(vec![
+                            ("decided", Json::Num(measurement.placement.decided)),
+                            ("correct", Json::Num(measurement.placement.correct)),
+                            (
+                                "wrong",
+                                Json::Num(measurement.placement.wrong.len() as u64),
+                            ),
+                            (
+                                "undecided",
+                                Json::Num(measurement.placement.undecided.len() as u64),
+                            ),
+                            (
+                                "unlabelled_relations",
+                                Json::Num(measurement.placement.absent.len() as u64),
+                            ),
+                        ]),
+                    ));
                 }
             }
             Json::obj(entries)
@@ -434,21 +464,72 @@ pub fn to_markdown(rows: &[Row], generated_note: &str) -> String {
     out.push_str("\n## Resolution and correctness\n\n");
     out.push_str(
         "| Language | Inheritance (subject) | Inheritance (base) | No self-reference | \
-         No false inheritance | Incremental | Query | Context |\n",
+         No false inheritance | Resolution correctness | Incremental | Query | Context |\n",
     );
-    out.push_str("|---|---|---|---|---|---|---|---|\n");
+    out.push_str("|---|---|---|---|---|---|---|---|---|\n");
     for row in rows {
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             row.language.as_str(),
             row.cell("inheritance_subject"),
             row.cell("inheritance_base"),
             row.cell("negative_references"),
             row.cell("negative_inheritance"),
+            row.cell("resolution_correctness"),
             row.cell("incremental"),
             row.cell("query"),
             row.cell("context"),
         ));
+    }
+
+    out.push_str(
+        "\n### Decided and wrong\n\n\
+         `resolution_correctness` is a fraction over the relations the engine **decided**, so\n\
+         it can be raised by declining to decide more. These four counts are published beside\n\
+         it for that reason: a language cannot read well by answering less. `wrong` is a\n\
+         confidently wrong edge — a claim — and `undecided` is a gap, an absence a reader can\n\
+         see. They are never added together.\n\n",
+    );
+    out.push_str(
+        "| Language | Decided | Right | Decided and wrong | Undecided | Labelled but no relation |\n\
+         |---|---|---|---|---|---|\n",
+    );
+    for row in rows {
+        let Some(measurement) = &row.measurement else {
+            continue;
+        };
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} |\n",
+            row.language.as_str(),
+            measurement.placement.decided,
+            measurement.placement.correct,
+            measurement.placement.wrong.len(),
+            measurement.placement.undecided.len(),
+            measurement.placement.absent.len(),
+        ));
+    }
+
+    out.push_str(
+        "\n### Every decided-and-wrong edge, by name\n\n\
+         A rate is not an audit. Four edges is a list somebody can read against the source.\n\n",
+    );
+    let mut any_wrong = false;
+    for row in rows {
+        let Some(measurement) = &row.measurement else {
+            continue;
+        };
+        if measurement.placement.wrong.is_empty() {
+            continue;
+        }
+        any_wrong = true;
+        out.push_str(&format!("**{}**\n\n", row.language.as_str()));
+        for edge in &measurement.placement.wrong {
+            out.push_str(&format!("- {edge}\n"));
+        }
+        out.push('\n');
+    }
+    if !any_wrong {
+        out.push_str("No language has a decided edge pointing at the wrong entity.\n");
     }
 
     out.push_str("\n## Relation states per class\n\n");
