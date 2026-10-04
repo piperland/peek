@@ -2724,6 +2724,69 @@ fn the_uniqueness_refusal_is_a_consequence_of_the_bound_and_not_of_the_rung() {
 }
 
 #[test]
+fn a_cut_short_edge_read_is_reported_and_still_leaves_the_pass_incomplete() {
+    // **The cut-offs that remain, pinned so they cannot go quietly.** Paging closed the one bound
+    // that cut a pass short without the caller asking for it. Three bounds still cut because they
+    // bound a *search* rather than an enumeration: a name's candidate set, and the two adjacency
+    // reads. This is the adjacency half.
+    //
+    // One source with two outgoing calls, and a bound of one row per source. The pass therefore
+    // reads one of the two and never learns the other exists, which is the same shape as the defect
+    // this work started from — so the assertion that matters is the **count**, not the state. Before
+    // this change `resolve_paths` abandoned those reads without recording anything, so a caller saw
+    // a pass that reported success and left an edge undecided, which is the worst of both.
+    //
+    // The pass is still incomplete here, and that is stated rather than hidden: a caller who asks
+    // for a bound of one row per source gets a pass over one row per source. What it is entitled
+    // to is the number, and it now gets it. The difference from the entity bound is the whole
+    // point — `entities_page` was a bound the caller never chose and a default that silently
+    // truncated, whereas `outgoing_per_source` is a bound the caller set and can see.
+    let tree = TempTree::new("edge-bound-reported");
+    tree.write("src/driver.rs", "fn go() { alpha(); beta(); }\n");
+
+    let mut store = tree.index_without_resolving();
+    let report = resolve_paths(
+        &mut store,
+        &[RepoPath::new("src/driver.rs").expect("valid path")],
+        &[],
+        ResolutionOptions {
+            outgoing_per_source: 1,
+            ..ResolutionOptions::default()
+        },
+    )
+    .expect("a pass whose edge bound cuts short");
+
+    assert!(
+        report.truncated > 0,
+        "an edge read that stopped at its bound has to be counted: {}",
+        report.summary()
+    );
+    assert!(
+        report.summary().contains("truncated"),
+        "and the summary has to say so: {}",
+        report.summary()
+    );
+
+    let pending: Vec<String> = relations_of(&store, RelationKind::Calls)
+        .into_iter()
+        .filter(|relation| relation.resolution.is_pending())
+        .map(|relation| relation.target_name.clone())
+        .collect();
+    assert_eq!(
+        pending.len(),
+        1,
+        "one row per source leaves exactly one of the two calls outside the pass, and the count \
+         above is what tells the caller that: {pending:?}"
+    );
+    assert!(
+        report.pending_remaining,
+        "and the pass says it left work behind, which is the difference between a reported limit \
+         and a silent one: {}",
+        report.summary()
+    );
+}
+
+#[test]
 fn every_relation_the_pass_examined_is_accounted_for_and_none_is_left_pending() {
     // The report and the store are two descriptions of one pass. If they disagree, one of them is
     // fiction, and a `peek status` that disagrees with the index is worse than no status at all.
