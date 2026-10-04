@@ -285,6 +285,28 @@ reference | src/model.rs | entry | count
 no_reference | src/model.rs | entry | entry
 no_reference | src/model.rs | Entry | Entry
 
+# The four field reads this fixture makes, labelled because `entry.label` and
+# `entry.count` are the same construct as the two above and labelling one of a
+# pair without its twin is not something a reviewer can check by eye. `entry` in
+# each is a loop variable or a parameter over `&[Entry]`, so both names denote
+# fields of `Entry`.
+#
+# These were outside the labelled population until a column asked where a decided
+# edge *points*. An earlier run reported `render | count` and `describe | count`
+# resolving to `format_line.count` — a parameter of the very function whose body
+# they sit in — and nothing could see it, because no `reference` line claimed
+# either row and `references` is scored on whether a row exists at all.
+reference | src/report.rs | render | label
+reference | src/report.rs | render | count
+reference | src/report.rs | format_line_inner | label
+reference | src/service.rs | describe | label
+reference | src/service.rs | describe | count
+
+# And the same read in the two `impl` blocks, where `entry` is the parameter of
+# `save` and the field is `Entry.count`.
+reference | src/traits.rs | Ticks.save | count
+reference | src/traits.rs | Meters.save | count
+
 # `Entry { label: label.to_owned(), count }`. Both occurrences of `label` are in
 # one row: the field key and the value read, and the two are separated by nothing
 # in the relation identity. The use in a value position reads the **parameter**,
@@ -292,6 +314,19 @@ no_reference | src/model.rs | Entry | Entry
 # there is the parameter as well.
 binds | references | src/model.rs | function | entry | label | src/model.rs | parameter | entry.label
 binds | references | src/model.rs | function | entry | count | src/model.rs | parameter | entry.count
+
+# `Entry { label: label.to_owned(), count }` in `entry`, and the field reads
+# elsewhere that are the same construct. `Entry.label` and `Entry.count` are the
+# fields being read in every one of them: `entry` is a loop variable over
+# `&[Entry]` in `render`, the parameter of `describe`, and the parameter of
+# `save` in `traits.rs`.
+binds | references | src/report.rs | function | render | label | src/model.rs | field | Entry.label
+binds | references | src/report.rs | function | render | count | src/model.rs | field | Entry.count
+binds | references | src/report.rs | function | format_line_inner | label | src/model.rs | field | Entry.label
+binds | references | src/service.rs | function | describe | label | src/model.rs | field | Entry.label
+binds | references | src/service.rs | function | describe | count | src/model.rs | field | Entry.count
+binds | references | src/traits.rs | method | Ticks.save | count | src/model.rs | field | Entry.count
+binds | references | src/traits.rs | method | Meters.save | count | src/model.rs | field | Entry.count
 
 # ---------------------------------------------------------------------------
 # src/traits.rs
