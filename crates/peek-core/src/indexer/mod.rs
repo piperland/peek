@@ -684,8 +684,10 @@ fn package_root_moves(root: &Path, paths: &[PathBuf]) -> BTreeSet<String> {
         }
         // The *repository-relative* directory, because that is the spelling `PackageRoots` and
         // `Store::indexed_paths` both use. An absolute parent would match nothing.
-        if let Some(relative) = relative_path(root, path) {
-            directories.insert(relative);
+        if let Some(relative) = relative_path(root, path)
+            && let Ok(relative) = RepoPath::from_path(&relative.to_string_lossy().replace('\\', "/"))
+        {
+            directories.insert(relative.as_str().to_owned());
         }
     }
     directories

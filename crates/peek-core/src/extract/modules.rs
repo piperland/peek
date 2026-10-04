@@ -217,7 +217,7 @@ impl PackageRoots {
             let Some(directory) = directory_of(&path) else {
                 continue;
             };
-            if layout.package_roots.contains(stem_of(&path)) {
+            if layout.package_roots.contains(&stem_of(&path)) {
                 holders.insert(directory.to_owned());
             }
         }
