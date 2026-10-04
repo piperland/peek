@@ -649,8 +649,10 @@ pub struct ResolutionView {
     pub reconsidered: u64,
     pub displaced: u64,
     pub relations_written: u64,
-    /// Candidate lookups abandoned at a limit. Non-zero means this build's answer may be less
-    /// complete than the index could have supported, and it is the only way to know.
+    /// Lookups the pass abandoned at a bound. Non-zero means this build's answer may be less
+    /// complete than the index could have supported, and it is the only way to know. A file's own
+    /// entity list is read in pages and is not one of these, so a pass over a file larger than any
+    /// page reports zero rather than reporting a truncation that did not happen.
     pub truncated: u64,
     /// Whether any `Pending` relation is still in the index. A true here is unfinished work, not a
     /// defect, and the two look the same in a count.

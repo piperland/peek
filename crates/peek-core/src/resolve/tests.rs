@@ -2400,36 +2400,321 @@ fn an_ambiguity_widened_by_a_new_file_is_not_re_decided_until_a_full_pass_runs()
     );
 }
 
+/// A file with far more entities in it than a small page can hold, and one call written in the
+/// **last** of them by identity order.
+///
+/// Two things about the fixture are deliberate, and both are there to make a partial fix fail:
+///
+/// * The caller's qualified name sorts last (`zzz_drive` after `f19`), because
+///   `Store::entities_in_file_after` orders by `(kind, qualified_name, entity_ordinal)` — so a
+///   reader that stops after a page stops before the caller, and a reader that stops before the
+///   caller never learns the call exists.
+/// * The callee is in the tail as well, so the *ladder's own* read of the source file is exercised
+///   separately from the scope enumeration. A pass that enumerated the whole file but then decided
+///   each relation against a bounded prefix of it would find no `f19` in the same file, fall
+///   through to the repository-wide rung, and store `inferred (unique_name)` — a different, weaker
+///   answer, produced by the same defect. Asserting the rung rather than only the state catches it;
+///   asserting `pending_remaining` alone would not.
+fn wide_file(label: &str) -> TempTree {
+    let tree = TempTree::new(label);
+    let mut source = String::new();
+    for index in 0..20 {
+        source.push_str(&format!("fn f{index:02}() {{}}\n"));
+    }
+    source.push_str("fn zzz_drive() { f19(); }\n");
+    tree.write("src/lib.rs", &source);
+    tree
+}
+
+/// Every relation in the index, described, in a form two builds can be compared by.
+///
+/// The five states partition the relation set, so enumerating each one enumerates the index — and
+/// comparing the whole list rather than a count is what lets a comparison notice *which* relation
+/// changed. A test that compared counts could pass on two indexes that differ in every answer and
+/// happen to balance.
+fn every_decision(store: &Store) -> Vec<String> {
+    let mut rows = Vec::new();
+    // `relations_in_state` reads the tag, so only the variants matter; the payloads are the
+    // resolver's own placeholders, kept identical to the ones the pass asks for.
+    for state in [
+        ResolutionState::Pending {
+            evidence: Evidence::NameOnly,
+            basis: String::new(),
+        },
+        ResolutionState::Resolved {
+            by: Evidence::NameOnly,
+        },
+        ResolutionState::Inferred {
+            by: Evidence::NameOnly,
+            basis: String::new(),
+        },
+        ResolutionState::Ambiguous {
+            candidates: Vec::new(),
+        },
+        ResolutionState::Unresolved {
+            reason: UnresolvedReason::NoCandidate,
+        },
+    ] {
+        for relation in store
+            .relations_in_state(&state, 4096)
+            .expect("read one resolution state")
+        {
+            rows.push(format!(
+                "{:?} {} -> {} [{}] {:?}",
+                relation.kind,
+                relation.source,
+                relation.target_name,
+                relation.resolution.describe(),
+                relation.target,
+            ));
+        }
+    }
+    rows.sort();
+    rows
+}
+
+#[test]
+fn a_file_larger_than_the_page_is_read_to_the_end_and_leaves_nothing_pending() {
+    // The defect, as it was measured. On `BurntSushi/ripgrep`, `crates/core/flags/defs.rs` holds
+    // 1,363 entities; a refresh of it decided 2,121 of the file's 3,599 relations and left **348**
+    // `Pending` — extracted, never placed, never refused. The lowest-ranked pending source was
+    // #514, one row past the bound of 512, and `2,121 + 348 = 2,469` is the file's non-structural
+    // relation total, so the missing work was the part outside the pass rather than a class of
+    // relation the ladder declined.
+    //
+    // A second refresh of that file changed nothing (348 → 348), because the bound cut the same
+    // tail off again, and only `resolve_all` clears them — which `build_full` alone calls. So the
+    // leak grew one large file at a time on the operation `watch` runs on every keystroke.
+    //
+    // This is that measurement as a test, at a size a test can afford. A page of 4 rows against a
+    // file of twenty-plus entities is the same arithmetic.
+    let tree = wide_file("paged-file");
+    let mut store = tree.index_without_resolving();
+
+    let report = resolve_paths(
+        &mut store,
+        &[RepoPath::new("src/lib.rs").expect("valid path")],
+        &[],
+        ResolutionOptions::default().with_entities_page(4),
+    )
+    .expect("a scoped pass over a file larger than its page");
+
+    assert!(
+        !report.pending_remaining,
+        "a file larger than the page must be read to the end: a bounded read left the tail of every \
+         large file `Pending`, and nothing afterwards revisited it: {}",
+        report.summary()
+    );
+    assert_eq!(
+        report.truncated,
+        0,
+        "and a pass that read the whole file reports no truncation. The bound is a page size now, \
+         not a cut-off, so a file being large is not something the pass failed to do: {}",
+        report.summary()
+    );
+
+    // The rung, not only the state. `f19` is in the tail of the source file too, so a pass that
+    // enumerated the file in full but decided against a bounded prefix of it would report the call
+    // `inferred (unique_name)` — still a decision, still no pending relation, and still wrong.
+    let call = the_call(&store, "f19");
+    assert_eq!(
+        call.resolution,
+        ResolutionState::Resolved {
+            by: Evidence::SameFile
+        },
+        "the call's target is declared in the same file, and that file is larger than the page, so \
+         the same-file rung is the only one that can honestly answer: {}",
+        state_of(&call)
+    );
+    assert_eq!(
+        call.target,
+        Some(id("src/lib.rs", EntityKind::Function, "f19")),
+        "and it points at the definition the fixture wrote: {}",
+        state_of(&call)
+    );
+    assert!(
+        report.examined > 0,
+        "the pass must have looked at something, or the assertions above pass for the wrong reason: \
+         {}",
+        report.summary()
+    );
+    assert_eq!(
+        report.resolved + report.inferred + report.ambiguous + report.unresolved,
+        report.examined,
+        "and every relation it looked at must be accounted for: {}",
+        report.summary()
+    );
+}
+
+#[test]
+fn the_page_size_is_a_page_size_and_does_not_change_the_answer() {
+    // The contract the option now carries, stated as an equality rather than as prose: the bound
+    // decides **how many reads** the pass makes and nothing about **what it decides**.
+    //
+    // Two arms off two independently built copies of byte-identical input. Not two passes over one
+    // index — a second pass over the same index would find nothing pending and compare an empty
+    // answer against a full one, which is how a comparison that proves nothing gets written. And
+    // not two builds of different trees: the whole point is that only the page size differs.
+    let narrow = wide_file("page-narrow");
+    let roomy = wide_file("page-roomy");
+
+    let mut narrow_store = narrow.index_without_resolving();
+    let narrow_report =
+        resolve_all(&mut narrow_store, ResolutionOptions::default().with_entities_page(1))
+            .expect("resolve one entity at a time");
+    let mut roomy_store = roomy.index_without_resolving();
+    let roomy_report =
+        resolve_all(&mut roomy_store, ResolutionOptions::default().with_entities_page(4096))
+            .expect("resolve in one page");
+
+    assert_eq!(
+        narrow_report.truncated,
+        0,
+        "a page size of one row reads the file twenty times over and truncates nothing: {}",
+        narrow_report.summary()
+    );
+    assert_eq!(
+        roomy_report.truncated,
+        0,
+        "and a page size above the file's entity count truncates nothing either: {}",
+        roomy_report.summary()
+    );
+    assert_eq!(
+        every_decision(&narrow_store),
+        every_decision(&roomy_store),
+        "one page and one row per page must reach the same decisions; the bound is a page size, so \
+         it may not move an answer"
+    );
+}
+
+#[test]
+fn a_page_size_of_zero_reads_the_file_rather_than_nothing() {
+    // A page that can hold no rows comes back short, and a short page says "that was the last
+    // page". So a page size of zero would report every file in the repository as empty, resolve
+    // every relation to `no_candidate`, and print a report saying nothing was wrong. It is one
+    // clamp and a whole class of silent wrongness, so it is pinned rather than left to a reader to
+    // infer.
+    let tree = wide_file("page-zero");
+    let mut store = tree.index_without_resolving();
+
+    let report = resolve_all(
+        &mut store,
+        ResolutionOptions::default().with_entities_page(0),
+    )
+    .expect("a page size of zero is a page size");
+
+    let call = the_call(&store, "f19");
+    assert_eq!(
+        call.resolution,
+        ResolutionState::Resolved {
+            by: Evidence::SameFile
+        },
+        "the file was read, so the call resolves the way it does at any other page size: {}",
+        state_of(&call)
+    );
+    assert!(
+        !report.pending_remaining,
+        "and nothing was left undecided: {}",
+        report.summary()
+    );
+}
+
 #[test]
 fn a_truncated_candidate_lookup_is_reported_rather_than_silently_accepted() {
-    // A limit that is not visible is a limit that quietly changes the answer. A file with more
-    // entities than the pass will read must be recorded as truncated, so a caller can tell an
-    // honest "no candidate" from an incomplete search.
+    // A limit that is not visible is a limit that quietly changes the answer.
+    //
+    // **This fixture changed, and the old one asserted a truth that is now false by design.** It
+    // used to shrink `entities_per_file` below the file's entity count and require the pass to
+    // report a truncation — which it did, and which is exactly what the pass no longer does: a
+    // file's entity list is paged, so a file bigger than the page is a page *count* and not a
+    // truncation. Reading that assertion as still-required would have pinned the defect back in.
+    // The lookup this is now about is the one that can still cut: a name's candidate set.
+    //
+    // Three files declare `charge` and a fourth calls it, so the name lookup finds three
+    // candidates. A bound of one row stops after the first, so the rung has exactly one candidate
+    // and would answer "exactly one entity named `charge` is indexed" — a sentence about the whole
+    // repository, derived from one row, stored in the field whose purpose is to be auditable. So
+    // the pass refuses instead, and says why in the count.
     let tree = TempTree::new("truncation-reported");
-    let mut source = String::from("fn main() { helper(); }\n");
-    for index in 0..12 {
-        source.push_str(&format!("fn helper_{index}() {{}}\n"));
-    }
-    tree.write("src/lib.rs", &source);
+    tree.write("src/one.rs", "pub fn charge() {}\n");
+    tree.write("src/two.rs", "pub fn charge() {}\n");
+    tree.write("src/three.rs", "pub fn charge() {}\n");
+    tree.write("src/driver.rs", "fn go() { charge(); }\n");
 
     let mut store = tree.index_without_resolving();
     let report = resolve_all(
         &mut store,
-        ResolutionOptions::default()
-            .with_entities_per_file(4)
-            .with_entities_by_name(4),
+        ResolutionOptions::default().with_entities_by_name(1),
     )
     .expect("resolve");
 
     assert!(
         report.truncated > 0,
-        "a limit smaller than the file must be recorded: {}",
+        "a name lookup that stopped at its bound must be recorded: {}",
         report.summary()
     );
     assert!(
         report.summary().contains("truncated"),
         "and the summary must say so: {}",
         report.summary()
+    );
+
+    // The refusal, and the discriminating half: one row was read and three declarations exist, so
+    // the uniqueness claim is false and the relation must come out unestablished rather than
+    // confidently pointed at whichever file sorted first.
+    let call = the_call(&store, "charge");
+    assert_eq!(
+        call.resolution,
+        ResolutionState::Unresolved {
+            reason: UnresolvedReason::NoCandidate
+        },
+        "a uniqueness check read from a window that stopped at the bound is not a uniqueness check, \
+         so the rung declines and the edge is visibly unestablished instead of wrong: {}",
+        state_of(&call)
+    );
+}
+
+#[test]
+fn the_uniqueness_refusal_is_a_consequence_of_the_bound_and_not_of_the_rung() {
+    // The discriminator for the refusal above. Same fixture, same three declarations, same call —
+    // only the bound on the name lookup differs, and the answer must differ with it.
+    //
+    // Without this second arm the refusal could be satisfied by deleting R5 outright, which would
+    // turn a class of correct `inferred` answers into `no_candidate` and still pass the test above.
+    // What is being pinned is that the *bound* decides, not the rung.
+    let roomy = TempTree::new("uniqueness-roomy");
+    roomy.write("src/one.rs", "pub fn charge() {}\n");
+    roomy.write("src/two.rs", "pub fn charge() {}\n");
+    roomy.write("src/three.rs", "pub fn charge() {}\n");
+    roomy.write("src/driver.rs", "fn go() { charge(); }\n");
+
+    let mut store = roomy.index_without_resolving();
+    let report = resolve_all(
+        &mut store,
+        ResolutionOptions::default().with_entities_by_name(64),
+    )
+    .expect("resolve");
+
+    assert_eq!(
+        report.truncated,
+        0,
+        "a bound above the candidate count cuts nothing, so there is nothing to refuse: {}",
+        report.summary()
+    );
+    let call = the_call(&store, "charge");
+    let candidates = match &call.resolution {
+        ResolutionState::Ambiguous { candidates } => candidates.clone(),
+        other => panic!(
+            "three equally supported declarations are an ambiguity, not a refusal — with nothing \
+             cut short the rung must answer: {other:?}: {}",
+            state_of(&call)
+        ),
+    };
+    assert_eq!(
+        candidates.len(),
+        3,
+        "and every one of them is written down, because a cut-short list is not the case here: \
+         {candidates:?}"
     );
 }
 

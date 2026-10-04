@@ -447,8 +447,12 @@ impl IndexAnswer {
                 text.push_str(&format!("unresolved by reason: {}\n", reasons.join(", ")));
             }
             if resolution.truncated > 0 {
+                // "a bound", not "a limit", and not "a candidate lookup": the counter covers the
+                // adjacency reads as well as the candidate sets, and it does not cover a file's
+                // entity list at all — that one is paged and read whole, so a complete build of a
+                // repository with files larger than any page still reports zero here.
                 text.push_str(&format!(
-                    "truncated:  {} candidate lookup(s) hit a limit\n",
+                    "truncated:  {} lookup(s) hit a bound\n",
                     resolution.truncated
                 ));
             }

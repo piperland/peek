@@ -237,12 +237,58 @@
 //! previous decisions intact. A pass that decides nothing does not commit at all, so
 //! re-resolving an unchanged index costs a read and changes nothing.
 //!
-//! # Limits are reported, never silent
+//! # Limits are reported, never silent — and a file is not one of them
 //!
-//! Every lookup through the store is bounded, because an unbounded one is how the predecessor's
-//! `resolve_target_id` became the first line of all ten of its queries. When a limit truncates a
-//! candidate set the pass records it in [`ResolutionReport::truncated`], because a limit that is
-//! not visible is a limit that quietly changes the answer.
+//! Every candidate lookup through the store is bounded, because an unbounded one is how the
+//! predecessor's `resolve_target_id` became the first line of all ten of its queries. When a limit
+//! truncates a candidate set the pass records it in [`ResolutionReport::truncated`], because a limit
+//! that is not visible is a limit that quietly changes the answer.
+//!
+//! **A file's entity list is not one of the bounded lookups, and that is a decision rather than an
+//! omission.** It used to be. The enumeration was `entities_in_file(path, entities_per_file)` with a
+//! default of 512, and both doors into a file — its own outgoing edges, and the edges arriving at the
+//! entities it declares — opened through that one list. So a file with more than 512 entities had
+//! its tail outside the pass entirely: the relations of those entities were extracted, never placed,
+//! and never refused. `Pending` is the one state that answers no question in either direction, so
+//! nothing in the output said so.
+//!
+//! The measurement is specific enough to check. On `BurntSushi/ripgrep`, `crates/core/flags/defs.rs`
+//! holds 1,363 entities; a refresh of it decided 2,121 of its 3,599 relations and left **348**
+//! pending. `2,121 examined + 348 undecided = 2,469`, and that is the file's non-structural relation
+//! total — so the missing work was exactly the part outside the pass, not a class of relation the
+//! ladder declined. The lowest-ranked pending source was **#514**, one row past the bound. A second
+//! scoped refresh of that file changed nothing (348 → 348), because the bound cut the same tail off
+//! again; only [`resolve_all`] clears them, `build_full` is its only caller, and `watch` calls
+//! `refresh` — so the leak accumulated one large file at a time on exactly the operation that runs
+//! on every keystroke.
+//!
+//! The pass now **pages** that read: `all_entities_in_file` asks for one page and asks again until
+//! a page comes back short. So `entities_page` is a page size and nothing else — the size of one
+//! read, not the size of the answer. A caller passing [`ResolutionOptions::default`] now gets the
+//! whole of every file, and a *complete* pass reports `truncated == 0` however large the file was.
+//! That is a narrowing of what `truncated` counts, and it is the honest direction: the counter now
+//! describes the lookups that can make an answer **narrower** (a name's candidate set, an entity's
+//! edges, a candidate list) and not the one that used to make an answer **absent**.
+//!
+//! ## What is left bounded, and what a caller who hits a bound gets
+//!
+//! Four lookups still cut, and each is a *search* rather than an enumeration: there is no next page
+//! of a candidate set. A name lookup at `entities_by_name`, an outgoing-edge read at
+//! `outgoing_per_source`, an incoming-edge read at `incoming_per_entity`, and a stored `Ambiguous`
+//! list at `max_candidates`. A cut-short read is counted.
+//!
+//! Three of the four get a smaller answer and the count. One gets a **refusal**, and the difference
+//! is the point. Cutting a candidate *list* cannot make the answer wrong — every candidate found is
+//! still a candidate, so "at least these two" survives a dropped third — and cutting the *edges* of
+//! an entity leaves relations out of scope rather than mis-deciding the ones inside it. Cutting a
+//! **uniqueness check** is different: R5's answer is the sentence "exactly one entity named X is
+//! indexed", and one candidate found behind a bound that stopped there is a claim about a window,
+//! written into the field whose whole purpose is to be auditable. So `via_unique_name`
+//! declines on a cut-short read and the relation comes out `Unresolved` — visibly unestablished
+//! rather than confidently wrong, with the count saying why. That is the same rule R2 applies when
+//! it names an owner and finds nothing inside it, and the narrower reading of "a smaller answer is
+//! not a coherent answer": it holds where the partial view turns an answer into a **false claim**,
+//! and not where it only makes an answer less complete.
 //!
 //! # What a scoped pass cannot see
 //!
@@ -288,9 +334,32 @@ const MAX_MODULE_SEGMENTS: usize = 8;
 /// Every bounded lookup the resolver makes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolutionOptions {
-    /// Entities read from one file before the read is abandoned.
-    pub entities_per_file: usize,
+    /// Entities read from one file **per read**, before the next page is asked for.
+    ///
+    /// **This is a page size, not a cut-off.** A file with more entities than this is read to the
+    /// end, one page at a time; nothing about a large file is left outside the pass. It was a
+    /// cut-off until paging, and the difference was the whole of a real defect: on
+    /// `BurntSushi/ripgrep` a refresh of `crates/core/flags/defs.rs` (1,363 entities) decided
+    /// 2,121 of the file's 3,599 relations and left **348** `Pending` — extracted, never decided,
+    /// never refused. The lowest-ranked pending source was #514, exactly one row past the old
+    /// bound. Nothing later revisited them: a second scoped refresh of that file changed nothing
+    /// (348 → 348), because only [`resolve_all`] clears them and `build_full` is its only caller,
+    /// so on a watched repository the leak accumulated one large file at a time.
+    ///
+    /// What the bound still buys is the size of one read: memory held per lookup, and rows walked
+    /// per query. A caller who sets it very small pays more seeks for the same answer, and a caller
+    /// who sets it very large pays more memory — neither changes what the pass decides. A value of
+    /// zero is treated as one rather than as "read nothing", because a page size of zero would
+    /// report every file in the repository as empty, which is a bound that destroys the answer
+    /// instead of narrowing it.
+    pub entities_page: usize,
     /// Entities read for one name before the read is abandoned.
+    ///
+    /// Unlike [`Self::entities_page`] this one **does** cut the search short, because a name lookup
+    /// is a candidate set rather than an enumeration: there is no "next page" of a name, only
+    /// further candidates that the rung would have to weigh. A cut-short name read is recorded in
+    /// [`ResolutionReport::truncated`], and R5 refuses to answer from one at all — see
+    /// `Resolver::via_unique_name`.
     pub entities_by_name: usize,
     /// Relations read from one source before the read is abandoned.
     pub outgoing_per_source: usize,
@@ -339,7 +408,7 @@ impl Default for ResolutionOptions {
             .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
             .unwrap_or(true);
         Self {
-            entities_per_file: 512,
+            entities_page: 512,
             entities_by_name: 512,
             outgoing_per_source: 512,
             incoming_per_entity: 512,
@@ -352,10 +421,17 @@ impl Default for ResolutionOptions {
 }
 
 impl ResolutionOptions {
-    /// Set the per-file entity read limit. Chaining, so a test does not have to name the field.
+    /// Set the page size for a per-file entity read. Chaining, so a test does not have to name the
+    /// field.
+    ///
+    /// Named for what it now is. The bound it replaces was a cut-off, and the name it had —
+    /// `entities_per_file`, "how many entities a file has" — described that cut-off rather than
+    /// anything a caller would want to set, which is part of why the defect behind it survived: a
+    /// caller who noticed the truncation had no way to know which field to widen, and the field
+    /// whose name matched the symptom was the wrong one.
     #[must_use]
-    pub fn with_entities_per_file(mut self, limit: usize) -> Self {
-        self.entities_per_file = limit;
+    pub fn with_entities_page(mut self, page: usize) -> Self {
+        self.entities_page = page;
         self
     }
 
@@ -444,8 +520,28 @@ pub struct ResolutionReport {
     pub displaced: u64,
     /// Relation rows the pass actually rewrote.
     pub relations_written: u64,
-    /// Candidate lookups abandoned at a configured limit. Non-zero means an answer on this build
-    /// may be less complete than the index could have supported.
+    /// Lookups this pass abandoned at a bound, and what that count does and does not include.
+    ///
+    /// **It means "a bound cut a lookup short", and the lookups it covers are the candidate sets
+    /// and the adjacency reads.** A name lookup that stopped at [`Self::entities_by_name`], an
+    /// outgoing-edge read that stopped at [`Self::outgoing_per_source`], an incoming-edge read that
+    /// stopped at [`Self::incoming_per_entity`], and a candidate list that stopped at
+    /// [`Self::max_candidates`]. Each of those can remove options from an answer, so a non-zero count
+    /// means an answer on this build may be less complete than the index could have supported.
+    ///
+    /// **It does not include a file's entity list, which is read to the end.** Until the pass
+    /// paged that read, this counter was where the size of a file showed up, and a caller who saw
+    /// it had been told that work had been skipped but not which work; the skipped work was the
+    /// tail of every large file, and it was left `Pending` rather than decided. A complete pass now
+    /// reports **zero** here however large the file was, and a non-zero value can only mean one of
+    /// the four bounded candidate or adjacency lookups above. That is a narrowing of what the field
+    /// counts, stated here rather than left for a caller to infer from a number that happens to
+    /// have changed.
+    ///
+    /// Every one of the four is a *bounded search* rather than an enumeration, which is the
+    /// distinction the whole field rests on. There is no "next page" of a candidate set, so the
+    /// honest response to hitting the bound is to count it and, where the partial view would make
+    /// the answer a claim rather than a finding, to refuse — see `Resolver::via_unique_name`.
     pub truncated: u64,
     /// Whether any `Pending` relation is still in the index after the pass.
     pub pending_remaining: bool,
@@ -507,7 +603,7 @@ impl ResolutionReport {
             },
             match self.truncated {
                 0 => String::new(),
-                other => format!(", {other} lookup(s) truncated at a limit"),
+                other => format!(", {other} lookup(s) truncated at a bound"),
             },
         )
     }
@@ -692,27 +788,35 @@ impl<'s> Resolver<'s> {
         }
     }
 
-    /// Read the entities of one file, noting whether the limit truncated the read.
-    fn entities_in_file(
-        &mut self,
-        path: &RepoPath,
-    ) -> Result<Vec<crate::model::Entity>, StoreError> {
-        let limit = self.options.entities_per_file;
-        let found = self.store.entities_in_file(path, limit)?;
-        if found.len() >= limit {
-            self.truncated += 1;
-        }
-        Ok(found)
+    /// Every entity one file declares, read a page at a time.
+    ///
+    /// A thin wrapper over [`all_entities_in_file`], so the ladder and the scope enumeration walk
+    /// a file by the same rule. Note what is *not* here: no `truncated`. A read that had to ask
+    /// for a second page was not cut short — it was completed. Counting a page boundary as a
+    /// truncation would put the size of an ordinary file into the counter and leave a caller
+    /// unable to tell "this build answered from a narrower view" from "this build read a big
+    /// file", which are opposite situations.
+    fn entities_in_file(&self, path: &RepoPath) -> Result<Vec<crate::model::Entity>, StoreError> {
+        all_entities_in_file(self.store, path, self.options.entities_page)
     }
 
-    /// Read the entities carrying one name, noting whether the limit truncated the read.
-    fn entities_named(&mut self, name: &str) -> Result<Vec<crate::model::Entity>, StoreError> {
+    /// Read the entities carrying one name, and whether the bound cut the read short.
+    ///
+    /// The tuple rather than a bare `Vec` because the caller has to be able to tell a complete
+    /// candidate set from a prefix of one, and the only place that difference exists is here.
+    /// Reporting it by counting is not enough: the counter is a pass-wide total, so by the time a
+    /// rung asked the question the count would no longer say which read was responsible.
+    fn entities_named(
+        &mut self,
+        name: &str,
+    ) -> Result<(Vec<crate::model::Entity>, bool), StoreError> {
         let limit = self.options.entities_by_name;
         let found = self.store.entities_named(name, limit)?;
-        if found.len() >= limit {
+        let cut_short = found.len() >= limit;
+        if cut_short {
             self.truncated += 1;
         }
-        Ok(found)
+        Ok((found, cut_short))
     }
 
     // -----------------------------------------------------------------------
@@ -1328,10 +1432,47 @@ impl<'s> Resolver<'s> {
     /// proof: uniqueness is a fact about the index, not a statement about intent. Two or more
     /// matches is an `Ambiguous` — the case the predecessor answered with the alphabetically
     /// first file in the whole repository.
+    ///
+    /// # Why this rung refuses to answer from a cut-short read
+    ///
+    /// **A uniqueness claim is the one answer in this file that a partial view turns from right
+    /// into wrong, so this is where a partial view is refused rather than counted.** The sentence
+    /// this rung stores says "exactly one entity named X is indexed", and it is only true if the
+    /// read saw every entity with that name. [`entities_named`] can stop at
+    /// [`entities_by_name`] having seen one, at which point the rung has a single candidate and a
+    /// claim about a window — and the window is precisely where the other candidates would be. The
+    /// stored `basis` would name the truncated read as its own evidence: "exactly one entity named
+    /// `charge` is indexed, at src/a.rs" would be a false statement about the repository, written
+    /// down in the field whose whole purpose is to be auditable.
+    ///
+    /// So a cut-short read returns `None`. The relation falls through to the tail of
+    /// [`Resolver::decide`] and comes out `Unresolved`, which is the honest state: *no target was
+    /// established*, and it is visibly unestablished rather than confidently wrong. The count in
+    /// [`ResolutionReport::truncated`] says why.
+    ///
+    /// Two things this refusal is **not**, and both matter:
+    ///
+    /// * It is not a refusal to answer. A *complete* read of a genuinely unique name still answers,
+    ///   as `Inferred`, exactly as before. Only the cut-short case declines, so the rung cannot be
+    ///   satisfied by deleting it — the test that pins this reads the same fixture twice, once with
+    ///   a bound that cuts and once with a bound that does not, and requires different answers.
+    /// * It is not a refusal on the *ambiguity* path. Two or more candidates found is an
+    ///   `Ambiguous` whether or not the read was cut short, because "at least these two" stays true
+    ///   however many more there are. Refusing there would discard a correct answer over a
+    ///   possibility, which is the opposite of what a refusal is for.
+    ///
+    /// This is the same rule R2 applies when it names an owner and finds nothing inside it — see
+    /// [`Receiver::Answered`]: a rung that cannot see enough to support its claim says so rather
+    /// than answering from what it happened to see. It is also the narrow reading of "a smaller
+    /// answer is not a coherent answer". A truncated *candidate list* is a smaller answer that stays
+    /// coherent — every candidate found is still a candidate — so [`Resolver::cap`] truncates and
+    /// counts. A truncated *uniqueness check* is not: it inverts into a positive claim about the
+    /// whole repository.
     fn via_unique_name(&mut self, relation: &Relation) -> Result<Option<Decision>, StoreError> {
         let name = relation.target_name.as_str();
         let mut found: Vec<Found> = Vec::new();
-        for entity in self.entities_named(name)? {
+        let (entities, cut_short) = self.entities_named(name)?;
+        for entity in entities {
             if is_declaration(entity.kind()) {
                 found.push(Found {
                     id: entity.id.clone(),
@@ -1351,6 +1492,11 @@ impl<'s> Resolver<'s> {
             return Ok(Some(Decision::Ambiguous {
                 candidates: self.cap(found.into_iter().map(|f| f.id).collect()),
             }));
+        }
+        // One candidate and a read that stopped at the bound is not uniqueness. See the module
+        // documentation above for why this is a refusal rather than an answer with a caveat.
+        if cut_short {
+            return Ok(None);
         }
         let only = found.remove(0);
         // The basis names where the single candidate is, so `peek explain` can be checked against
@@ -1749,6 +1895,29 @@ pub fn resolve_all(
 ///
 /// The ordering — read the edges that are about to be broken, write, then re-decide — is the
 /// whole of contract G9, and it is why this function takes three arguments rather than one.
+///
+/// # Nothing in the paths it is given is left out
+///
+/// A file is read through two doors: its own outgoing edges, and the edges arriving at the
+/// entities it declares. Both doors open through the file's **entity list**, so a bounded read of
+/// that list closed both of them at once. On `BurntSushi/ripgrep`, refreshing
+/// `crates/core/flags/defs.rs` — 1,363 entities — decided 2,121 of the file's 3,599 relations and
+/// left 348 `Pending`: extracted, never decided, never refused. The lowest-ranked pending source
+/// was #514, one row past the old bound of 512. A second scoped refresh of the same file changed
+/// nothing, because the bound cut the same tail off again and nothing else in the engine revisits
+/// it.
+///
+/// So the entity list is **paged, not bounded**: `all_entities_in_file` asks for a page at a
+/// time until one comes back short, and the number of entities a file has no longer decides how
+/// much of it this pass sees. `entities_page` chooses the page size and nothing else. A caller
+/// passing [`ResolutionOptions::default`] gets the whole of every file, which is what a default
+/// that is not mentioned in a diagnostic is supposed to mean.
+///
+/// The two *edge* reads are still bounded, by `outgoing_per_source` and `incoming_per_entity`, and
+/// a cut-short read there is now counted in [`ResolutionReport::truncated`] rather than passed over
+/// in silence — the same defect with a smaller population, and the count is what makes it
+/// checkable from outside. Neither is paged: both are ordered on a nullable column, so a keyset
+/// cursor over them is not sound, and they are left as the honest cut-offs they are.
 pub fn resolve_paths(
     store: &mut Store,
     paths: &[RepoPath],
@@ -1764,20 +1933,34 @@ pub fn resolve_paths(
         }
     }
 
+    // Lookups the scope enumeration abandons, counted here and added to the report below. They
+    // cannot be counted by the resolver, because it does not exist yet: it is built inside
+    // `decide_and_commit`, after this loop has run. So this is a second counter rather than one
+    // threaded through two phases — a lookup this pass abandoned and did not count is the exact
+    // shape of the defect this function exists to prevent, and that is not worth saving a field.
+    let mut cut_short: u64 = 0;
     for path in paths {
         // A file is read through two doors: its own outgoing edges, and the edges arriving at the
         // entities it declares. The second is the "a definition moved" half.
-        let entities = store.entities_in_file(path, options.entities_per_file)?;
+        let entities = all_entities_in_file(store, path, options.entities_page)?;
         for entity in &entities {
             let outgoing_limit = options.outgoing_per_source;
-            for relation in store.outgoing(&entity.id, None, outgoing_limit)? {
+            let outgoing = store.outgoing(&entity.id, None, outgoing_limit)?;
+            if outgoing.len() >= outgoing_limit {
+                cut_short += 1;
+            }
+            for relation in outgoing {
                 if relation.resolution.is_pending() {
                     in_scope.insert(relation);
                 }
             }
             if options.reconsider_decided {
                 let incoming_limit = options.incoming_per_entity;
-                for relation in store.incoming(&entity.id, None, incoming_limit)? {
+                let incoming = store.incoming(&entity.id, None, incoming_limit)?;
+                if incoming.len() >= incoming_limit {
+                    cut_short += 1;
+                }
+                for relation in incoming {
                     if is_resolvable(&relation) {
                         in_scope.insert(relation);
                     }
@@ -1787,11 +1970,43 @@ pub fn resolve_paths(
     }
 
     let mut report = decide_and_commit(store, in_scope.into_vec(), options, &displaced_keys)?;
+    report.truncated += cut_short;
     // The displaced edges are counted separately because they are a different population: they
     // are the ones a refresh broke, and a caller repairing a rename needs to know how many it
     // repaired without inferring it from `examined`.
     report.displaced = u64::try_from(displaced_keys.len()).unwrap_or(u64::MAX);
     Ok(report)
+}
+
+/// Every entity one file declares, read a page at a time until a page comes back short.
+///
+/// A free function rather than a method because the two callers that need it are on either side of
+/// a resolver: [`resolve_paths`] enumerates a file's entities before one exists, and
+/// [`Resolver::entities_in_file`] does it during a decision. One implementation, so the loop that
+/// makes "the whole file" true cannot be correct in one place and bounded in the other.
+fn all_entities_in_file(
+    store: &Store,
+    path: &RepoPath,
+    page: usize,
+) -> Result<Vec<crate::model::Entity>, StoreError> {
+    // Zero would ask for a page that holds nothing, which is short, which reads as "that was the
+    // last page", which reports every file in the repository as empty. One is the smallest page
+    // that cannot lie that way.
+    let page = page.max(1);
+    let mut found: Vec<crate::model::Entity> = Vec::new();
+    let mut cursor: Option<EntityId> = None;
+    loop {
+        let batch = store.entities_in_file_after(path, cursor.as_ref(), page)?;
+        let read = batch.len();
+        // The cursor comes from the rows just read, so it is an entity of `path` by construction —
+        // which is what `entities_in_file_after` requires — and the walk is strictly forward: the
+        // next bound excludes the row the cursor names, so no row repeats and no page loops.
+        cursor = batch.last().map(|entity| entity.id.clone());
+        found.extend(batch);
+        if read < page {
+            return Ok(found);
+        }
+    }
 }
 
 /// The state used to ask the store for everything still awaiting a decision.

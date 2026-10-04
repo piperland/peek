@@ -492,16 +492,24 @@ pub fn refresh(
 /// full re-resolve — the pass `build_full` runs and nothing else does — cleared it. `watch` calls
 /// `refresh`, so on a watched repository the leak accumulates one large file at a time.
 ///
-/// So the caller measures the shape of what it wrote and widens the bound to match. That is a
-/// measured bound rather than a larger constant: it scales with the file instead of guessing at it,
-/// and a repository of ordinary files is unaffected.
+/// So the caller measures the shape of what it wrote and widens the bound to match.
+///
+/// # What this arm is worth now that the resolver pages
+///
+/// `entities_page` is a page size and the resolver reads **every** page, so widening it is no longer
+/// what makes the pass complete — that is what paging does, and it is why the hole above is closed
+/// rather than merely narrowed. The arm is kept for one reason, which is that a wider page is a
+/// *cheaper* one: with the page set to a batch's largest file, a refresh of `defs.rs` reads it in a
+/// single seek instead of three. It is now a performance choice and no longer a correctness one,
+/// and the code says so, because a comment that still claimed the tail escaped would be describing
+/// a hole that no longer exists.
 ///
 /// # The one above the count
 ///
 /// The resolver records a lookup as truncated when the read returns exactly as many rows as the
 /// limit allowed. A bound equal to the row count therefore reports a truncation that did not
-/// happen, so the bound is one higher — which also means it cannot truncate at all, which is the
-/// property being asked for.
+/// happen, so the bound is one higher — which also means it cannot truncate at all, which was the
+/// property being asked for, and still means a refresh reads each file in one page.
 ///
 /// `incoming_per_entity` is deliberately left alone: it bounds the *re-decision* of edges that
 /// already point into a changed file, and an edge left stale there is a different defect from one
@@ -533,7 +541,7 @@ impl ScopeBounds {
     fn resolve_options(&self) -> ResolutionOptions {
         let base = ResolutionOptions::default();
         ResolutionOptions {
-            entities_per_file: base.entities_per_file.max(self.entities_per_file + 1),
+            entities_page: base.entities_page.max(self.entities_per_file + 1),
             outgoing_per_source: base.outgoing_per_source.max(self.outgoing_per_source + 1),
             ..base
         }

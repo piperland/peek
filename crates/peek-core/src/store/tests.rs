@@ -18,8 +18,8 @@ use crate::model::relation::{Evidence, Relation, RelationKind, ResolutionState, 
 use crate::model::span::Span;
 
 use super::query::{
-    ENTITIES_IN_FILE, ENTITIES_NAMED, ENTITIES_WITH_QUALIFIED_NAME, ENTITY_BY_ID, incoming_sql,
-    outgoing_sql, relations_in_state_sql,
+    ENTITIES_IN_FILE, ENTITIES_NAMED, ENTITIES_WITH_QUALIFIED_NAME, ENTITY_BY_ID,
+    entities_in_file_after_sql, incoming_sql, outgoing_sql, relations_in_state_sql,
 };
 use super::row::ENTITY_COLUMNS;
 use super::{Durability, IndexUpdate, RepoId, SCHEMA_VERSION, Store, StoreError, schema};
@@ -1079,6 +1079,67 @@ fn a_file_listing_is_served_by_the_primary_key_rather_than_a_redundant_index() {
     assert!(plan.contains("USING INDEX"), "plan: {plan}");
     assert!(plan.contains("sqlite_autoindex_entity_1"), "plan: {plan}");
     assert!(!plan.contains("TEMP B-TREE"), "plan: {plan}");
+}
+
+#[test]
+fn a_paged_file_listing_is_still_an_index_range() {
+    // Paging a file is only affordable if each page is a seek. The row value bounds the three
+    // trailing primary-key columns, so the walk is `path = ?1` followed by a range — and `LIMIT`
+    // stops it inside the index, which is what keeps reading a file with *n* entities linear in
+    // *n* rather than quadratic in the page size.
+    //
+    // If SQLite ever declines to plan a row value as a range constraint this degrades to a scan of
+    // the file's rows with a filter, which is invisible in the returned `Vec<Entity>` and only
+    // shows up as an indexing slowdown. So it is pinned here rather than left to a comment.
+    let dir = TempDir::new("plan-file-page");
+    let store = open(&dir);
+    let plan = plan_of(
+        &store,
+        &format!(
+            "SELECT {ENTITY_COLUMNS} FROM entity {}",
+            entities_in_file_after_sql(true)
+        ),
+    );
+    assert!(plan.contains("USING INDEX"), "plan: {plan}");
+    assert!(plan.contains("sqlite_autoindex_entity_1"), "plan: {plan}");
+    // The row value has to become an index *constraint*, not a filter over the file's rows. Both
+    // plans name the primary key and neither says "SCAN entity", so the index name alone does not
+    // discriminate them — but a range reports its bound as `>?` in the index detail, and a filter
+    // reports only `(path=?)`. Reading a page with the second shape means re-walking every row of
+    // the file that is already behind the cursor, so a file of *n* entities costs O(n²/page).
+    assert!(
+        plan.contains(">?"),
+        "the cursor must be an index range rather than a filter over the file's rows: {plan}"
+    );
+    assert!(
+        !plan.contains("SCAN entity"),
+        "a page read that scans the table is a page read that gets slower with every page: {plan}"
+    );
+    assert!(
+        !plan.contains("TEMP B-TREE"),
+        "the ORDER BY is the primary key's own order, so nothing should be sorted: {plan}"
+    );
+}
+
+#[test]
+fn a_page_cursor_from_another_file_is_refused_rather_than_read_as_an_offset() {
+    // The cursor is an identity, and three of its four columns are what the comparison uses. A
+    // cursor from a different file would therefore be accepted silently and would skip this file's
+    // entities up to a position that means nothing here — a page that is neither the first nor the
+    // next. The check is in the query method; this is the test that says it is there.
+    let dir = TempDir::new("page-cursor-path");
+    let store = open(&dir);
+    let other = RepoPath::new("elsewhere.rs").expect("valid path");
+    let result = store.entities_in_file_after(
+        &RepoPath::new("a.rs").expect("valid path"),
+        Some(&EntityId::new(other, EntityKind::Function, "f", 0)),
+        10,
+    );
+    assert!(
+        result.is_err(),
+        "a cursor from another file must not be accepted: {:?}",
+        result.map(|rows| rows.len())
+    );
 }
 
 #[test]
