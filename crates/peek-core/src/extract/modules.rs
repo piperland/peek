@@ -432,7 +432,9 @@ where
 
 /// The directory a path is written in, `""` for a file at the repository root.
 fn directory_of(path: &RepoPath) -> Option<&str> {
-    path.as_str().rfind('/').map(|slash| &path.as_str()[..slash])
+    path.as_str()
+        .rfind('/')
+        .map(|slash| &path.as_str()[..slash])
 }
 
 /// A file's stem: everything before its extension, or the whole name for a dotfile.
@@ -895,7 +897,8 @@ mod tests {
             "a main.rs below the source root is a module, not a package"
         );
         assert_eq!(
-            locate(&path("crates/regex/src/a/main.rs"), &rust_layout(), &roots).qualified_name("::"),
+            locate(&path("crates/regex/src/a/main.rs"), &rust_layout(), &roots)
+                .qualified_name("::"),
             "regex::a::main"
         );
         assert!(
@@ -909,7 +912,11 @@ mod tests {
         // `src` is a directory name, not a reserved word. Taking the *first* one keeps every
         // file under it in one namespace; taking the last would give `inner` its own.
         let layout = rust_layout();
-        let inner = locate(&path("crates/foo/src/inner/src/look.rs"), &layout, &no_roots());
+        let inner = locate(
+            &path("crates/foo/src/inner/src/look.rs"),
+            &layout,
+            &no_roots(),
+        );
         assert_eq!(inner.package, "foo");
         assert_eq!(
             inner.qualified_name("::"),
@@ -924,7 +931,11 @@ mod tests {
         // the only spelling a `use` statement can have. Keeping the hyphen would make every
         // cross-crate module name unmatchable.
         let layout = rust_layout();
-        let located = locate(&path("crates/regex-automata/src/lib.rs"), &layout, &no_roots());
+        let located = locate(
+            &path("crates/regex-automata/src/lib.rs"),
+            &layout,
+            &no_roots(),
+        );
         assert_eq!(located.package, "regex_automata");
     }
 
@@ -1317,14 +1328,12 @@ mod tests {
             "and the module its directory names is reached through the same package"
         );
         assert_eq!(
-            located("nosrc/core/flags/complete/mod.rs", &roots)
-                .qualified_name("::"),
+            located("nosrc/core/flags/complete/mod.rs", &roots).qualified_name("::"),
             "core::flags::complete",
             "four levels down, still one package"
         );
         assert_eq!(
-            located("nosrc/core/flags/complete/bash.rs", &roots)
-                .qualified_name("::"),
+            located("nosrc/core/flags/complete/bash.rs", &roots).qualified_name("::"),
             "core::flags::complete::bash"
         );
     }
@@ -1420,14 +1429,12 @@ mod tests {
             "no `src` in this path, so the nearest package root above it is `inner`"
         );
         assert_eq!(
-            located("nestedpkg/outer/inner/sub/mod.rs", &roots)
-                .qualified_name("::"),
+            located("nestedpkg/outer/inner/sub/mod.rs", &roots).qualified_name("::"),
             "inner::sub",
             "and a `mod.rs` below it is reached through the nested package, not the outer one"
         );
         assert_eq!(
-            located("nestedpkg/outer/inner/sub/thing.rs", &roots)
-                .qualified_name("::"),
+            located("nestedpkg/outer/inner/sub/thing.rs", &roots).qualified_name("::"),
             "inner::sub::thing"
         );
     }
@@ -1627,8 +1634,7 @@ mod tests {
         // unchanged rather than degraded.
         let layout = rust_layout();
         assert_eq!(
-            locate(&path("crates/core/flags/defs.rs"), &layout, &no_roots())
-                .qualified_name("::"),
+            locate(&path("crates/core/flags/defs.rs"), &layout, &no_roots()).qualified_name("::"),
             "flags::defs"
         );
         assert_eq!(

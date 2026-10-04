@@ -471,12 +471,8 @@ pub fn refresh(
             continue;
         };
 
-        let extracted = crate::extract::extract_with_roots(
-            spec,
-            relative.clone(),
-            &text,
-            layout.roots(spec),
-        );
+        let extracted =
+            crate::extract::extract_with_roots(spec, relative.clone(), &text, layout.roots(spec));
         scope.widen(&extracted);
         touched.push(relative);
         update = absorb_file(extracted, update, &mut outcome);
@@ -607,8 +603,8 @@ fn package_layout(
         .filter_map(|path| relative_path(root, path))
         .filter_map(|name| RepoPath::from_path(&name))
         .collect();
-    let wanted =
-        registry_rust_layout().is_some_and(|layout| crate::extract::modules::needs_package_roots(&relative, layout));
+    let wanted = registry_rust_layout()
+        .is_some_and(|layout| crate::extract::modules::needs_package_roots(&relative, layout));
     if wanted {
         layout.observe_all(store.indexed_paths(INDEXED_PATH_SCAN_LIMIT)?.iter());
     }
@@ -759,12 +755,8 @@ fn ingest(
         }
     };
 
-    let extracted = crate::extract::extract_with_roots(
-        spec,
-        file.path.clone(),
-        &text,
-        layout.roots(spec),
-    );
+    let extracted =
+        crate::extract::extract_with_roots(spec, file.path.clone(), &text, layout.roots(spec));
     absorb_file(extracted, update, outcome)
 }
 

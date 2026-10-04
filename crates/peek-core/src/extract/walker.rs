@@ -1158,11 +1158,7 @@ pub fn extract(path: RepoPath, text: &str) -> Option<ExtractedFile> {
 }
 
 /// Extract a file using the spec registered for `path`'s language.
-pub fn extract_in_repo(
-    path: RepoPath,
-    text: &str,
-    roots: &PackageRoots,
-) -> Option<ExtractedFile> {
+pub fn extract_in_repo(path: RepoPath, text: &str, roots: &PackageRoots) -> Option<ExtractedFile> {
     let language = Language::from_extension(path.extension()?.as_str())?;
     let spec = crate::extract::registry::get(language)?;
     Some(extract_with_roots(spec, path, text, roots))
