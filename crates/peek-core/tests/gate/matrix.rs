@@ -357,10 +357,7 @@ pub fn to_json(rows: &[Row]) -> String {
                         Json::obj(vec![
                             ("decided", Json::Num(measurement.placement.decided)),
                             ("correct", Json::Num(measurement.placement.correct)),
-                            (
-                                "wrong",
-                                Json::Num(measurement.placement.wrong.len() as u64),
-                            ),
+                            ("wrong", Json::Num(measurement.placement.wrong.len() as u64)),
                             (
                                 "undecided",
                                 Json::Num(measurement.placement.undecided.len() as u64),

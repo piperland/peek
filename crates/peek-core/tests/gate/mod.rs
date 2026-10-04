@@ -203,7 +203,12 @@ fn print_measurement(measurement: &Measurement, incremental: &incremental::Incre
         // than matched by prose. The verdict is what tells an extractor defect
         // from a resolver one, and a verdict with no edge beside it is not
         // checkable.
-        let Some(reach) = measurement.placement.reach.iter().find(|reach| &reach.key == key) else {
+        let Some(reach) = measurement
+            .placement
+            .reach
+            .iter()
+            .find(|reach| &reach.key == key)
+        else {
             continue;
         };
         println!(

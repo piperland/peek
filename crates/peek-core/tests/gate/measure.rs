@@ -1160,9 +1160,9 @@ impl Reach {
                 .to_owned(),
             // The label names an entity the index does not hold. Nothing to say
             // about the engine: the label is what has to be checked.
-            Some(want) if !self.target_in_index => format!(
-                "label: `{want}` is not in this index, so the claim cannot be scored"
-            ),
+            Some(want) if !self.target_in_index => {
+                format!("label: `{want}` is not in this index, so the claim cannot be scored")
+            }
             // The target is in the index but declares a different name than the
             // relation names. That is what an import alias is, and it is the one
             // shape a bare-name rung cannot reach by construction.
@@ -1200,16 +1200,21 @@ pub fn measure_reach(corpus: &Corpus, graph: &Graph) -> Vec<Reach> {
                 .into_iter()
                 .map(EntityRow::render)
                 .collect();
-            let correct_in_carriers = bind
-                .target
-                .as_ref()
-                .is_some_and(|target| graph.named(&bind.name).iter().any(|row| row.key() == *target));
+            let correct_in_carriers = bind.target.as_ref().is_some_and(|target| {
+                graph
+                    .named(&bind.name)
+                    .iter()
+                    .any(|row| row.key() == *target)
+            });
             Reach {
                 key: bind.key(),
                 carriers,
                 wants: bind.target.clone(),
                 name: bind.name.clone(),
-                target_in_index: bind.target.as_ref().is_some_and(|target| graph.holds(target)),
+                target_in_index: bind
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| graph.holds(target)),
                 correct_in_carriers,
                 shadowed_in_source: declares_in_scope(graph, bind),
             }
@@ -1354,7 +1359,13 @@ fn placement_coverage(corpus: &Corpus) -> (u64, u64) {
     let placed: BTreeMap<String, u64> = corpus.binds.iter().fold(
         BTreeMap::new(),
         |mut counts: BTreeMap<String, u64>, bind: &Bind| {
-            *counts.entry(site_of(bind.class.as_str(), &bind.path, &bind.subject, &bind.name))
+            *counts
+                .entry(site_of(
+                    bind.class.as_str(),
+                    &bind.path,
+                    &bind.subject,
+                    &bind.name,
+                ))
                 .or_default() += 1;
             counts
         },

@@ -211,3 +211,8 @@ printf '  calls back at %s, matching the baseline\n' "$AFTER_ALL"
 
 printf '\n\033[1;32mMUTATION CHECK OK\033[0m\n'
 printf 'Each gate assertion failed when the extraction rule behind it was removed.\n'
+printf 'Note that resolution_correctness ROSE under its mutation. That is the column\n'
+printf 'working, not failing: the wrong edges it counts left the decided population\n'
+printf 'along with the right ones, and the wrong/undecided counts beside it are what\n'
+printf 'would show it. A single fraction over decided relations cannot express that,\n'
+printf 'which is why the three are published separately.\n'

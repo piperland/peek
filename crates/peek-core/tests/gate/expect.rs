@@ -249,13 +249,7 @@ const KEYWORDS: &[&str] = &[
 /// line that can never be matched against a row: the label would sit in the file,
 /// look like ground truth, and shrink the denominator of the dimension it exists
 /// to measure. A typo there is otherwise invisible.
-pub const CLASSES: &[&str] = &[
-    "references",
-    "calls",
-    "imports",
-    "inherits",
-    "implements",
-];
+pub const CLASSES: &[&str] = &["references", "calls", "imports", "inherits", "implements"];
 
 /// Parse one `gate.expect`.
 pub fn parse(language: Language, directory: &Path) -> Result<Corpus, Vec<Problem>> {
