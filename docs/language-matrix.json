@@ -349,637 +349,1046 @@
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | struct | Entry | #0"
+            ]
           },
           {
             "label": "imports|src/lib.rs|file|lib.rs|Clock",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | trait | Clock | #0"
+            ]
           },
           {
             "label": "imports|src/lib.rs|file|lib.rs|Saveable",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | trait | Saveable | #0"
+            ]
           },
           {
             "label": "imports|src/report.rs|file|report.rs|Renamed",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "resolver: `src/model.rs | type_alias | Alias` declares `Alias` and the relation names `Renamed`, so only the import rung can reach it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": true,
+            "carriers": []
           },
           {
             "label": "calls|src/lib.rs|function|summarise|iter",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/lib.rs|function|summarise|take",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/lib.rs|function|summarise|cloned",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/lib.rs|function|summarise|collect",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/lib.rs|function|summarise|len",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/lib.rs|function|summarise|push_str",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/lib.rs|function|summarise|format_line",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": [
+              "src/report.rs | function | format_line | #0",
+              "src/service.rs | function | format_line | #0"
+            ]
           },
           {
             "label": "calls|src/lib.rs|function|summarise|describe",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/service.rs | function | describe | #0"
+            ]
           },
           {
             "label": "calls|src/lib.rs|function|summarise|render",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/report.rs | function | render | #0"
+            ]
           },
           {
             "label": "calls|src/lib.rs|function|counted|counted",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/lib.rs | function | counted | #0",
+              "src/lib.rs | macro | counted | #0"
+            ]
           },
           {
             "label": "calls|src/lib.rs|function|counted|body",
-            "verdict": "resolver: the source's own scope declares the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": [
+              "src/lib.rs | parameter | counted.body | #0",
+              "src/service.rs | parameter | Runner.run.body | #0",
+              "src/service.rs | parameter | with_clock.body | #0"
+            ]
           },
           {
             "label": "calls|src/lib.rs|function|outer.inner.deep|summarise",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/lib.rs | function | summarise | #0"
+            ]
           },
           {
             "label": "calls|src/lib.rs|function|outer.inner.deep|len",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/lib.rs|function|summarise|kept",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/lib.rs|function|summarise|out",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": [
+              "src/report.rs | parameter | render.out | #0"
+            ]
           },
           {
             "label": "references|src/lib.rs|function|summarise|MAX_ROWS",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/lib.rs | constant | MAX_ROWS | #0"
+            ]
           },
           {
             "label": "references|src/lib.rs|function|summarise|entries",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/lib.rs | parameter | summarise.entries | #0",
+              "src/report.rs | parameter | render.entries | #0"
+            ]
           },
           {
             "label": "references|src/lib.rs|function|counted|body",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/lib.rs | parameter | counted.body | #0",
+              "src/service.rs | parameter | Runner.run.body | #0",
+              "src/service.rs | parameter | with_clock.body | #0"
+            ]
           },
           {
             "label": "calls|src/model.rs|function|entry|to_owned",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/model.rs|function|entry|label",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | field | Entry.label | #0",
+              "src/model.rs | parameter | entry.label | #0"
+            ]
           },
           {
             "label": "references|src/model.rs|function|entry|count",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 4,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | field | Entry.count | #0",
+              "src/model.rs | parameter | entry.count | #0",
+              "src/report.rs | parameter | format_line.count | #0",
+              "src/service.rs | parameter | format_line.count | #0"
+            ]
           },
           {
             "label": "references|src/report.rs|function|render|label",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | field | Entry.label | #0",
+              "src/model.rs | parameter | entry.label | #0"
+            ]
           },
           {
             "label": "references|src/report.rs|function|render|count",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 4,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | field | Entry.count | #0",
+              "src/model.rs | parameter | entry.count | #0",
+              "src/report.rs | parameter | format_line.count | #0",
+              "src/service.rs | parameter | format_line.count | #0"
+            ]
           },
           {
             "label": "references|src/report.rs|function|format_line_inner|label",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | field | Entry.label | #0",
+              "src/model.rs | parameter | entry.label | #0"
+            ]
           },
           {
             "label": "references|src/service.rs|function|describe|label",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | field | Entry.label | #0",
+              "src/model.rs | parameter | entry.label | #0"
+            ]
           },
           {
             "label": "references|src/service.rs|function|describe|count",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 4,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | field | Entry.count | #0",
+              "src/model.rs | parameter | entry.count | #0",
+              "src/report.rs | parameter | format_line.count | #0",
+              "src/service.rs | parameter | format_line.count | #0"
+            ]
           },
           {
             "label": "references|src/traits.rs|method|Ticks.save|count",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 4,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | field | Entry.count | #0",
+              "src/model.rs | parameter | entry.count | #0",
+              "src/report.rs | parameter | format_line.count | #0",
+              "src/service.rs | parameter | format_line.count | #0"
+            ]
           },
           {
             "label": "references|src/traits.rs|method|Meters.save|count",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 4,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | field | Entry.count | #0",
+              "src/model.rs | parameter | entry.count | #0",
+              "src/report.rs | parameter | format_line.count | #0",
+              "src/service.rs | parameter | format_line.count | #0"
+            ]
           },
           {
             "label": "imports|src/traits.rs|file|traits.rs|Entry",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | struct | Entry | #0"
+            ]
           },
           {
             "label": "imports|src/service.rs|file|service.rs|entry",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           },
           {
             "label": "imports|src/service.rs|file|service.rs|Entry",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | struct | Entry | #0"
+            ]
           },
           {
             "label": "imports|src/service.rs|file|service.rs|Sink",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/report.rs | module | Sink | #0",
+              "src/report.rs | struct | Sink | #0"
+            ]
           },
           {
             "label": "imports|src/service.rs|file|service.rs|Clock",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | trait | Clock | #0"
+            ]
           },
           {
             "label": "imports|src/service.rs|file|service.rs|Saveable",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | trait | Saveable | #0"
+            ]
           },
           {
             "label": "imports|src/service.rs|file|service.rs|Ticks",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | module | Ticks | #0",
+              "src/traits.rs | module | Ticks | #1",
+              "src/traits.rs | struct | Ticks | #0"
+            ]
           },
           {
             "label": "imports|src/report.rs|file|report.rs|Severity",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | enum | Severity | #0"
+            ]
           },
           {
             "label": "imports|src/report.rs|file|report.rs|entry",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           },
           {
             "label": "imports|src/report.rs|file|report.rs|Entry",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | struct | Entry | #0"
+            ]
           },
           {
             "label": "imports|src/report.rs|file|report.rs|*",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "inherits|src/traits.rs|trait|Saveable|Clock",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | trait | Clock | #0"
+            ]
           },
           {
             "label": "implements|src/traits.rs|module|Ticks|Clock",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | trait | Clock | #0"
+            ]
           },
           {
             "label": "implements|src/traits.rs|module|Ticks|Saveable",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | trait | Saveable | #0"
+            ]
           },
           {
             "label": "implements|src/traits.rs|module|Meters|Clock",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | trait | Clock | #0"
+            ]
           },
           {
             "label": "implements|src/traits.rs|module|Meters|Saveable",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | trait | Saveable | #0"
+            ]
           },
           {
             "label": "references|src/traits.rs|method|Saveable.save|entry",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           },
           {
             "label": "references|src/traits.rs|method|Ticks.save|entry",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           },
           {
             "label": "references|src/traits.rs|method|Meters.save|entry",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           },
           {
             "label": "calls|src/report.rs|function|format_line_inner|clone",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/report.rs|function|format_line|entry",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           },
           {
             "label": "calls|src/report.rs|function|format_line|format_line_inner",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/report.rs | function | format_line_inner | #0"
+            ]
           },
           {
             "label": "calls|src/report.rs|function|renamed|entry",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           },
           {
             "label": "calls|src/report.rs|function|render|new",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/report.rs|function|render|push",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/report.rs | method | Sink.push | #0"
+            ]
           },
           {
             "label": "calls|src/report.rs|function|render|push_str",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/report.rs|function|render|len",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/report.rs|function|render|format_line",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/report.rs | function | format_line | #0",
+              "src/service.rs | function | format_line | #0"
+            ]
           },
           {
             "label": "calls|src/report.rs|function|render|now",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | method | Clock.now | #0",
+              "src/traits.rs | method | Meters.now | #0",
+              "src/traits.rs | method | Ticks.now | #0"
+            ]
           },
           {
             "label": "calls|src/report.rs|function|render|receipt",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | method | Meters.receipt | #0",
+              "src/traits.rs | method | Saveable.receipt | #0",
+              "src/traits.rs | method | Ticks.receipt | #0"
+            ]
           },
           {
             "label": "calls|src/report.rs|method|Sink.push|push_str",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/report.rs|function|format_line|owned",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/report.rs|function|format_line|entry",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           },
           {
             "label": "references|src/report.rs|function|format_line_inner|entry",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           },
           {
             "label": "references|src/report.rs|function|render|sink",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/report.rs|function|render|clock",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/report.rs|function|render|entries",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/lib.rs | parameter | summarise.entries | #0",
+              "src/report.rs | parameter | render.entries | #0"
+            ]
           },
           {
             "label": "references|src/report.rs|function|render|out",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/report.rs | parameter | render.out | #0"
+            ]
           },
           {
             "label": "calls|src/service.rs|method|Runner.run|body",
-            "verdict": "resolver: the source's own scope declares the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": [
+              "src/lib.rs | parameter | counted.body | #0",
+              "src/service.rs | parameter | Runner.run.body | #0",
+              "src/service.rs | parameter | with_clock.body | #0"
+            ]
           },
           {
             "label": "calls|src/service.rs|method|Runner.run|retry",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/service.rs | function | retry | #0"
+            ]
           },
           {
             "label": "calls|src/service.rs|function|format_line|new",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/service.rs|function|format_line|push_str",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/service.rs|function|format_line|to_string",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/service.rs|function|format_line|push",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/report.rs | method | Sink.push | #0"
+            ]
           },
           {
             "label": "calls|src/service.rs|function|describe|format_line",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/report.rs | function | format_line | #0",
+              "src/service.rs | function | format_line | #0"
+            ]
           },
           {
             "label": "calls|src/service.rs|function|with_clock|entry",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           },
           {
             "label": "calls|src/service.rs|function|with_clock|new",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "calls|src/service.rs|function|with_clock|save",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | method | Meters.save | #0",
+              "src/traits.rs | method | Saveable.save | #0",
+              "src/traits.rs | method | Ticks.save | #0"
+            ]
           },
           {
             "label": "calls|src/service.rs|function|with_clock|now",
             "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/traits.rs | method | Clock.now | #0",
+              "src/traits.rs | method | Meters.now | #0",
+              "src/traits.rs | method | Ticks.now | #0"
+            ]
           },
           {
             "label": "calls|src/service.rs|function|with_clock|body",
-            "verdict": "resolver: the source's own scope declares the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": [
+              "src/lib.rs | parameter | counted.body | #0",
+              "src/service.rs | parameter | Runner.run.body | #0",
+              "src/service.rs | parameter | with_clock.body | #0"
+            ]
           },
           {
             "label": "references|src/service.rs|method|Runner.run|last",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": [
+              "src/service.rs | parameter | retry.last | #0"
+            ]
           },
           {
             "label": "references|src/service.rs|method|Runner.run|attempt",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/service.rs|method|Runner.run|saved",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/service.rs|function|with_clock|ticks",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/service.rs|function|with_clock|saved",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/service.rs|function|format_line|sink",
-            "verdict": "extractor: no entity in the index carries the name",
+            "verdict": "extractor: the name denotes no declaration, so no rung could have placed it",
             "entities_carrying_the_name": 0,
             "declared_in_the_source_scope": false,
-            "correct_entity_is_a_candidate": false
+            "correct_entity_is_a_candidate": false,
+            "target_is_in_the_index": false,
+            "carriers": []
           },
           {
             "label": "references|src/service.rs|method|Runner.run|body",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/lib.rs | parameter | counted.body | #0",
+              "src/service.rs | parameter | Runner.run.body | #0",
+              "src/service.rs | parameter | with_clock.body | #0"
+            ]
           },
           {
             "label": "references|src/service.rs|method|Runner.run|limit",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 1,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/service.rs | parameter | Runner.run.limit | #0"
+            ]
           },
           {
             "label": "references|src/service.rs|function|describe|entry",
-            "verdict": "resolver: the correct entity is a candidate by name",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": true,
-            "correct_entity_is_a_candidate": true
+            "correct_entity_is_a_candidate": true,
+            "target_is_in_the_index": true,
+            "carriers": [
+              "src/model.rs | function | entry | #0",
+              "src/report.rs | parameter | format_line_inner.entry | #0",
+              "src/service.rs | parameter | describe.entry | #0",
+              "src/traits.rs | parameter | Meters.save.entry | #0",
+              "src/traits.rs | parameter | Saveable.save.entry | #0",
+              "src/traits.rs | parameter | Ticks.save.entry | #0"
+            ]
           }
         ]
       }

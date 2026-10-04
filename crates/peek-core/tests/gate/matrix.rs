@@ -592,7 +592,7 @@ pub fn to_markdown(rows: &[Row], generated_note: &str) -> String {
                 continue;
             };
             out.push_str(&format!(
-                "  - reachability of `{key}`: {} ({} in the index carry the name: {})\n",
+                "  - reachability of `{key}`: {} ({} in the index declare the name: {})\n",
                 reach.verdict(),
                 reach.carriers.len(),
                 if reach.carriers.is_empty() {

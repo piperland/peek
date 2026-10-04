@@ -37,6 +37,16 @@
 #      gate notices when the `References` class stops producing. A gate that cannot
 #      fail on a dimension is not measuring it.
 #
+#   5. `scoped_identifier` dropped from the reference rule's node types.
+#      Every other mutation breaks extraction as well as resolution, so none of them
+#      can tell the new column from the ones already in the table. This one emits
+#      **one fewer reference row per qualified path** and changes nothing else:
+#      `service::describe` was a row nobody could place, and it is gone. The
+#      undecided count falls and `resolution_correctness` moves, because the
+#      denominator is the decided relations and dropping an unplaceable row changes
+#      which ones remain. It is the mutation that shows the new column is computed
+#      from the graph rather than from a number in a file.
+#
 # Usage:
 #   ./scripts/language-gate-mutation-check.sh
 #
@@ -147,15 +157,17 @@ BASE_CALLS="$(measure calls)"
 BASE_PRECISION="$(measure symbol_precision)"
 BASE_IMPORTS="$(measure imports)"
 BASE_REFERENCES="$(measure references)"
+BASE_PLACEMENT="$(measure resolution_correctness)"
 for pair in "calls:$BASE_CALLS" "symbol_precision:$BASE_PRECISION" \
-  "imports:$BASE_IMPORTS" "references:$BASE_REFERENCES"; do
+  "imports:$BASE_IMPORTS" "references:$BASE_REFERENCES" \
+  "resolution_correctness:$BASE_PLACEMENT"; do
   case "$pair" in
     ?*:?*) ;;
     *) fail "cannot read a baseline for ${pair%%:*}; the gate printed nothing for it" ;;
   esac
 done
-printf '  calls %s, symbol_precision %s, imports %s, references %s\n' \
-  "$BASE_CALLS" "$BASE_PRECISION" "$BASE_IMPORTS" "$BASE_REFERENCES"
+printf '  calls %s, symbol_precision %s, imports %s, references %s, resolution_correctness %s\n' \
+  "$BASE_CALLS" "$BASE_PRECISION" "$BASE_IMPORTS" "$BASE_REFERENCES" "$BASE_PLACEMENT"
 
 mutate 'CallRule::new("macro_invocation", "macro"),' '' calls "$BASE_CALLS"
 mutate 'type_scope_nodes: &["impl_item", "trait_item"],' \
@@ -169,6 +181,8 @@ mutate '        node_types: &[
             "field_identifier",
             "scoped_identifier",
         ],' '        node_types: &[],' references "$BASE_REFERENCES"
+mutate '            "field_identifier",
+            "scoped_identifier",' '            "field_identifier",' resolution_correctness "$BASE_PLACEMENT"
 
 restore_registry
 trap - EXIT

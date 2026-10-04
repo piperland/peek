@@ -207,7 +207,7 @@ fn print_measurement(measurement: &Measurement, incremental: &incremental::Incre
             continue;
         };
         println!(
-            "    reachability of `{}`: {} ({} in the index carry the name: {})",
+            "    reachability of `{}`: {} ({} in the index declare the name: {})",
             key,
             reach.verdict(),
             reach.carriers.len(),

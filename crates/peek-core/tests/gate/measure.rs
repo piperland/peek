@@ -1132,6 +1132,11 @@ pub struct Reach {
     /// that only happens to exist elsewhere*: `describe` declares a parameter
     /// called `entry` and also imports a function called `entry`, and an edge on
     /// that name can only mean one of them.
+    ///
+    /// **Containment, and not the source's own qualified name.** A qualified name
+    /// says what a declaration is called; containment says what is inside it, and
+    /// the difference is the whole finding — `describe`'s parameter is in the same
+    /// file as the import that beat it, so a same-file rung had it in hand.
     pub shadowed_in_source: bool,
 }
 
