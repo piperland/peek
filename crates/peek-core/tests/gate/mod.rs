@@ -197,28 +197,18 @@ fn print_measurement(measurement: &Measurement, incremental: &incremental::Incre
         measurement.placement.covered,
         measurement.placement.labeled,
     );
-    for edge in measurement.placement.wrong.iter().take(10) {
+    for (key, edge) in measurement.placement.wrong.iter().take(10) {
         println!("  decided and wrong: {edge}");
-    }
-    // The reachability reading for each wrong edge, taken from the index rather
-    // than from the resolver's source. Printed with the edge because the verdict
-    // is what tells an extractor defect from a resolver one, and a verdict with
-    // no edge beside it is not checkable.
-    for wrong in &measurement.placement.wrong {
-        let Some(reach) = measurement.placement.reach.iter().find(|reach| {
-            wrong.contains(
-                &reach
-                    .key
-                    .rsplit('|')
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned(),
-            )
-        }) else {
+        // The reachability reading beside the edge it belongs to, keyed rather
+        // than matched by prose. The verdict is what tells an extractor defect
+        // from a resolver one, and a verdict with no edge beside it is not
+        // checkable.
+        let Some(reach) = measurement.placement.reach.iter().find(|reach| &reach.key == key) else {
             continue;
         };
         println!(
-            "  reachability: {} — {} carriers, {}",
+            "    reachability of `{}`: {} — {} carrying that name: {}",
+            key,
             reach.verdict(),
             reach.carriers.len(),
             if reach.carriers.is_empty() {

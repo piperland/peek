@@ -1041,8 +1041,15 @@ pub struct Placement {
     pub decided: u64,
     /// Labelled relations the engine left undecided: a gap, not a wrong edge.
     pub undecided: Vec<String>,
-    /// Decided relations pointing somewhere else, each named.
-    pub wrong: Vec<String>,
+    /// Decided relations pointing somewhere else, as `(label key, description)`.
+    ///
+    /// The key is carried beside the sentence rather than parsed back out of it,
+    /// because this is the one place where a measurement has to line up with
+    /// another measurement row by row — the reachability verdict for an edge is
+    /// only meaningful if it is the verdict for *that* edge, and matching two
+    /// prose strings by whether one contains the other is how a reading gets
+    /// attached to the wrong row.
+    pub wrong: Vec<(String, String)>,
     /// Placement labels with no matching relation at all, each named.
     pub absent: Vec<String>,
     /// Of the fixture's labelled relations of a scored class, how many carry a
@@ -1242,13 +1249,16 @@ pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
             if placement_holds(bind.target.as_ref(), row.target.as_ref()) {
                 right += 1;
             } else {
-                wrong.push(format!(
-                    "{}; the label says {}",
-                    row.describe_decided(),
-                    match &bind.target {
-                        None => "no entity is the referent".to_owned(),
-                        Some(key) => format!("`{}`", key.render()),
-                    }
+                wrong.push((
+                    bind.key(),
+                    format!(
+                        "{}; the label says {}",
+                        row.describe_decided(),
+                        match &bind.target {
+                            None => "no entity is the referent".to_owned(),
+                            Some(key) => format!("`{}`", key.render()),
+                        }
+                    ),
                 ));
             }
         }
@@ -1259,7 +1269,7 @@ pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
     undecided.sort();
     undecided.dedup();
     wrong.sort();
-    wrong.dedup();
+    wrong.dedup_by_key(|(key, _)| key.clone());
     absent.sort();
     let (covered, labeled) = placement_coverage(corpus);
     Placement {
@@ -1273,9 +1283,6 @@ pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
         reach: measure_reach(corpus, graph),
     }
 }
-
-/// The relation classes whose placement the gate scores.
-const PLACED_CLASSES: &[&str] = &["references", "calls", "imports"];
 
 /// How much of the labelled population the placement labels actually cover.
 ///

@@ -17,7 +17,7 @@ use std::path::Path;
 use peek_core::extract::LanguageSpec;
 use peek_core::model::Language;
 
-use super::measure::{DIMENSIONS, Measurement};
+use super::measure::{DIMENSIONS, Measurement, Reach};
 
 /// The schema tag, so a consumer can refuse a file it does not understand rather
 /// than read fields that have moved.
@@ -369,6 +369,39 @@ pub fn to_json(rows: &[Row]) -> String {
                                 "unlabelled_relations",
                                 Json::Num(measurement.placement.absent.len() as u64),
                             ),
+                            // The verdict per wrong edge, with the count it was read
+                            // from. Publishing the count as well as the word is what
+                            // makes the reading auditable: a reader can recount the
+                            // carriers in the JSON's entity table and check the
+                            // sentence.
+                            (
+                                "reach",
+                                Json::Arr(
+                                    measurement
+                                        .placement
+                                        .reach
+                                        .iter()
+                                        .map(|reach| {
+                                            Json::obj(vec![
+                                                ("label", Json::str(reach.key.clone())),
+                                                ("verdict", Json::str(reach.verdict())),
+                                                (
+                                                    "entities_carrying_the_name",
+                                                    Json::Num(reach.carriers.len() as u64),
+                                                ),
+                                                (
+                                                    "declared_in_the_source_scope",
+                                                    Json::Bool(reach.shadowed_in_source),
+                                                ),
+                                                (
+                                                    "correct_entity_is_a_candidate",
+                                                    Json::Bool(reach.correct_in_carriers),
+                                                ),
+                                            ])
+                                        })
+                                        .collect(),
+                                ),
+                            ),
                         ]),
                     ));
                 }
@@ -525,8 +558,25 @@ pub fn to_markdown(rows: &[Row], generated_note: &str) -> String {
         }
         any_wrong = true;
         out.push_str(&format!("**{}**\n\n", row.language.as_str()));
-        for edge in &measurement.placement.wrong {
+        for (key, edge) in &measurement.placement.wrong {
             out.push_str(&format!("- {edge}\n"));
+            // The verdict, on the same line as the edge. An extractor defect and a
+            // resolver defect are different defects with different owners, and
+            // which one this is comes from counting the entities carrying the name
+            // — not from reading the resolver and guessing.
+            let reading = measurement
+                .placement
+                .reach
+                .iter()
+                .find(|reach| &reach.key == key)
+                .map_or("not measured", Reach::verdict);
+            let carriers = measurement
+                .placement
+                .reach
+                .iter()
+                .find(|reach| &reach.key == key)
+                .map_or(0, |reach| reach.carriers.len());
+            out.push_str(&format!("  - reachability of `{key}`: {reading} ({carriers} in the index)\n"));
         }
         out.push('\n');
     }
