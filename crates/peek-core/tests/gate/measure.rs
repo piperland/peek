@@ -227,6 +227,15 @@ pub struct Graph {
     by_key: BTreeMap<String, Vec<usize>>,
     /// Keys with at least one incoming structural edge.
     defined: BTreeSet<String>,
+    /// Row indices that describe repository structure rather than a declaration.
+    ///
+    /// A file-layout module is told from a declared one by **who contains it**, not
+    /// by how its name is spelled: the layout module is contained by the `File`
+    /// entity, and a `mod x { .. }` or an `impl` block is contained by its parent
+    /// scope. That is a property of the graph rather than a guess about separators,
+    /// and it is what lets both kinds stay in the measured population while the
+    /// layout modules stay out of it.
+    structural: BTreeSet<usize>,
 }
 
 impl Graph {
@@ -269,8 +278,45 @@ impl Graph {
 
         for (index, row) in graph.rows.iter().enumerate() {
             graph.by_key.entry(row.key().render()).or_default().push(index);
+            if is_a_structure_kind(&row.kind) {
+                graph.structural.insert(index);
+            }
+        }
+
+        // A module the file layout created is contained by the file. A `mod x { .. }`
+        // declaration and an `impl` block are contained by their parent scope, and
+        // the walker gives both the same `EntityKind::Module`, so containment is the
+        // only thing in the graph that tells them apart.
+        let contained_by_a_file: BTreeSet<(String, String, String)> = graph
+            .relations
+            .iter()
+            .filter(|relation| relation.kind == "contains" && relation.source.kind == "file")
+            .filter_map(|relation| {
+                relation.target.as_ref().map(|target| {
+                    (
+                        target.path.clone(),
+                        target.kind.clone(),
+                        target.qualified_name.clone(),
+                    )
+                })
+            })
+            .collect();
+        for (index, row) in graph.rows.iter().enumerate() {
+            let key = (row.path.clone(), row.kind.clone(), row.qualified_name.clone());
+            if row.kind == "module" && contained_by_a_file.contains(&key) {
+                graph.structural.insert(index);
+            }
         }
         graph
+    }
+
+    /// Whether this row describes repository structure rather than a declaration.
+    ///
+    /// Held out of the symbol denominator and counted separately, because a file's
+    /// own module is not something the fixture labels and a fixture that labelled
+    /// it would be labelling the harness's own layout rather than the language.
+    pub fn is_structural(&self, index: usize) -> bool {
+        self.structural.contains(&index)
     }
 
     pub fn entities(&self) -> &[EntityRow] {
@@ -334,19 +380,9 @@ impl Graph {
 }
 
 /// Entity kinds the graph uses for repository structure rather than for a
-/// declaration the fixture can label.
-///
-/// `module` is deliberately **not** here. The Rust spec maps both `impl_item` and
-/// `mod_item` to `EntityKind::Module`, and `spec::module_nodes` is what tells them
-/// apart, so excluding every module would throw away every `impl` block and every
-/// inline module. What distinguishes the file-to-namespace module is its spelling:
-/// a declaration's qualified name is built from the scope stack and joined with
-/// `.`, while a module-layout name is joined with the language's own `::`. That is
-/// an invariant of the model rather than a heuristic, and
-/// `module_qualified_names_use_the_source_separator` pins it against the fixture.
-pub fn is_structural(kind: &str, qualified_name: &str) -> bool {
+/// declaration a fixture can label.
+fn is_a_structure_kind(kind: &str) -> bool {
     matches!(kind, "repository" | "workspace" | "package" | "file")
-        || (kind == "module" && qualified_name.contains("::"))
 }
 
 /// One stand-in per resolution state.
@@ -621,17 +657,13 @@ pub fn measure(
     let mut missing: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
     let mut spurious: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
 
-    let structural_entities = graph
-        .entities()
-        .iter()
-        .filter(|row| is_structural(&row.kind, &row.qualified_name))
-        .count() as u64;
+    let structural_entities = graph.structural.len() as u64;
 
     // -- symbols ------------------------------------------------------------
     let truth = corpus.symbol_multiset();
     let mut found = Multiset::new();
-    for row in graph.entities() {
-        if !is_structural(&row.kind, &row.qualified_name) {
+    for (index, row) in graph.entities().iter().enumerate() {
+        if !graph.is_structural(index) {
             found.add(row.key().render());
         }
     }
