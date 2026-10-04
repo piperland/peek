@@ -123,7 +123,11 @@ fn entity(store: &Store, qualified_name: &str) -> Entity {
     found.into_iter().next().expect("the one entity")
 }
 
-/// The kinds of the relations leaving `source` that name `target_name`, in the store's order.
+/// The kinds of the relations leaving `source` that name `target_name`, sorted.
+///
+/// Sorted because the order is the store's row order and the store's row order is a property of
+/// its schema; what a test is about here is *which kinds exist*, not which one the index happened
+/// to write first.
 fn kinds_named(store: &Store, source: &Entity, target_name: &str) -> Vec<RelationKind> {
     let mut kinds: Vec<RelationKind> = store
         .outgoing(&source.id, None, 512)
@@ -290,7 +294,7 @@ fn the_reference_edges_the_fixture_produces_are_the_ones_the_source_writes() {
 
     assert_eq!(
         kinds_named(&store, &encode, "helper"),
-        vec![RelationKind::Calls, RelationKind::References],
+        vec![RelationKind::References, RelationKind::Calls],
         "`helper(total)` is an invocation *and* a use of the name `helper`: the call says what was \
          invoked and the reference says what was named, and the two are separate rows"
     );
