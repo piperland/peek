@@ -48,9 +48,10 @@ pub(crate) const ENTITIES_NAMED: &str =
 /// the row value bounds the trailing three, and `LIMIT` stops the walk inside the index. The
 /// query-plan test in `store::tests` pins that, because a page read that degrades to a scan turns
 /// a linear walk into a quadratic one and nothing else in the build would notice.
-pub(crate) const ENTITIES_IN_FILE_AFTER: &str =
-    "WHERE path = ?1 AND (kind, qualified_name, entity_ordinal) > (?2, ?3, ?4) \
-     ORDER BY kind, qualified_name, entity_ordinal LIMIT ?5";
+pub(crate) const ENTITIES_IN_FILE_AFTER: &str = concat!(
+    "WHERE path = ?1 AND (kind, qualified_name, entity_ordinal) > (?2, ?3, ?4) ",
+    "ORDER BY kind, qualified_name, entity_ordinal LIMIT ?5"
+);
 
 /// Every entity owning `qualified_name`, ordered so `LIMIT` stops inside its index.
 pub(crate) const ENTITIES_WITH_QUALIFIED_NAME: &str =
