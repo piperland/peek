@@ -658,8 +658,13 @@ for slug in $REPOS; do
     "$OUT/$safe.pairs" "$OUT/$safe.summary" \
     "$o_res" "$o_inf" "$o_amb" "$o_unr" "$o_pen" "$o_rel" \
     "$n_res" "$n_inf" "$n_amb" "$n_unr" "$n_pen" "$n_rel"
-  if [ $? -ne 0 ]; then
-    echo "  $safe: the rung reader found something the mechanism does not explain (exit $?)" >&2
+  read_status=$?
+  if [ "$read_status" -ne 0 ]; then
+    # A non-zero status is information, not a failure of the run: the reader returns 1 when a
+    # prediction failed or a relation was on one arm only, and both of those are findings. The
+    # status is captured before anything else runs, because reading `$?` again after the test
+    # would report the test's own status and print a cheerful zero for a reader that complained.
+    echo "  $safe: the rung reader reported a condition it could not explain (exit $read_status)" >&2
   fi
   echo
 done
