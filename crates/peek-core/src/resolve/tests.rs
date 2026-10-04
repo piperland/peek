@@ -3055,8 +3055,8 @@ fn the_module_file_counters_partition_the_lookups() {
     );
     assert_eq!(
         files.table_answered,
-        files.table_answered_prefixed + files.table_answered_unprefixed,
-        "every table answer was one spelling or the other: {files:?}"
+        files.table_answered_named + files.table_answered_crate_relative,
+        "every table answer was a package path or a crate-relative one: {files:?}"
     );
     assert_eq!(
         files.package_unknown, 0,
