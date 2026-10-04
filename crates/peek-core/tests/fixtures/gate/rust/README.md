@@ -31,7 +31,8 @@ the figure the same run produced.
 | `symbol_recall` | 96.67% (87/90) | 96.66 |
 | `definitions` | 60.23% (53/88) | 60.22 |
 | `calls` | 97.50% (39/40) | 97.50 |
-| `references` | 94.74% (18/19) | 94.73 |
+| `references` | 96.15% (25/26) | 96.14 |
+| `resolution_correctness` | 75.00% (36/48) | 75.00 |
 | `imports` | 66.67% (10/15) | 66.66 |
 | `imports_module_retained` | 0.00% (0/3) | 0.00 |
 | `members` | 91.67% (22/24) | 91.66 |
@@ -77,11 +78,47 @@ a question about one node rather than about a subtree; `tests/reference_reachabi
 pins that against the engine directly, and `tests/reference_value.rs` measures what the
 edge is worth once it exists.
 
-The remaining 1 of 19 is `src/traits.rs`'s `Saveable.save | entry`, and the gate reports
+The remaining 1 of 26 is `src/traits.rs`'s `Saveable.save | entry`, and the gate reports
 it as a miss because that line is believed wrong: `Saveable.save` has no body, so `entry`
 occurs only as the parameter's binding. It is left in place rather than corrected — see
 the note at the top of `gate.expect` for why a miss is reported and a contradiction is
 corrected.
+
+## `resolution_correctness`: six decided edges point at the wrong entity
+
+`references` asks whether an edge **exists**. It does not ask whether it points at the
+right thing, and for a class that was unreachable until the previous change nobody had
+reason to ask. Making the class reachable is what exposed this: **six reference rows are
+decided and land on an entity the source never referred to**, while every other column in
+the matrix reads 100.00 or near it.
+
+The six are listed by name in the generated matrix, each with the rung that placed it, and
+two shapes account for all of them:
+
+- **A local binding resolved to a parameter of another function.** `summarise | out` and
+  `Runner.run | last` are `let` bindings. The unique-name rung found `render.out` and the
+  same-file rung found `retry.last` — both real declarations the source never named. No
+  entity is the referent, so the right answer was `Unresolved`.
+- **A field read resolved to a parameter of the function the read sits in.** `render |
+  count` and `describe | count` are `entry.count` on an `Entry`, and both land on
+  `format_line.count`: a different function's parameter, same file, same name.
+  `describe | entry` and `format_line_inner | entry` are parameters that **shadow an
+  import of the same name**, and the import rung won.
+
+The fixture states where each must point, on a `binds` or `binds_nothing` line. The gate
+counts decided-and-wrong separately from undecided and prints both, because they are
+different failures with different remedies: a gap is fixed by extracting more, a wrong
+edge by resolving differently or not at all, and one number for both hides the second.
+
+### Why the denominator is the decided relations
+
+`resolution_correctness` is a fraction over the relations the engine **decided**, so an
+engine could raise it by deciding less. `scripts/language-gate-mutation-check.sh`
+demonstrates exactly that: dropping `field_identifier` from the reference rule removes the
+two wrong `count` edges along with everything else, and the figure goes **up** to 78.26.
+That is why the wrong count and the undecided count sit beside the fraction in
+`LANGUAGE_MATRIX.md` rather than inside it, and why the mutation check prints the fact
+instead of just the pass.
 
 The full table with denominators is `../../../LANGUAGE_MATRIX.md`, generated from a
 measurement rather than written by hand.

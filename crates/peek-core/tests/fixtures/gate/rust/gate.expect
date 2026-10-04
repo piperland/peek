@@ -34,12 +34,34 @@
 #     which is why `src/service.rs` labels `Runner.run | body` as a reference for
 #     exactly the same shape. The replacement covers a qualified-name depth that no
 #     other negative control reaches.
+#
+# **Seven `reference` lines were added**, and they are labelled additions rather
+# than corrections: `render | label`, `render | count`, `format_line_inner | label`,
+# `describe | label`, `describe | count`, `Ticks.save | count` and
+# `Meters.save | count` are all uses of a name in a body, which is what a `reference`
+# line has always meant here and what `src/model.rs` already labels at
+# (`entry | label`, `entry | count`). Two of them — `render | count` and
+# `describe | count` — were being resolved onto `format_line.count`, a different
+# function's parameter, and **nothing could see it**: `references` was scored on
+# whether a row existed and no line claimed these. A missing label is a hole in the
+# population, which is the same failure as a wrong number in a different place.
 #   * `reference | src/traits.rs | Saveable.save | entry` is believed wrong and is
 #     **left alone**. `Saveable.save` has no body, so `entry` occurs only as the
 #     parameter's binding, which this file's own negative rule says is not a use.
 #     It is a miss rather than a violation, and correcting it would move a published
 #     dimension to 100.00 in the same commit that changed the engine, so it is
 #     reported instead.
+#
+# `binds` and `binds_nothing` below were added with the `resolution_correctness`
+# dimension, and seven `reference` lines were added at the same time. The reason is
+# recorded here because it is the same shape as the mistake this file exists to
+# avoid: **`render | count` and `describe | count` were both resolved to the wrong
+# entity for some time and no column could see it**, because no `reference` line
+# claimed either row and `references` is scored on whether a row exists. A label that
+# is missing is a hole in the population, so the seven field reads are labelled now,
+# and `references` reads 25/26 rather than 18/19 because six of them were always
+# there and the fixture simply had not claimed them. That is a **larger** denominator
+# catching up, not a score going up.
 #
 # Format: `keyword | field | field | ...`. `#` starts a comment. Fields are
 # trimmed. A field written `-` means "this one does not apply". An entity is named
