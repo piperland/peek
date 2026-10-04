@@ -731,12 +731,12 @@ impl<'a> Walker<'a> {
     ///   child with no field at all, and [`SymbolRule::name_strategy`] exists precisely
     ///   to describe those shapes. Stopping at the immediate parent would miss every one
     ///   of them.
-    /// * Stopping at the first *declared* ancestor rather than the first declared
-    ///   ancestor **on the way out of this occurrence** is what makes the answer
-    ///   positive. A node type that the spec declares as a symbol is not a reason to
-    ///   drop everything beneath it: `fn f() { g() }` finds `function_item` on the way
-    ///   up, and `g` is a use of a name while `f` is not. Asking "is this node the name
-    ///   that declaration introduced" is the only question whose answer separates them.
+    /// * A node type the spec declares as a symbol is not a reason to drop everything
+    ///   beneath it. `fn f() { g() }` finds `function_item` on the way up, and `g` is a
+    ///   use of a name while `f` is not. So the walk stops at the nearest declared
+    ///   ancestor and then asks a question about **this occurrence**, not about the
+    ///   ancestor's node type: "is this node the name that declaration introduced" is
+    ///   the only form of the question whose answer separates those two cases.
     fn is_excluded_reference(&self, node: Node<'_>) -> bool {
         let mut current = node;
         while let Some(parent) = current.parent() {
