@@ -2858,3 +2858,221 @@ fn every_relation_the_pass_examined_is_accounted_for_and_none_is_left_pending() 
         .len() as u64;
     assert_eq!(pending, 0, "and nothing is still awaiting a decision");
 }
+
+// ---------------------------------------------------------------------------
+// Which route turns a module path into a file
+// ---------------------------------------------------------------------------
+
+/// A crate root with enough declarations in it that a kind-ordered prefix cannot reach a
+/// `Module` row.
+///
+/// This is the shape that made `package_of` answer `None` on a real repository: the read it used
+/// was `ORDER BY kind, qualified_name, entity_ordinal LIMIT n`, and `Module` and `Package` sort
+/// *after* `function`, so on any file with more than `n` declarations the namespace row was not in
+/// the page. Ten functions is comfortably more than the bound of eight.
+fn crowded_crate_root(imports: &str) -> String {
+    let mut source = String::from(imports);
+    for index in 0..10 {
+        source.push_str(&format!("pub fn helper_{index}() {{}}\n"));
+    }
+    source
+}
+
+#[test]
+fn a_crowded_crate_root_still_names_its_own_package() {
+    // The importer's package is what turns `crate::a::Item` into `pkg::a::Item`, and without it the
+    // table can only offer the unprefixed `a` — which is the `mod a;` **declaration** row in this
+    // very file, not the module's own file. So the answer comes back as the file that declares the
+    // module, the declaration is not in it, the rung declines, and the edge falls to the one rung
+    // that can only claim. That is the shape of every intra-crate proof the recorded measurement
+    // says the module table was costing.
+    let tree = TempTree::new("crowded-crate-root");
+    tree.write("src/a.rs", "pub struct Item;\n");
+    tree.write(
+        "src/lib.rs",
+        &crowded_crate_root("pub mod a;\nuse crate::a::Item;\npub fn go() -> Item { Item }\n"),
+    );
+    let mut store = tree.index_without_resolving();
+    let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let item = relations_of(&store, RelationKind::References)
+        .into_iter()
+        .find(|relation| relation.target_name == "Item")
+        .expect("the reference to Item was extracted");
+    assert_eq!(
+        item.target,
+        Some(id("src/a.rs", EntityKind::Struct, "Item")),
+        "the import names the file the module *is*, not the file that declares it: {}",
+        state_of(&item)
+    );
+    assert_eq!(
+        rung_name(&decided_by(&item)),
+        "import_binding",
+        "and the rung is still the author's own import: {}",
+        state_of(&item)
+    );
+    assert_eq!(
+        report.module_files.package_unknown, 0,
+        "every lookup named the importer's package, which is what the crowded crate root used to \
+         prevent: {:?}",
+        report.module_files
+    );
+}
+
+#[test]
+fn a_declaration_row_does_not_answer_a_path_about_the_module() {
+    // Both spellings of `crate::util::Item` name a file in this index: `app::util` is the module
+    // row of `src/util.rs`, and `util` is the `mod util;` **declaration** row of `src/lib.rs`.
+    // Collecting the union of them hands the rung two candidate files, and `Item` is declared in
+    // both, so the answer is an `Ambiguous` — uncertainty manufactured by the lookup rather than
+    // found in the code. The first spelling that names a file is the answer, and the prefixed one
+    // comes first.
+    let tree = TempTree::new("first-spelling-wins");
+    tree.write("src/util.rs", "pub struct Item;\n");
+    tree.write(
+        "src/lib.rs",
+        "pub mod util;\nuse crate::util::Item;\npub fn go() -> Item { Item }\n",
+    );
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let item = relations_of(&store, RelationKind::References)
+        .into_iter()
+        .find(|relation| relation.target_name == "Item")
+        .expect("the reference to Item was extracted");
+    assert_eq!(
+        item.target,
+        Some(id("src/util.rs", EntityKind::Struct, "Item")),
+        "the prefixed spelling answered and the declaration row was never consulted: {}",
+        state_of(&item)
+    );
+}
+
+#[test]
+fn the_guess_answers_a_path_the_table_cannot_spell() {
+    // A crate that keeps its modules directly under the crate directory, with no `src`. The
+    // extractor's package rule takes the directory above the first source root, and there is none,
+    // so every file is named for its own parent: `core/flags/defs.rs` becomes the module
+    // `flags::defs` and its package is `flags`. A `crate::flags::Flag` path cannot be spelled from
+    // there — and the bare `flags` that the table falls through to is the `mod flags;` row in
+    // `core/main.rs`, which declares no `Flag`.
+    //
+    // That half is `extract::modules::locate` and is not this file's to fix. The half that is this
+    // file's is that the guess is anchored to the *referring file*, so it finds
+    // `core/flags/mod.rs` — a file inside the referring file's own directory chain, which is what
+    // an import written in it means — and the table's answer is not.
+    let tree = TempTree::new("unguessed-package");
+    tree.write("core/flags/mod.rs", "pub struct Flag;\n");
+    tree.write("core/main.rs", "mod flags;\nfn main() {}\n");
+    tree.write(
+        "core/flags/defs.rs",
+        "use crate::flags::Flag;\npub fn go() -> Flag { Flag }\n",
+    );
+    let mut store = tree.index_without_resolving();
+    let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let flag = relations_of(&store, RelationKind::References)
+        .into_iter()
+        .find(|relation| relation.target_name == "Flag")
+        .expect("the reference to Flag was extracted");
+    assert_eq!(
+        flag.target,
+        Some(id("core/flags/mod.rs", EntityKind::Struct, "Flag")),
+        "the file the referring file's own directory chain names is where the declaration is: {}",
+        state_of(&flag)
+    );
+    assert_eq!(
+        report.module_files.guess_answered > 0,
+        true,
+        "and the report says the guess is what answered: {:?}",
+        report.module_files
+    );
+}
+
+#[test]
+fn the_table_answers_a_package_the_guess_cannot_reach() {
+    // The other half, and it is the half the module table exists for. `src` is not a segment of a
+    // module path, so no anchor list can produce `crates/alpha/src/gateway.rs` from
+    // `crates/beta/src/`: the guess is structurally incapable of it and this is not a preference
+    // between two heuristics.
+    let tree = TempTree::new("table-reaches-a-package");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write("crates/alpha/src/gateway.rs", "pub struct Gateway;\n");
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    tree.write(
+        "crates/beta/src/lib.rs",
+        "use alpha::gateway::Gateway;\npub fn go() -> Gateway { Gateway }\n",
+    );
+    // A same-named module inside the importer's own package, so the guess has something to be wrong
+    // about: `src/gateway.rs` exists and declares a `Gateway` too.
+    tree.write("crates/beta/src/gateway.rs", "pub struct Gateway;\n");
+
+    let mut store = tree.index_without_resolving();
+    let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let gateway = relations_of(&store, RelationKind::References)
+        .into_iter()
+        .find(|relation| relation.target_name == "Gateway")
+        .expect("the reference to Gateway was extracted");
+    assert_eq!(
+        gateway.target,
+        Some(id(
+            "crates/alpha/src/gateway.rs",
+            EntityKind::Struct,
+            "Gateway"
+        )),
+        "the path names another package, so the edge belongs there and not beside the import: {}",
+        state_of(&gateway)
+    );
+    assert_eq!(
+        report.module_files.table_answered > 0,
+        true,
+        "and the table is what answered it, because the guess could not: {:?}",
+        report.module_files
+    );
+}
+
+#[test]
+fn the_module_file_counters_partition_the_lookups() {
+    // A report whose counters do not add up is a report that cannot be read, so this is the check
+    // that keeps them honest: three outcomes and no fourth, and every lookup in exactly one of them.
+    let tree = TempTree::new("counters-partition");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod gateway;\n");
+    tree.write("crates/alpha/src/gateway.rs", "pub struct Gateway;\n");
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    tree.write(
+        "crates/beta/src/lib.rs",
+        "use alpha::gateway::Gateway;\nuse crate::nothing::Here;\npub fn go() { let _ = Gateway; }\n",
+    );
+    let mut store = tree.index_without_resolving();
+    let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+    let files = report.module_files;
+
+    assert_eq!(
+        files.lookups,
+        files.table_answered + files.guess_answered + files.neither,
+        "the three outcomes must partition the lookups: {files:?}"
+    );
+    assert_eq!(
+        files.table_answered,
+        files.table_answered_prefixed + files.table_answered_unprefixed,
+        "every table answer was one spelling or the other: {files:?}"
+    );
+    assert_eq!(
+        files.package_unknown, 0,
+        "and both crates are spelled by their own `Cargo.toml`, so every importer's package was \
+         named: {files:?}"
+    );
+    assert!(
+        files.lookups > 0 && files.asked > 0,
+        "the pass asked the table something, or the counters are counting nothing: {files:?}"
+    );
+    assert!(
+        report.summary().contains("module files:"),
+        "and the summary carries them, because a number nobody can read is a number nobody reads: \
+         {}",
+        report.summary()
+    );
+}
