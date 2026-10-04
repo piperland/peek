@@ -2895,10 +2895,10 @@ fn a_crowded_crate_root_still_names_its_own_package() {
     let mut store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
-    let item = relations_of(&store, RelationKind::References)
+    let item = relations_of(&store, RelationKind::Imports)
         .into_iter()
         .find(|relation| relation.target_name == "Item")
-        .expect("the reference to Item was extracted");
+        .expect("the import of Item was extracted");
     assert_eq!(
         item.target,
         Some(id("src/a.rs", EntityKind::Struct, "Item")),
@@ -2936,10 +2936,10 @@ fn a_declaration_row_does_not_answer_a_path_about_the_module() {
     let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
-    let item = relations_of(&store, RelationKind::References)
+    let item = relations_of(&store, RelationKind::Imports)
         .into_iter()
         .find(|relation| relation.target_name == "Item")
-        .expect("the reference to Item was extracted");
+        .expect("the import of Item was extracted");
     assert_eq!(
         item.target,
         Some(id("src/util.rs", EntityKind::Struct, "Item")),
@@ -2971,10 +2971,10 @@ fn the_guess_answers_a_path_the_table_cannot_spell() {
     let mut store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
-    let flag = relations_of(&store, RelationKind::References)
+    let flag = relations_of(&store, RelationKind::Imports)
         .into_iter()
         .find(|relation| relation.target_name == "Flag")
-        .expect("the reference to Flag was extracted");
+        .expect("the import of Flag was extracted");
     assert_eq!(
         flag.target,
         Some(id("core/flags/mod.rs", EntityKind::Struct, "Flag")),
@@ -3011,10 +3011,10 @@ fn the_table_answers_a_package_the_guess_cannot_reach() {
     let mut store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
-    let gateway = relations_of(&store, RelationKind::References)
+    let gateway = relations_of(&store, RelationKind::Imports)
         .into_iter()
         .find(|relation| relation.target_name == "Gateway")
-        .expect("the reference to Gateway was extracted");
+        .expect("the import of Gateway was extracted");
     assert_eq!(
         gateway.target,
         Some(id(
