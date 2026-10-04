@@ -340,6 +340,12 @@ no_reference | src/service.rs | describe | describe
 # Each expectation names the target and the entity the answer must contain. A query
 # that returns a superset still passes, because a walk is allowed to reach more
 # than was asked for; a query that omits the named entity fails.
+#
+# `impl Trait for Type` binds the **impl block**, which the Rust spec maps to
+# `EntityKind::Module` with the type's name. So "which types implement `Clock`"
+# is answered by a walk that reaches `module | Ticks`, not `struct | Ticks`. The
+# expectation names the module because that is the entity the edge reaches, and a
+# reader who wanted the struct would be asking a different question.
 # ---------------------------------------------------------------------------
 callers | src/service.rs | function | retry | src/service.rs | method | Runner.run
 callers | src/report.rs | method | Sink.push | src/report.rs | function | render
@@ -347,18 +353,50 @@ callers | src/report.rs | function | format_line_inner | src/report.rs | functio
 callers | src/model.rs | function | entry | src/report.rs | function | format_line
 callers | src/model.rs | function | entry | src/report.rs | function | renamed
 callers | src/model.rs | function | entry | src/service.rs | function | with_clock
-# `Saveable.receipt` is reachable from the trait by containment, which is the
-# `dependents` traversal and not a call edge. `callers` reads inbound edges of any
-# dependency kind, so the trait itself is not the target here — `impl Trait for
-# Type` binds the *impl block*, which is what `implementations` below names.
-implementations | src/traits.rs | trait | Clock | src/traits.rs | module | Ticks
 callees | src/service.rs | function | describe | src/service.rs | function | format_line
 implementations | src/traits.rs | trait | Clock | src/traits.rs | module | Ticks
 implementations | src/traits.rs | trait | Saveable | src/traits.rs | module | Meters
 
-# `callees(summarise)` cannot reach `describe`. The call is written `service::describe`,
-# whose path has one segment, and the walker marks a single-segment path ambiguous on
-# purpose because `Type::method()` is byte-identical — so this edge is `unresolved`
-# and the honest answer is that the callee list is shorter. It is left in the file
-# because the number this produces is the finding, not an accident of the fixture.
+# `callees(summarise)` cannot reach `describe`. The call is written
+# `service::describe(entry)`, whose path has one segment, and the walker marks a
+# single-segment path ambiguous on purpose because `Type::method()` is
+# byte-identical to it — so this edge is `unresolved` and the honest answer is a
+# shorter callee list. It is in this file because the number it produces is the
+# finding, not an accident of the fixture.
 callees | src/lib.rs | function | summarise | src/service.rs | function | describe
+
+# ---------------------------------------------------------------------------
+# Context quality: a target an agent would type, and the entity the pack has to
+# contain for the answer to be any use.
+# ---------------------------------------------------------------------------
+context | summarise | src/lib.rs | function | summarise
+context | Sink.push | src/report.rs | method | Sink.push
+context | src/model.rs | src/model.rs | file | model.rs
+context | MAX_ROWS | src/lib.rs | constant | MAX_ROWS
+context | Runner.run | src/service.rs | method | Runner.run
+context | Clock | src/traits.rs | trait | Clock
+
+# `format_line` is declared in two files. The surface must refuse the bare name and
+# offer both candidates rather than silently pick one.
+context_ambiguous | format_line
+
+# ---------------------------------------------------------------------------
+# Floors. Ratchets in hundredths of a percent, each set from the measurement this
+# fixture produces. Raising one is a reviewable act belonging to the commit that
+# improves the number.
+# ---------------------------------------------------------------------------
+floor | symbol_precision | 0
+floor | symbol_recall | 0
+floor | definitions | 0
+floor | calls | 0
+floor | references | 0
+floor | imports | 0
+floor | imports_module_retained | 0
+floor | members | 0
+floor | inheritance_subject | 0
+floor | inheritance_base | 0
+floor | negative_references | 0
+floor | negative_inheritance | 0
+floor | incremental | 100
+floor | query | 0
+floor | context | 0
