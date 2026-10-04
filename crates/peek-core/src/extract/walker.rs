@@ -2071,6 +2071,9 @@ mod tests {
                 // one `Service` that is not.
                 "references payments.Service.new -> Service".to_owned(),
                 "references payments.Service.new -> Service".to_owned(),
+                // The call comes before the references inside it, because a node is emitted before
+                // its children are walked.
+                "calls main -> new".to_owned(),
                 // `payments::Service::new()` names three nested paths and two bare names, and each
                 // is its own occurrence. The whole paths are here because `scoped_identifier` is a
                 // declared reference node type — a target name that no resolver rung can place, and
@@ -2080,7 +2083,6 @@ mod tests {
                 "references main -> payments".to_owned(),
                 "references main -> Service".to_owned(),
                 "references main -> new".to_owned(),
-                "calls main -> new".to_owned(),
             ],
             "every relation the walker produced before modules existed, in source order"
         );
