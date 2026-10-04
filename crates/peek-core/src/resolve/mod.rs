@@ -1323,11 +1323,7 @@ impl<'s> Resolver<'s> {
             if guessed.contains(&path) {
                 continue;
             }
-            if !self
-                .store
-                .entities_in_file(&path, 1)?
-                .is_empty()
-            {
+            if !self.store.entities_in_file(&path, 1)?.is_empty() {
                 guessed.push(path);
             }
         }
