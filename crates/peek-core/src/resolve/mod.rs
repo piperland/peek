@@ -1309,13 +1309,25 @@ impl<'s> Resolver<'s> {
         // contribute a candidate — a candidate is an entity, and there are none in a file this
         // build did not extract — and it is the overwhelming majority of what the guess produces:
         // a three-segment path from a file four directories down is a dozen anchors of which at
-        // most one exists. The read is cached, and it is the same read the guess-only arm makes.
+        // most one exists.
+        //
+        // **A one-row read, deliberately, and not [`Resolver::entities_in_file`].** That reads a
+        // file's entities *to the end* and caches the lot under the path, which is right for the
+        // files the caller goes on to search and wrong for the ones it does not: this loop asks
+        // "does this path exist", it does not need the contents, and caching an empty `Vec` per
+        // non-existent path cost 4.8s of a 23s build on `rust-lang/cargo` before this was a
+        // one-row read. A path that *does* hold entities is read properly by the caller, once, from
+        // the cache as it always was.
         let mut guessed: Vec<RepoPath> = Vec::new();
         for path in files_for_module(module, importer, strip_last) {
             if guessed.contains(&path) {
                 continue;
             }
-            if !self.entities_in_file(&path)?.is_empty() {
+            if !self
+                .store
+                .entities_in_file(&path, 1)?
+                .is_empty()
+            {
                 guessed.push(path);
             }
         }
