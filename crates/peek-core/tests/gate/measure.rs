@@ -24,7 +24,7 @@ use peek_core::model::{
 use peek_core::query::{Direction, Query, QueryError, WalkRequest};
 use peek_core::store::Store;
 
-use super::expect::{Corpus, Key, Labelled, LabelledCall, LabelledPair};
+use super::expect::{Bind, Corpus, Key, Labelled, LabelledCall, LabelledPair};
 use super::score::{Fraction, Match, Multiset};
 
 /// Every dimension E4 names, in the order the matrix prints them.
@@ -1198,47 +1198,62 @@ const PLACED_CLASSES: &[&str] = &["references", "calls", "imports"];
 fn placement_coverage(corpus: &Corpus) -> (u64, u64) {
     let mut labeled = 0u64;
     let mut covered = 0u64;
-    let mut seen: BTreeMap<String, u64> = BTreeMap::new();
+    let placed: BTreeMap<String, u64> = corpus.binds.iter().fold(
+        BTreeMap::new(),
+        |mut counts: BTreeMap<String, u64>, bind: &Bind| {
+            *counts.entry(site_of(bind.class.as_str(), &bind.path, &bind.subject, &bind.name))
+                .or_default() += 1;
+            counts
+        },
+    );
+    for (class, path, subject, name) in labelled_sites(corpus) {
+        labeled += 1;
+        if placed
+            .get(&site_of(class, &path, &subject, &name))
+            .is_some_and(|claims| *claims > 0)
+        {
+            covered += 1;
+        }
+    }
+    (covered, labeled)
+}
+
+/// One labelled relation, as the four fields a placement claim is matched on.
+///
+/// **The source kind is deliberately absent.** A `reference` line does not carry
+/// one — a use of a name is not a call and the model does not need the caller's
+/// kind to say which relation it meant — so requiring a kind here would make the
+/// coverage figure depend on a field one of the three populations does not have.
+/// Two relations from the same symbol naming the same name are the same site
+/// whichever kind the symbol is, and `score_placement` still checks every row.
+fn site_of(class: &str, path: &str, subject: &str, name: &str) -> String {
+    format!("{class}|{path}|{subject}|{name}")
+}
+
+/// Every relation the fixture's existence labels claim, as `(class, path, subject,
+/// name)`.
+fn labelled_sites(corpus: &Corpus) -> Vec<(&str, &str, &str, &str)> {
+    let mut sites: Vec<(&str, &str, &str, &str)> = Vec::new();
     for reference in &corpus.references {
-        *seen.entry(format!(
-            "references|{}|{}|{}",
-            reference.path, reference.subject, reference.object
-        ))
-        .or_default() += 1;
+        sites.push((
+            "references",
+            &reference.path,
+            &reference.subject,
+            &reference.object,
+        ));
     }
     for call in &corpus.calls {
-        *seen.entry(format!("calls|{}|{}|{}", call.path, call.subject, call.object))
-            .or_default() += 1;
+        sites.push(("calls", &call.path, &call.subject, &call.object));
     }
     for import in &corpus.imports {
         // An import relation's source is the file entity, and a file entity's
-        // qualified name is the file's own name. A fact about the model, not a
-        // guess about the fixture.
-        let file = Path::new(&import.path)
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        *seen.entry(format!("imports|{}|{}|{}", import.path, file, import.local))
-            .or_default() += 1;
-    }
-    let placed: BTreeMap<String, u64> = corpus
-        .binds
-        .iter()
-        .fold(BTreeMap::new(), |mut counts, bind| {
-            *counts.entry(bind.key()).or_default() += 1;
-            counts
-        });
-    for (key, count) in &seen {
-        if !PLACED_CLASSES.contains(&key.split('|').next().unwrap_or_default()) {
-            continue;
+        // qualified name is the file's own name. A fact about the model rather
+        // than a guess about the fixture.
+        if let Some(file) = Path::new(&import.path).file_name() {
+            sites.push(("imports", &import.path, file.to_str().unwrap_or(""), &import.local));
         }
-        labeled += count;
-        // A claim covers a labelled relation once per occurrence: two labels for
-        // one relation and two claims for it is a match, and anything else is
-        // coverage the gate does not have.
-        covered += (*count).min(placed.get(key).copied().unwrap_or(0));
     }
-    (covered, labeled)
+    sites
 }
 
 /// Whether one placed target satisfies one placement label.

@@ -58,8 +58,8 @@
 #   inherits             | path | subject_qname | base
 #   implements           | path | subject_qname | trait
 #   no_inherits          | path | subject_qname | -
-#   binds                | class | path | subject_qname | name | tpath | tkind | tqname
-#   binds_nothing        | class | path | subject_qname | name
+#   binds                | class | path | source_kind | source_qname | name | tpath | tkind | tqname
+#   binds_nothing        | class | path | source_kind | source_qname | name
 #   callers              | target_key | expected_caller_key
 #   callees              | target_key | expected_callee_key
 #   implementations      | target_key | expected_key
@@ -74,14 +74,18 @@
 # the relation at all would be a false claim. A relation left undecided violates
 # neither — that is a gap, and it is counted as one rather than scored.
 #
-# They **annotate a line that already exists** rather than declaring a population
-# of their own: the class, path, subject and name identify a relation some
-# `reference`, `call` or `import` line has already claimed. So the denominator is
-# a population somebody wrote down in the ordinary way, a `binds` line for a
-# relation no other line names is a parse error rather than a new population, and
-# the labels carrying no placement claim are counted and printed rather than
-# quietly dropped. Adding a placement claim therefore cannot move `references` or
-# `calls`, and the two questions stay tellable apart in a diff.
+# They name the relation they place with the **same five fields a `call` line
+# uses** — class, path, source kind, source qualified name, callee name — so a
+# placement claim can be read straight across from the `reference`, `call` or
+# `import` line describing the same site, and a reviewer can check the two agree
+# without translating between two vocabularies. The kind is on the line for the
+# reason `call` puts it there: `counted` is both a macro and a function in this
+# fixture.
+#
+# They are written out in full rather than folded into those lines, so adding a
+# placement claim cannot move `references` or `calls` and the two questions stay
+# tellable apart in a diff. The labelled relations carrying no claim are counted
+# and printed, because a label nobody checked is not the same as a label checked.
 #
 # A relation can be labelled by both `reference` and `binds_nothing`:
 # `summarise | out` is a use of the name `out` **and** has no referent, and both
@@ -146,10 +150,10 @@ import | src/lib.rs | Saveable | traits::Saveable | -
 # crate declares, and the items are here. `Renamed` is the alias case: `use
 # crate::model::Alias as Renamed` binds a local name for a **type alias**, so the
 # referent is `Alias` and not anything named `Renamed`.
-binds | imports | src/lib.rs | lib.rs | Entry | src/model.rs | struct | Entry
-binds | imports | src/lib.rs | lib.rs | Clock | src/traits.rs | trait | Clock
-binds | imports | src/lib.rs | lib.rs | Saveable | src/traits.rs | trait | Saveable
-binds | imports | src/report.rs | report.rs | Renamed | src/model.rs | type_alias | Alias
+binds | imports | src/lib.rs | file | lib.rs | Entry | src/model.rs | struct | Entry
+binds | imports | src/lib.rs | file | lib.rs | Clock | src/traits.rs | trait | Clock
+binds | imports | src/lib.rs | file | lib.rs | Saveable | src/traits.rs | trait | Saveable
+binds | imports | src/report.rs | file | report.rs | Renamed | src/model.rs | type_alias | Alias
 
 # `use` states in this crate root name the modules with a **relative** path rather
 # than through `crate::`. Whatever a resolver does with that, the module the
@@ -184,19 +188,19 @@ call | src/lib.rs | function | outer.inner.deep | len
 # through `super::super`, and `counted!(body())` names the macro this file
 # declares — the `body()` inside the token tree has no static target from an
 # expression walk, and `binds_nothing` says so rather than claiming otherwise.
-binds_nothing | calls | src/lib.rs | summarise | iter
-binds_nothing | calls | src/lib.rs | summarise | take
-binds_nothing | calls | src/lib.rs | summarise | cloned
-binds_nothing | calls | src/lib.rs | summarise | collect
-binds_nothing | calls | src/lib.rs | summarise | len
-binds_nothing | calls | src/lib.rs | summarise | push_str
-binds_nothing | calls | src/lib.rs | summarise | format_line
-binds | calls | src/lib.rs | summarise | describe | src/service.rs | function | describe
-binds | calls | src/lib.rs | summarise | render | src/report.rs | function | render
-binds | calls | src/lib.rs | counted | counted | src/lib.rs | macro | counted
-binds_nothing | calls | src/lib.rs | counted | body
-binds | calls | src/lib.rs | outer.inner.deep | summarise | src/lib.rs | function | summarise
-binds_nothing | calls | src/lib.rs | outer.inner.deep | len
+binds_nothing | calls | src/lib.rs | function | summarise | iter
+binds_nothing | calls | src/lib.rs | function | summarise | take
+binds_nothing | calls | src/lib.rs | function | summarise | cloned
+binds_nothing | calls | src/lib.rs | function | summarise | collect
+binds_nothing | calls | src/lib.rs | function | summarise | len
+binds_nothing | calls | src/lib.rs | function | summarise | push_str
+binds_nothing | calls | src/lib.rs | function | summarise | format_line
+binds | calls | src/lib.rs | function | summarise | describe | src/service.rs | function | describe
+binds | calls | src/lib.rs | function | summarise | render | src/report.rs | function | render
+binds | calls | src/lib.rs | function | counted | counted | src/lib.rs | macro | counted
+binds_nothing | calls | src/lib.rs | function | counted | body
+binds | calls | src/lib.rs | function | outer.inner.deep | summarise | src/lib.rs | function | summarise
+binds_nothing | calls | src/lib.rs | function | outer.inner.deep | len
 
 # `kept`, `out`, `MAX_ROWS` and `entries` are uses inside a function body. A use of
 # a name is a reference wherever it appears.
@@ -218,11 +222,11 @@ reference | src/lib.rs | counted | body
 #     a claim about a declaration that does not exist. `binds_nothing` says so.
 #   * `MAX_ROWS` is the constant this file declares.
 #   * `entries` is `summarise`'s own parameter, and the use is in the body.
-binds_nothing | references | src/lib.rs | summarise | kept
-binds_nothing | references | src/lib.rs | summarise | out
-binds | references | src/lib.rs | summarise | MAX_ROWS | src/lib.rs | constant | MAX_ROWS
-binds | references | src/lib.rs | summarise | entries | src/lib.rs | parameter | summarise.entries
-binds | references | src/lib.rs | counted | body | src/lib.rs | parameter | counted.body
+binds_nothing | references | src/lib.rs | function | summarise | kept
+binds_nothing | references | src/lib.rs | function | summarise | out
+binds | references | src/lib.rs | function | summarise | MAX_ROWS | src/lib.rs | constant | MAX_ROWS
+binds | references | src/lib.rs | function | summarise | entries | src/lib.rs | parameter | summarise.entries
+binds | references | src/lib.rs | function | counted | body | src/lib.rs | parameter | counted.body
 
 # A declaration's own name is not a use of that name, and neither is the name of a
 # declaration that encloses the use.
@@ -274,7 +278,7 @@ member | src/model.rs | Pair | Pair.first
 call | src/model.rs | function | entry | to_owned
 
 # `to_owned` is a method of `ToOwned`, so nothing in this repository declares it.
-binds_nothing | calls | src/model.rs | entry | to_owned
+binds_nothing | calls | src/model.rs | function | entry | to_owned
 
 reference | src/model.rs | entry | label
 reference | src/model.rs | entry | count
@@ -286,8 +290,8 @@ no_reference | src/model.rs | Entry | Entry
 # in the relation identity. The use in a value position reads the **parameter**,
 # which is what these two lines say. `count` is a field shorthand, so the name
 # there is the parameter as well.
-binds | references | src/model.rs | entry | label | src/model.rs | parameter | entry.label
-binds | references | src/model.rs | entry | count | src/model.rs | parameter | entry.count
+binds | references | src/model.rs | function | entry | label | src/model.rs | parameter | entry.label
+binds | references | src/model.rs | function | entry | count | src/model.rs | parameter | entry.count
 
 # ---------------------------------------------------------------------------
 # src/traits.rs
@@ -336,19 +340,19 @@ member | src/traits.rs | Meters | Meters.receipt
 
 import | src/traits.rs | Entry | crate::model::Entry | -
 
-binds | imports | src/traits.rs | traits.rs | Entry | src/model.rs | struct | Entry
+binds | imports | src/traits.rs | file | traits.rs | Entry | src/model.rs | struct | Entry
 
-binds | imports | src/service.rs | service.rs | entry | src/model.rs | function | entry
-binds | imports | src/service.rs | service.rs | Entry | src/model.rs | struct | Entry
-binds | imports | src/service.rs | service.rs | Sink | src/report.rs | struct | Sink
-binds | imports | src/service.rs | service.rs | Clock | src/traits.rs | trait | Clock
-binds | imports | src/service.rs | service.rs | Saveable | src/traits.rs | trait | Saveable
-binds | imports | src/service.rs | service.rs | Ticks | src/traits.rs | struct | Ticks
+binds | imports | src/service.rs | file | service.rs | entry | src/model.rs | function | entry
+binds | imports | src/service.rs | file | service.rs | Entry | src/model.rs | struct | Entry
+binds | imports | src/service.rs | file | service.rs | Sink | src/report.rs | struct | Sink
+binds | imports | src/service.rs | file | service.rs | Clock | src/traits.rs | trait | Clock
+binds | imports | src/service.rs | file | service.rs | Saveable | src/traits.rs | trait | Saveable
+binds | imports | src/service.rs | file | service.rs | Ticks | src/traits.rs | struct | Ticks
 
-binds | imports | src/report.rs | report.rs | Severity | src/model.rs | enum | Severity
-binds | imports | src/report.rs | report.rs | entry | src/model.rs | function | entry
-binds | imports | src/report.rs | report.rs | Entry | src/model.rs | struct | Entry
-binds_nothing | imports | src/report.rs | report.rs | *
+binds | imports | src/report.rs | file | report.rs | Severity | src/model.rs | enum | Severity
+binds | imports | src/report.rs | file | report.rs | entry | src/model.rs | function | entry
+binds | imports | src/report.rs | file | report.rs | Entry | src/model.rs | struct | Entry
+binds_nothing | imports | src/report.rs | file | report.rs | *
 
 # `Saveable: Clock` is a supertrait clause. `Clock` names no base at all.
 inherits | src/traits.rs | Saveable | Clock
@@ -365,11 +369,11 @@ no_inherits | src/traits.rs | Store | -
 
 # The supertrait and the four impl blocks all name traits this file declares, so
 # each of the five edges has a referent in this file.
-binds | inherits | src/traits.rs | Saveable | Clock | src/traits.rs | trait | Clock
-binds | implements | src/traits.rs | Ticks | Clock | src/traits.rs | trait | Clock
-binds | implements | src/traits.rs | Ticks | Saveable | src/traits.rs | trait | Saveable
-binds | implements | src/traits.rs | Meters | Clock | src/traits.rs | trait | Clock
-binds | implements | src/traits.rs | Meters | Saveable | src/traits.rs | trait | Saveable
+binds | inherits | src/traits.rs | trait | Saveable | Clock | src/traits.rs | trait | Clock
+binds | implements | src/traits.rs | module | Ticks | Clock | src/traits.rs | trait | Clock
+binds | implements | src/traits.rs | module | Ticks | Saveable | src/traits.rs | trait | Saveable
+binds | implements | src/traits.rs | module | Meters | Clock | src/traits.rs | trait | Clock
+binds | implements | src/traits.rs | module | Meters | Saveable | src/traits.rs | trait | Saveable
 
 # `Saveable.save` has no body, so `entry` occurs in its signature only, as the
 # parameter's binding. Under the negative rule below that is a declaration rather
@@ -387,9 +391,9 @@ no_reference | src/traits.rs | Saveable | Saveable
 # in each, so it denotes the parameter and nothing else. `Saveable.save` has no
 # body, so the line above it is believed wrong; the placement below is what the
 # line would require if it existed at all.
-binds | references | src/traits.rs | Saveable.save | entry | src/traits.rs | parameter | Saveable.save.entry
-binds | references | src/traits.rs | Ticks.save | entry | src/traits.rs | parameter | Ticks.save.entry
-binds | references | src/traits.rs | Meters.save | entry | src/traits.rs | parameter | Meters.save.entry
+binds | references | src/traits.rs | method | Saveable.save | entry | src/traits.rs | parameter | Saveable.save.entry
+binds | references | src/traits.rs | method | Ticks.save | entry | src/traits.rs | parameter | Ticks.save.entry
+binds | references | src/traits.rs | method | Meters.save | entry | src/traits.rs | parameter | Meters.save.entry
 
 # ---------------------------------------------------------------------------
 # src/report.rs
@@ -440,17 +444,17 @@ call | src/report.rs | function | renamed | entry
 # `sink` is a local `Sink`, and `clock` is a local `Ticks`. `entry` is the
 # imported function. `format_line` is this file's own, and `format_line_inner` is
 # the one it calls. `clone` and `push_str` are `std`.
-binds_nothing | calls | src/report.rs | format_line_inner | clone
-binds | calls | src/report.rs | format_line | entry | src/model.rs | function | entry
-binds | calls | src/report.rs | format_line | format_line_inner | src/report.rs | function | format_line_inner
-binds | calls | src/report.rs | renamed | entry | src/model.rs | function | entry
-binds_nothing | calls | src/report.rs | render | new
-binds | calls | src/report.rs | render | push | src/report.rs | method | Sink.push
-binds_nothing | calls | src/report.rs | render | push_str
-binds_nothing | calls | src/report.rs | render | len
-binds | calls | src/report.rs | render | format_line | src/report.rs | function | format_line
-binds | calls | src/report.rs | render | now | src/traits.rs | method | Ticks.now
-binds | calls | src/report.rs | render | receipt | src/traits.rs | method | Ticks.receipt
+binds_nothing | calls | src/report.rs | function | format_line_inner | clone
+binds | calls | src/report.rs | function | format_line | entry | src/model.rs | function | entry
+binds | calls | src/report.rs | function | format_line | format_line_inner | src/report.rs | function | format_line_inner
+binds | calls | src/report.rs | function | renamed | entry | src/model.rs | function | entry
+binds_nothing | calls | src/report.rs | function | render | new
+binds | calls | src/report.rs | function | render | push | src/report.rs | method | Sink.push
+binds_nothing | calls | src/report.rs | function | render | push_str
+binds_nothing | calls | src/report.rs | function | render | len
+binds | calls | src/report.rs | function | render | format_line | src/report.rs | function | format_line
+binds | calls | src/report.rs | function | render | now | src/traits.rs | method | Ticks.now
+binds | calls | src/report.rs | function | render | receipt | src/traits.rs | method | Ticks.receipt
 binds_nothing | calls | src/report.rs | method | Sink.push | push_str
 
 reference | src/report.rs | format_line | owned
@@ -466,13 +470,13 @@ no_reference | src/report.rs | Sink | Sink
 # function's own parameter — the parameter **shadows the import of the same
 # name**, which is the shape the `describe` lines below repeat. `render`'s
 # `entries` is `render`'s parameter, and `out` is the other one.
-binds_nothing | references | src/report.rs | format_line | owned
-binds | references | src/report.rs | format_line | entry | src/model.rs | function | entry
-binds | references | src/report.rs | format_line_inner | entry | src/report.rs | parameter | format_line_inner.entry
-binds_nothing | references | src/report.rs | render | sink
-binds_nothing | references | src/report.rs | render | clock
-binds | references | src/report.rs | render | entries | src/report.rs | parameter | render.entries
-binds | references | src/report.rs | render | out | src/report.rs | parameter | render.out
+binds_nothing | references | src/report.rs | function | format_line | owned
+binds | references | src/report.rs | function | format_line | entry | src/model.rs | function | entry
+binds | references | src/report.rs | function | format_line_inner | entry | src/report.rs | parameter | format_line_inner.entry
+binds_nothing | references | src/report.rs | function | render | sink
+binds_nothing | references | src/report.rs | function | render | clock
+binds | references | src/report.rs | function | render | entries | src/report.rs | parameter | render.entries
+binds | references | src/report.rs | function | render | out | src/report.rs | parameter | render.out
 
 # ---------------------------------------------------------------------------
 # src/service.rs
@@ -552,15 +556,15 @@ no_reference | src/service.rs | describe | describe
 # parameter and **shadows this file's import of `crate::model::entry`**, which is
 # the whole point of the `binds_nothing` labels for the two `let` bindings
 # beside them.
-binds_nothing | references | src/service.rs | Runner.run | last
-binds_nothing | references | src/service.rs | Runner.run | attempt
-binds_nothing | references | src/service.rs | Runner.run | saved
-binds_nothing | references | src/service.rs | with_clock | ticks
-binds_nothing | references | src/service.rs | with_clock | saved
-binds_nothing | references | src/service.rs | format_line | sink
-binds | references | src/service.rs | Runner.run | body | src/service.rs | parameter | Runner.run.body
-binds | references | src/service.rs | Runner.run | limit | src/service.rs | parameter | Runner.run.limit
-binds | references | src/service.rs | describe | entry | src/service.rs | parameter | describe.entry
+binds_nothing | references | src/service.rs | method | Runner.run | last
+binds_nothing | references | src/service.rs | method | Runner.run | attempt
+binds_nothing | references | src/service.rs | method | Runner.run | saved
+binds_nothing | references | src/service.rs | function | with_clock | ticks
+binds_nothing | references | src/service.rs | function | with_clock | saved
+binds_nothing | references | src/service.rs | function | format_line | sink
+binds | references | src/service.rs | method | Runner.run | body | src/service.rs | parameter | Runner.run.body
+binds | references | src/service.rs | method | Runner.run | limit | src/service.rs | parameter | Runner.run.limit
+binds | references | src/service.rs | function | describe | entry | src/service.rs | parameter | describe.entry
 
 # ---------------------------------------------------------------------------
 # Query correctness: questions the surface has to answer correctly.

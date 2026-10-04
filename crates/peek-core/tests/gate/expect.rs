@@ -114,6 +114,13 @@ pub struct Bind {
     pub class: String,
     /// Repository-relative path of the file the relation is written in.
     pub path: String,
+    /// The `EntityKind` of the symbol the relation is written in.
+    ///
+    /// On the line rather than inferred, for the same reason `call` carries it: a
+    /// qualified name does not determine a kind — `counted` is both a macro and a
+    /// function in the Rust fixture — and a relation is written in one or the
+    /// other.
+    pub kind: String,
     /// The enclosing symbol's qualified name, or the file's name at file level.
     pub subject: String,
     /// The name the relation is about.
@@ -126,8 +133,8 @@ impl Bind {
     /// The identity of the relation this label is about, as the store keys it.
     pub fn key(&self) -> String {
         format!(
-            "{}|{}|{}|{}",
-            self.class, self.path, self.subject, self.name
+            "{}|{}|{}|{}|{}",
+            self.class, self.path, self.kind, self.subject, self.name
         )
     }
 }
@@ -322,8 +329,8 @@ fn arity(keyword: &str) -> usize {
     match keyword {
         "symbol" => 4,
         "member" | "reference" | "no_reference" | "inherits" | "implements" | "no_inherits" => 4,
-        "binds" => 8,
-        "binds_nothing" => 5,
+        "binds" => 9,
+        "binds_nothing" => 6,
         "call" => 5,
         "import" => 5,
         "import_no_module" => 3,
@@ -399,9 +406,10 @@ fn absorb(corpus: &mut Corpus, keyword: &str, fields: &[&str]) -> Result<(), Str
             corpus.binds.push(Bind {
                 class,
                 path: fields[2].to_owned(),
-                subject: fields[3].to_owned(),
-                name: fields[4].to_owned(),
-                target: Some(Key::new(fields[5], fields[6], fields[7])),
+                kind: fields[3].to_owned(),
+                subject: fields[4].to_owned(),
+                name: fields[5].to_owned(),
+                target: Some(Key::new(fields[6], fields[7], fields[8])),
             });
         }
         "binds_nothing" => {
@@ -409,8 +417,9 @@ fn absorb(corpus: &mut Corpus, keyword: &str, fields: &[&str]) -> Result<(), Str
             corpus.binds.push(Bind {
                 class,
                 path: fields[2].to_owned(),
-                subject: fields[3].to_owned(),
-                name: fields[4].to_owned(),
+                kind: fields[3].to_owned(),
+                subject: fields[4].to_owned(),
+                name: fields[5].to_owned(),
                 target: None,
             });
         }

@@ -442,6 +442,23 @@ fn a_registered_language_with_a_fixture_is_measured_on_every_dimension() {
                 language.as_str(),
                 bind.key(),
             );
+            // The source kind is on the line rather than inferred, so a typo in it
+            // would silently match nothing and shrink the denominator of the
+            // dimension it exists to measure. Checked against the kinds the
+            // fixture declares in that file: a relation is written inside a
+            // declaration the fixture already labels.
+            assert!(
+                corpus
+                    .symbols
+                    .iter()
+                    .any(|symbol| symbol.path == bind.path && symbol.kind == bind.kind),
+                "{}: `{}` places a relation in a `{}`, and the fixture labels no such \
+                 declaration in `{}`",
+                language.as_str(),
+                bind.key(),
+                bind.kind,
+                bind.path,
+            );
         }
     }
 }
