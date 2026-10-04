@@ -1300,7 +1300,9 @@ impl<'s> Resolver<'s> {
                     asked,
                     outcome: ModuleFileOutcome::Table,
                     package_known: package.is_some(),
-                    prefixed: package.is_some() && qualified.starts_with(&format!("{package}::")),
+                    prefixed: package
+                        .as_ref()
+                        .is_some_and(|prefix| qualified.starts_with(&format!("{prefix}::"))),
                 });
                 return Ok(found);
             }
@@ -1423,10 +1425,11 @@ impl<'s> Resolver<'s> {
         // `modules_per_source` rather than `modules_per_lookup`, and deliberately larger: the
         // edge is the *only* `Contains` into a file entity, and the answer must not depend on how
         // many rows happen to precede it.
-        for relation in self
-            .store
-            .incoming(&file, Some(RelationKind::Contains), self.options.outgoing_per_source)?
-        {
+        for relation in self.store.incoming(
+            &file,
+            Some(RelationKind::Contains),
+            self.options.outgoing_per_source,
+        )? {
             let Some(target) = relation.target.as_ref() else {
                 continue;
             };
