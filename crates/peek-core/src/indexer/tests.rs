@@ -293,6 +293,227 @@ fn a_refresh_touches_only_the_file_that_changed() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// A package is a fact about the repository, not about one file
+//
+// A file's package is the nearest ancestor directory holding a crate root, which no single
+// file's path can say. So a refresh carries the repository's package roots, and the three
+// tests below are the cases where getting that wrong shows up as a stale row.
+// ---------------------------------------------------------------------------
+
+/// The qualified names of the module entities a file owns.
+fn modules_in(store: &Store, path: &str) -> Vec<String> {
+    store
+        .entities_in_file(&RepoPath::new(path).expect("valid path"), 512)
+        .expect("query")
+        .into_iter()
+        .filter(|entity| entity.kind() == EntityKind::Module)
+        .map(|entity| entity.id.qualified_name().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_full_build_names_a_file_without_a_source_root_from_the_directory_holding_the_crate_root() {
+    // The defect, end to end through the indexer rather than through `locate`. `core/flags/defs.rs`
+    // and `core/main.rs` are in one package because `main.rs` is in `core`, and the package has no
+    // `src/` for the path to point at.
+    let tree = TempTree::new("nosrc-package");
+    tree.write("core/main.rs", "mod flags;\nfn main() {}\n");
+    tree.write("core/flags/mod.rs", "mod defs;\n");
+    tree.write("core/flags/defs.rs", "pub struct Flag;\n");
+
+    let mut store = open_store(&tree);
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("build");
+
+    assert_eq!(modules_in(&store, "core/main.rs"), vec!["core".to_owned()]);
+    assert_eq!(
+        modules_in(&store, "core/flags/mod.rs"),
+        vec!["core::flags".to_owned()],
+        "a directory two levels below the crate root is one package, not one package per level"
+    );
+    assert_eq!(
+        modules_in(&store, "core/flags/defs.rs"),
+        vec!["core::flags::defs".to_owned()]
+    );
+    assert!(
+        store
+            .entity(&id("core/main.rs", EntityKind::Package, "core"))
+            .expect("query")
+            .is_some(),
+        "and exactly one file declares the package"
+    );
+    assert!(
+        store
+            .entity(&id("core/flags/defs.rs", EntityKind::Package, "flags"))
+            .expect("query")
+            .is_none(),
+        "the file two levels down declares no package of its own"
+    );
+}
+
+#[test]
+fn creating_a_crate_root_renames_the_files_already_indexed_beside_it() {
+    // **The hole a refresh cannot leave.** `core/flags/defs.rs` was indexed when `core/` held no
+    // crate root, so it was named `flags::defs`. Writing `core/main.rs` makes `core` a package, and
+    // every file under it is now `core::…` — but none of them changed, so nothing else would ever
+    // re-extract them and the index would keep disagreeing with a full build.
+    let tree = TempTree::new("package-appears");
+    tree.write("core/flags/defs.rs", "pub struct Flag;\n");
+
+    let mut store = open_store(&tree);
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first build");
+    assert_eq!(
+        modules_in(&store, "core/flags/defs.rs"),
+        vec!["flags::defs".to_owned()],
+        "with no crate root anywhere above it, the file's own directory is the fallback"
+    );
+
+    tree.write("core/main.rs", "mod flags;\nfn main() {}\n");
+    let outcome = refresh(
+        &mut store,
+        tree.path(),
+        &[tree.path().join("core/main.rs")],
+        &DiscoveryOptions::default(),
+    )
+    .expect("refresh");
+
+    assert_eq!(
+        modules_in(&store, "core/flags/defs.rs"),
+        vec!["core::flags::defs".to_owned()],
+        "so the file that did not change is renamed anyway, which is what a full build would say"
+    );
+    assert!(
+        store
+            .entity(&id("core/flags/defs.rs", EntityKind::Module, "flags::defs"))
+            .expect("query")
+            .is_none(),
+        "and the name it had is gone rather than left beside the new one"
+    );
+    assert!(
+        outcome.report().files_reindexed_for_package > 0,
+        "the extra work is reported, because it is work the caller did not ask for: {:?}",
+        outcome.report()
+    );
+}
+
+#[test]
+fn deleting_a_crate_root_puts_the_files_beside_it_back_on_the_fallback() {
+    // The other direction, and the one a "did this file change?" test cannot reach. Removing
+    // `core/main.rs` stops `core` being a package, so `core/flags/defs.rs` goes back to being named
+    // for its own directory. **The deleted root module must not be observed as a path** — it is in
+    // the batch, and reading it would put the root straight back and change nothing at all.
+    let tree = TempTree::new("package-disappears");
+    tree.write("core/main.rs", "mod flags;\nfn main() {}\n");
+    tree.write("core/flags/defs.rs", "pub struct Flag;\n");
+
+    let mut store = open_store(&tree);
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first build");
+    assert_eq!(
+        modules_in(&store, "core/flags/defs.rs"),
+        vec!["core::flags::defs".to_owned()]
+    );
+
+    std::fs::remove_file(tree.path().join("core/main.rs")).expect("remove the crate root");
+    refresh(
+        &mut store,
+        tree.path(),
+        &[tree.path().join("core/main.rs")],
+        &DiscoveryOptions::default(),
+    )
+    .expect("refresh");
+
+    assert_eq!(
+        modules_in(&store, "core/flags/defs.rs"),
+        vec!["flags::defs".to_owned()],
+        "the fallback is what a full build of this tree would now say"
+    );
+    assert!(
+        store
+            .entity(&id("core/flags/defs.rs", EntityKind::Module, "core::flags::defs"))
+            .expect("query")
+            .is_none(),
+        "and the package-qualified name is gone"
+    );
+    assert!(
+        store
+            .entity(&id("core/main.rs", EntityKind::Package, "core"))
+            .expect("query")
+            .is_none(),
+        "the package it declared went with the file that declared it"
+    );
+}
+
+#[test]
+fn a_refresh_of_an_ordinary_source_file_reads_no_package_roots_and_moves_nothing_else() {
+    // The cost half. A crate root appearing or disappearing is rare; a keystroke in `src/` is the
+    // common case under `watch`. A batch that moves no package root must not cost a scan of the
+    // index's whole path list, and must not re-extract anything it was not given — otherwise
+    // "cost is proportional to what changed" stops being true of every save.
+    let tree = TempTree::new("package-cost");
+    tree.write("src/lib.rs", "mod a;\n");
+    tree.write("src/a.rs", "fn before() {}\n");
+    tree.write("core/main.rs", "mod flags;\n");
+    tree.write("core/flags/defs.rs", "pub struct Flag;\n");
+
+    let mut store = open_store(&tree);
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first build");
+    let before = modules_in(&store, "core/flags/defs.rs");
+
+    tree.write("src/a.rs", "fn before() {}\nfn after() {}\n");
+    let outcome = refresh(
+        &mut store,
+        tree.path(),
+        &[tree.path().join("src/a.rs")],
+        &DiscoveryOptions::default(),
+    )
+    .expect("refresh");
+
+    assert_eq!(outcome.report().files_indexed, 1, "only the changed file");
+    assert_eq!(
+        outcome.report().files_reindexed_for_package,
+        0,
+        "and nothing was re-extracted for a package move that did not happen: {:?}",
+        outcome.report()
+    );
+    assert_eq!(
+        modules_in(&store, "core/flags/defs.rs"),
+        before,
+        "a crate with no source root is untouched by an edit to an unrelated one"
+    );
+}
+
+#[test]
+fn a_refresh_never_widens_to_a_file_whose_package_cannot_have_moved() {
+    // The half of the widening rule that keeps it cheap: a file under a source root is named from
+    // its path, so its module row cannot move whatever a crate root appearing elsewhere did. The
+    // file `core/flags/defs.rs` here *would* move, and `src/a.rs` beside it would not — so the
+    // count is one, and naming both would be a parse spent on nothing.
+    let tree = TempTree::new("package-widen-narrow");
+    tree.write("src/lib.rs", "mod a;\n");
+    tree.write("src/a.rs", "pub fn before() {}\n");
+
+    let mut store = open_store(&tree);
+    build_full(&mut store, tree.path(), DiscoveryOptions::default()).expect("first build");
+
+    // A crate root inside `src/` — which is not a crate root at all, since `src` is a source root.
+    // Nothing may be widened on the strength of it.
+    tree.write("src/inner.rs", "pub fn inner() {}\n");
+    let outcome = refresh(
+        &mut store,
+        tree.path(),
+        &[tree.path().join("src/inner.rs")],
+        &DiscoveryOptions::default(),
+    )
+    .expect("refresh");
+
+    assert_eq!(outcome.report().files_reindexed_for_package, 0);
+    assert_eq!(
+        modules_in(&store, "src/a.rs"),
+        vec!["src::a".to_owned()],
+        "and the module rows are exactly what a full build says"
+    );
+}
+
 #[test]
 fn a_refresh_that_shrinks_a_file_removes_the_symbols_that_left() {
     // An upsert alone would leave rows for symbols that no longer exist — a stale index that

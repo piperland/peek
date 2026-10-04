@@ -598,25 +598,27 @@ fn package_layout(
     batch: &[PathBuf],
 ) -> Result<crate::extract::modules::RepositoryLayout, IndexError> {
     let mut layout = crate::extract::modules::RepositoryLayout::new();
+    // **Only the paths that still exist.** A deleted `crates/foo/main.rs` is in the batch and is
+    // the file whose removal stops `crates/foo` being a package directory; observing it would put
+    // the root back and name every file under it after a crate root that is no longer there. The
+    // store's own path list is not filtered the same way, but a path only gets there after the
+    // removal lands, so the two agree on the direction that matters.
     let relative: Vec<RepoPath> = batch
         .iter()
+        .filter(|path| path.is_file())
         .filter_map(|path| relative_path(root, path))
         .filter_map(|name| RepoPath::from_path(&name))
         .collect();
-    let wanted = registry_rust_layout()
-        .is_some_and(|layout| crate::extract::modules::needs_package_roots(&relative, layout));
+    let wanted = crate::extract::registry::all()
+        .iter()
+        .filter_map(|spec| spec.module_layout())
+        .any(|layout| crate::extract::modules::needs_package_roots(&relative, layout));
     if wanted {
         layout.observe_all(store.indexed_paths(INDEXED_PATH_SCAN_LIMIT)?.iter());
     }
     layout.observe_all(&relative);
     layout.derive();
     Ok(layout)
-}
-
-/// The Rust module layout, for the one question `package_layout` asks of a path set.
-fn registry_rust_layout() -> Option<crate::extract::spec::ModuleLayout> {
-    crate::extract::registry::get(crate::model::Language::Rust)
-        .and_then(|spec| spec.module_layout())
 }
 
 /// Add every indexed file whose package changes to the batch a refresh will re-extract.
@@ -641,8 +643,23 @@ fn widen_to_package_moves(
         return Ok(batch);
     }
     let already: BTreeSet<PathBuf> = batch.iter().cloned().collect();
+    let layouts: Vec<crate::extract::spec::ModuleLayout> =
+        crate::extract::registry::all()
+            .iter()
+            .filter_map(|spec| spec.module_layout())
+            .collect();
     for path in store.indexed_paths(INDEXED_PATH_SCAN_LIMIT)? {
         if !moved_package_root(&moves, &path) {
+            continue;
+        }
+        // A file under a source root is named from its path and never consults the roots, so its
+        // module row cannot have moved whatever the batch did. Widening to it would cost a parse
+        // and change nothing, and this runs on a batch the caller believed was proportional to
+        // what changed.
+        if layouts
+            .iter()
+            .any(|layout| !crate::extract::modules::needs_package_roots([&path], *layout))
+        {
             continue;
         }
         let absolute = root.join(path.as_str());
@@ -663,20 +680,23 @@ fn widen_to_package_moves(
 /// changes no package — it names a module inside the one that is already there — so it is not
 /// here, and a batch that is only `mod.rs` files does no store read at all.
 fn package_root_moves(root: &Path, paths: &[PathBuf]) -> BTreeSet<String> {
-    let Some(layout) = registry_rust_layout() else {
-        return BTreeSet::new();
-    };
     let mut directories = BTreeSet::new();
     for path in paths {
-        let name = path.file_name().and_then(|name| name.to_str());
-        let Some(name) = name else {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
         let stem = match name.rsplit_once('.') {
             Some((head, _)) if !head.is_empty() => head,
             _ => name,
         };
-        if !layout.package_roots.contains(&stem) {
+        // Every layout's root stems, not one language's: the question is whether the batch can move
+        // a package for *some* language, and a repository that mixes languages must widen for all
+        // of them rather than for the first one the table happens to list.
+        let moves_a_package = crate::extract::registry::all()
+            .iter()
+            .filter_map(|spec| spec.module_layout())
+            .any(|layout| layout.package_roots.contains(&stem));
+        if !moves_a_package {
             continue;
         }
         // The *repository-relative* directory, because that is the spelling `PackageRoots` and
