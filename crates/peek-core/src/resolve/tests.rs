@@ -3009,9 +3009,8 @@ fn a_declaration_row_does_not_answer_a_path_about_the_module() {
          own module of the same name did not: {}",
         state_of(&gateway)
     );
-    assert_eq!(
+    assert!(
         report.module_files.table_answered_named > 0,
-        true,
         "and the table is what answered a path that named a package: {:?}",
         report.module_files
     );
