@@ -311,11 +311,7 @@ impl<'a> Walker<'a> {
     /// `name_field` and `name_strategy` are alternatives rather than a fallback chain,
     /// which is what [`SymbolRule::name_strategy`] documents: the strategy is how to
     /// reach a name when the grammar has no field for it.
-    fn declaration_name_node<'t>(
-        &self,
-        node: Node<'t>,
-        rule: &SymbolRule,
-    ) -> Option<Node<'t>> {
+    fn declaration_name_node<'t>(&self, node: Node<'t>, rule: &SymbolRule) -> Option<Node<'t>> {
         if let Some(field) = rule.name_field {
             return node.child_by_field_name(field);
         }
