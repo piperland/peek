@@ -247,7 +247,7 @@ impl PackageRoots {
     /// [`RepositoryLayout`] and this one cannot drift apart.
     fn from_holders(holders: &BTreeSet<String>, layout: ModuleLayout) -> Self {
         let mut roots: BTreeSet<String> = BTreeSet::new();
-        for holder in &holders {
+        for holder in holders {
             let mut components: Vec<&str> = holder.split('/').collect();
             match components.pop() {
                 // `crates/foo/src/lib.rs`: the package is the directory holding the source root.
