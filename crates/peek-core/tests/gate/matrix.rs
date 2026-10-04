@@ -56,6 +56,11 @@ pub const MEANINGS: &[(&str, &str, &str)] = &[
         "labelled import bindings",
     ),
     (
+        "imports_module_retained",
+        "of the imports whose module path must survive resolution, how many still carry it",
+        "labelled imports whose module the graph has to be able to name",
+    ),
+    (
         "members",
         "of the labelled type members, how many a structural edge reaches from the owning type",
         "labelled type members",

@@ -38,6 +38,7 @@ pub const DIMENSIONS: &[&str] = &[
     "calls",
     "references",
     "imports",
+    "imports_module_retained",
     "members",
     "inheritance_subject",
     "inheritance_base",
@@ -747,6 +748,37 @@ pub fn measure(
             ));
     }
 
+    // -- imports: does the module survive resolution? -------------------------
+    // A separate question from whether the binding was extracted at all. An
+    // `Ambiguous` or `Unresolved` relation cannot answer it, and neither can one the
+    // resolver placed by a rung that replaced the import binding with weaker
+    // evidence — so this counts over the labelled imports only, and the misses say
+    // which state each one ended in.
+    let mut module_retained = 0u64;
+    let mut module_lost: Vec<String> = Vec::new();
+    for import in &corpus.import_no_modules {
+        let bound = graph
+            .relations
+            .iter()
+            .find(|relation| {
+                relation.kind == "imports"
+                    && relation.source.path == import.path
+                    && relation.target_name == import.subject
+            });
+        match bound {
+            Some(relation) if relation.module.is_some() => module_retained += 1,
+            Some(relation) => module_lost.push(format!(
+                "{} | {} -> {} [{}]",
+                import.path, import.subject, relation.target_name, relation.state
+            )),
+            None => module_lost.push(format!(
+                "{} | {} -> no import relation at all",
+                import.path, import.subject
+            )),
+        }
+    }
+    missing.insert("imports_module_retained", module_lost);
+
     // -- members ------------------------------------------------------------
     let mut member_misses = Vec::new();
     let mut members_matched = 0u64;
@@ -841,6 +873,13 @@ pub fn measure(
         dimension("calls", calls.recall()),
         dimension("references", references.recall()),
         dimension("imports", imports.recall()),
+        dimension(
+            "imports_module_retained",
+            Fraction::new(
+                module_retained,
+                corpus.import_no_modules.len() as u64,
+            ),
+        ),
         dimension("members", Fraction::new(members_matched, corpus.members.len() as u64)),
         dimension("inheritance_subject", inheritance_subject.recall()),
         dimension("inheritance_base", inheritance_base.recall()),

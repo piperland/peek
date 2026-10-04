@@ -1,0 +1,20 @@
+# The gate fixture's own manifest.
+#
+# Present so the fixture is a crate-shaped tree rather than a directory of files
+# that happens to sit under `src/`. `modules.rs` derives a package name from the
+# directory above the source root, and a fixture without a manifest would make the
+# gate measure the *fallback* naming rather than the real one — which is exactly
+# the kind of difference that gets reported as an extraction defect and turns out
+# to be an artefact of the harness.
+#
+# Nothing here is built. The fixture is never compiled; it is parsed. The
+# dependencies are named because a real manifest names them, not because anything
+# here links.
+
+[package]
+name = "gate-fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
