@@ -68,19 +68,19 @@ fn every_excluded_parent_is_a_node_type_the_spec_itself_declares() {
         .as_ref()
         .expect("the rust spec declares a reference rule");
     let declared: Vec<&str> = spec.symbols.iter().map(|rule| rule.node_type).collect();
-    let excluded = references.excluded_parents;
+    let excluded: &[&str] = references.excluded_parents;
+    for node_type in excluded {
+        assert!(
+            declared.contains(node_type),
+            "`{node_type}` is excluded from reference extraction but is not a declared symbol, \
+             so nothing declares what it was excluded from"
+        );
+    }
     assert_eq!(
         excluded.len(),
         declared.len(),
         "the excluded list and the declared symbol list have drifted apart"
     );
-    for node_type in excluded {
-        assert!(
-            declared.contains(&node_type),
-            "`{node_type}` is excluded from reference extraction but is not a declared symbol, \
-             so nothing declares what it was excluded from"
-        );
-    }
 }
 
 #[test]
