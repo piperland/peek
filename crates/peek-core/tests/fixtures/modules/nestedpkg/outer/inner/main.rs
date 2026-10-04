@@ -6,7 +6,9 @@
 //! every cross-crate path between them unspellable — which is the only thing this table is for.
 
 mod b;
+mod sub;
 
 fn main() {
     let _ = b::Thing;
+    let _ = sub::thing::Thing;
 }

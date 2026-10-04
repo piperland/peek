@@ -208,6 +208,24 @@ impl PackageRoots {
     /// One pass per layout. Paths for other languages are harmless here rather than filtered:
     /// a directory only enters the set when a file in it is named for a root stem, so a
     /// JavaScript `index.js` cannot make a Rust `lib.rs` appear.
+    ///
+    /// **Two rules, and the second one is what keeps them from disagreeing with each other.**
+    ///
+    /// * A root module directly in a directory makes that directory a package root, and a root
+    ///   module inside a source root makes the directory *holding the source root* one.
+    ///   `crates/core/main.rs` and `crates/foo/src/lib.rs` are the two shapes, and the second is
+    ///   the reason the source root directory itself is never an answer: `crates/foo/src` holds a
+    ///   `lib.rs`, and naming the package after it would call every crate in a workspace `src`.
+    /// * A candidate **inside another candidate's source tree is not a package root.**
+    ///   `crates/foo/src/sub/main.rs` has the stem of a crate root and sits in a directory, and it
+    ///   is the module `foo::sub::main`: a crate root is at `<package>/<source root>/<root>.rs` or
+    ///   `<package>/<root>.rs` and nowhere deeper. Without this rule a repository with
+    ///   `src/bin/*.rs` or `src/examples/*.rs` would gain a package per subdirectory.
+    ///
+    /// Both rules are stated here rather than in the caller because [`locate`] has to agree with
+    /// them: a file under a source root is named from the path and never consults this set, so a
+    /// set that disagreed would make the same file answer differently depending on whether the
+    /// caller had the repository's paths.
     pub fn from_paths<I>(paths: I, layout: ModuleLayout) -> Self
     where
         I: IntoIterator<Item = RepoPath>,
@@ -221,19 +239,43 @@ impl PackageRoots {
                 holders.insert(directory.to_owned());
             }
         }
+        Self::from_holders(&holders, layout)
+    }
 
-        let mut roots = BTreeSet::new();
-        for holder in holders {
-            // The directory that holds the root module *is* the package root, unless the root
-            // module is inside a source root — in which case the package root is the directory
-            // holding *that*, and the source root is not a package of its own.
-            roots.insert(holder.clone());
+    /// Derive the roots from the directories that hold a root module. See
+    /// [`Self::from_paths`] for the two rules, which live here so that the incremental builder in
+    /// [`RepositoryLayout`] and this one cannot drift apart.
+    fn from_holders(holders: &BTreeSet<String>, layout: ModuleLayout) -> Self {
+        let mut roots: BTreeSet<String> = BTreeSet::new();
+        for holder in &holders {
             let mut components: Vec<&str> = holder.split('/').collect();
-            if components.pop().is_some_and(|name| layout.source_roots.contains(&name)) {
-                let above = components.join("/");
-                roots.insert(above);
+            match components.pop() {
+                // `crates/foo/src/lib.rs`: the package is the directory holding the source root.
+                Some(name) if layout.source_roots.contains(&name) => {
+                    roots.insert(components.join("/"));
+                }
+                // `crates/core/main.rs`: the package is the directory holding the root module.
+                Some(_) => {
+                    roots.insert(holder.clone());
+                }
+                // A root module at the repository root. The root's name is the directory the
+                // checkout sits in, so it is not an answer; see the module documentation.
+                None => {}
             }
         }
+
+        // Drop every candidate that sits inside another candidate's source tree. Sorted, so the
+        // enclosing candidate is always seen before the one it contains.
+        let enclosing: Vec<String> = roots.iter().cloned().collect();
+        roots.retain(|candidate| {
+            !enclosing.iter().any(|outer| {
+                outer != candidate
+                    && candidate
+                        .strip_prefix(outer.as_str())
+                        .and_then(|below| below.split('/').next())
+                        .is_some_and(|first| layout.source_roots.contains(&first))
+            })
+        });
         Self { roots }
     }
 
@@ -269,7 +311,24 @@ pub struct RepositoryLayout {
     /// Handed back for a language that has no module layout, so a caller never has to invent an
     /// empty set of its own.
     none: PackageRoots,
-    per_language: Vec<(Language, ModuleLayout, PackageRoots)>,
+    per_language: Vec<LanguageRoots>,
+    /// Whether a path has been observed since the roots were last derived.
+    ///
+    /// **Deriving the roots is quadratic in the holders, so it cannot happen per observed path.**
+    /// Recording a path is O(1) and the derivation runs once, on the first ask after a change. A
+    /// caller that observes a whole repository and then asks per file therefore pays for the
+    /// derivation exactly once, which is the same shape as the single-pass read it replaced.
+    stale: bool,
+}
+
+/// One language's package roots, and the raw material they were derived from.
+#[derive(Debug, Clone)]
+struct LanguageRoots {
+    language: Language,
+    layout: ModuleLayout,
+    /// Directories that directly hold a file named for a root stem.
+    holders: BTreeSet<String>,
+    roots: PackageRoots,
 }
 
 impl RepositoryLayout {
@@ -279,11 +338,34 @@ impl RepositoryLayout {
     }
 
     /// The package roots for `spec`'s language, or the empty set when it has no module layout.
-    pub fn roots(&self, spec: &LanguageSpec) -> &PackageRoots {
+    ///
+    /// Takes `&mut self` because this is where the derivation happens, and doing it here rather
+    /// than in [`Self::observe`] is what keeps observing a path cheap.
+    pub fn roots(&mut self, spec: &LanguageSpec) -> &PackageRoots {
+        if self.per_language.is_empty() {
+            self.per_language = crate::extract::registry::all()
+                .iter()
+                .filter_map(|spec| {
+                    let layout = spec.module_layout()?;
+                    Some(LanguageRoots {
+                        language: spec.language,
+                        layout,
+                        holders: BTreeSet::new(),
+                        roots: PackageRoots::default(),
+                    })
+                })
+                .collect();
+        }
+        if self.stale {
+            for entry in &mut self.per_language {
+                entry.roots = PackageRoots::from_holders(&entry.holders, entry.layout);
+            }
+            self.stale = false;
+        }
         self.per_language
             .iter()
-            .find(|(language, _, _)| *language == spec.language)
-            .map(|(_, _, roots)| roots)
+            .find(|entry| entry.language == spec.language)
+            .map(|entry| &entry.roots)
             .unwrap_or(&self.none)
     }
 
@@ -291,10 +373,17 @@ impl RepositoryLayout {
     /// layouts is the set of languages the registry declares a module layout for.
     pub fn observe(&mut self, path: &RepoPath) {
         if self.per_language.is_empty() {
+            *self = Self::new();
             self.per_language = crate::extract::registry::all()
                 .iter()
                 .filter_map(|spec| {
-                    Some((spec.language, spec.module_layout()?, PackageRoots::default()))
+                    let layout = spec.module_layout()?;
+                    Some(LanguageRoots {
+                        language: spec.language,
+                        layout,
+                        holders: BTreeSet::new(),
+                        roots: PackageRoots::default(),
+                    })
                 })
                 .collect();
         }
@@ -302,15 +391,10 @@ impl RepositoryLayout {
             return;
         };
         let stem = stem_of(path);
-        for (_, layout, roots) in &mut self.per_language {
-            if !layout.package_roots.contains(&stem) {
-                continue;
-            }
-            roots.roots.insert(directory.to_owned());
-            let mut components: Vec<&str> = directory.split('/').collect();
-            if components.pop().is_some_and(|name| layout.source_roots.contains(&name)) {
-                let above = components.join("/");
-                roots.roots.insert(above);
+        for entry in &mut self.per_language {
+            if entry.layout.package_roots.contains(&stem) {
+                entry.holders.insert(directory.to_owned());
+                self.stale = true;
             }
         }
     }
@@ -672,11 +756,13 @@ mod tests {
         "nosrc/core/flags/defs.rs",
         "nosrc/core/flags/complete/mod.rs",
         "nosrc/core/flags/complete/bash.rs",
+        "nosrc/core/flags/complete/fish.rs",
         "nestedpkg/outer/src/lib.rs",
         "nestedpkg/outer/src/a.rs",
         "nestedpkg/outer/inner/main.rs",
-        "nestedpkg/outer/inner/mod.rs",
         "nestedpkg/outer/inner/b.rs",
+        "nestedpkg/outer/inner/sub/mod.rs",
+        "nestedpkg/outer/inner/sub/thing.rs",
     ];
 
     /// Assert that every fixture this test module names is actually on disk.
@@ -1327,14 +1413,20 @@ mod tests {
             "a crate root in a nested package declares that package, not the outer one"
         );
         assert_eq!(
-            located("nestedpkg/outer/inner/mod.rs", &roots).qualified_name("::"),
-            "inner",
-            "and it is the crate root module of `inner`, so it is the module `inner`"
-        );
-        assert_eq!(
             located("nestedpkg/outer/inner/b.rs", &roots).qualified_name("::"),
             "inner::b",
             "no `src` in this path, so the nearest package root above it is `inner`"
+        );
+        assert_eq!(
+            located("nestedpkg/outer/inner/sub/mod.rs", &roots)
+                .qualified_name("::"),
+            "inner::sub",
+            "and a `mod.rs` below it is reached through the nested package, not the outer one"
+        );
+        assert_eq!(
+            located("nestedpkg/outer/inner/sub/thing.rs", &roots)
+                .qualified_name("::"),
+            "inner::sub::thing"
         );
     }
 
@@ -1417,16 +1509,27 @@ mod tests {
 
     #[test]
     fn a_module_row_is_not_read_as_a_declaration_of_the_package_it_is_prefixed_with() {
-        // The distinction the previous rule collapsed. A module row's name is prefixed with a
-        // package so a qualified name can be spelled; only a root module file emits a `Package`.
-        // So a file in an unrooted directory gets the fallback prefix *and* declares nothing,
-        // and the two statements cannot be read as one.
+        // The distinction the previous rule collapsed, and the whole of what the fix changes about
+        // a colliding directory name.
+        //
+        // A module row's name is prefixed with a package so a qualified name can be spelled, and
+        // that prefix is a naming approximation. A `Package` entity is a declaration, and only a
+        // root module file emits one. **So a file in an unrooted directory gets the fallback prefix
+        // *and* declares nothing, and the two statements cannot be read as one.**
+        //
+        // The prefix here is `index` — the file's own directory — which collides with the name of
+        // `crates/index`. That collision is the remaining approximation and is *not* what this
+        // change claims to fix: fixing it needs the repository root, which is a `Cargo.toml` fact.
+        // What is fixed is that `tests/index/basic.rs` no longer declares a package called `index`
+        // beside the real one, which is a fact about the build rather than about a name.
         let roots = roots_of(&["crates/index/src/lib.rs", "tests/index/basic.rs"]);
         let located = located("tests/index/basic.rs", &roots);
         assert_eq!(
-            located.package, "tests",
-            "the fallback prefix is the file's own directory, which is `tests`"
+            located.package, "index",
+            "the fallback prefix is the file's own directory, and that name collides with the \
+             package in crates/index — stated here rather than left to be discovered"
         );
+        assert!(!located.is_package_root);
         let found = modules_among("tests/index/basic.rs", &roots);
         assert!(
             found
@@ -1441,6 +1544,17 @@ mod tests {
                 .iter()
                 .any(|entity| entity.kind() == EntityKind::Module),
             "it still gets a module, which is the point of the fallback"
+        );
+        // The real package is declared, by the file that is its root module. Exactly one row for
+        // `index` in the whole tree, and it is at the path that actually holds the crate root.
+        let real = modules_among("crates/index/src/lib.rs", &roots);
+        assert_eq!(
+            real.entities
+                .iter()
+                .filter(|entity| entity.kind() == EntityKind::Package)
+                .count(),
+            1,
+            "{real:#?}"
         );
     }
 
