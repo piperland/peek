@@ -351,11 +351,12 @@ pub struct ResolutionOptions {
     /// so on a watched repository the leak accumulated one large file at a time.
     ///
     /// What the bound still buys is the size of one read: memory held per lookup, and rows walked
-    /// per query. A caller who sets it very small pays more seeks for the same answer, and a caller
-    /// who sets it very large pays more memory — neither changes what the pass decides. A value of
-    /// zero is treated as one rather than as "read nothing", because a page size of zero would
-    /// report every file in the repository as empty, which is a bound that destroys the answer
-    /// instead of narrowing it.
+    /// per query. Since the pass reads each file once ([`Resolver::entities_in_file`]) that is a
+    /// smaller effect than it was when the read was per relation — a caller who sets it very small
+    /// pays more seeks for the same answer, and a caller who sets it very large pays more memory
+    /// per query, and neither changes what the pass decides. A value of zero is treated as one
+    /// rather than as "read nothing", because a page size of zero would report every file in the
+    /// repository as empty, which is a bound that destroys the answer instead of narrowing it.
     pub entities_page: usize,
     /// Entities read for one name before the read is abandoned.
     ///
@@ -796,29 +797,44 @@ impl<'s> Resolver<'s> {
         }
     }
 
-    /// Every entity one file declares, read a page at a time and then kept.
+    /// Every entity one file declares, read a page at a time and then kept for the rest of the pass.
     ///
     /// **Cached, and the reason is arithmetic rather than taste.** R4 — the same-file rung — is
-    /// reached by nearly every relation the ladder cannot place earlier, and each of those asks
-    /// for the entities of the file the relation is written in. So without a cache a file of *n*
-    /// entities is read *n* times per relation that names it, and reading all of it rather than a
-    /// prefix of it multiplies that by however much bigger *n* is than the old cut-off. Measured on
-    /// `BurntSushi/ripgrep`: paging `defs.rs` (1,363 entities) without this cache cost 38% of the
-    /// full build — 9.8s to 13.5s — because the file holds 2,469 relations the pass has to decide.
-    /// With the cache the file is read once and the cost disappears.
+    /// reached by nearly every relation the ladder cannot place earlier, and each of those asks for
+    /// the entities of the file the relation is written in. So without a cache a file is read once
+    /// per relation that names it, and reading all of it rather than a prefix of it multiplies
+    /// that by however much bigger the file is than the old cut-off.
     ///
-    /// Correct because the store does not change under a pass: the decisions go into one
-    /// [`IndexUpdate`] that is applied after every relation has been decided, so the entity rows
-    /// this read returns are the rows every later read would return. That is the same assumption
-    /// [`Resolver::imports`] already rests on, and the reason both caches exist here rather than in
+    /// Both halves of that were measured on `BurntSushi/ripgrep`, full build, release, on the
+    /// verification sandbox, and the middle row is the one that matters:
+    ///
+    /// | | full build | refresh of `defs.rs` |
+    /// |---|---:|---:|
+    /// | bounded read (before paging) | 9.7s | 5.4s |
+    /// | paged, not cached | 13.5s | 5.6s |
+    /// | paged and cached | 3.3s | 1.0s |
+    ///
+    /// Paging on its own costs 38% of a build, because `defs.rs` — 1,363 entities, 2,469 relations
+    /// the pass must decide — was being re-read 2,469 times at three seeks each. Caching it turns
+    /// those into three reads. The middle row is also the same cost the indexer's widening of the
+    /// per-file bound was paying, for the same reason: a wider bound made an already-repeated read
+    /// read more. So the two changes are not independent, and either one alone leaves the file
+    /// being read once per relation.
+    ///
+    /// Correct because the store does not change under a pass: every decision goes into one
+    /// [`IndexUpdate`] applied after the last relation has been decided, so the entity rows this
+    /// read returns are the rows every later read would return. That is the same assumption
+    /// [`Resolver::imports`] already rests on, and the reason both caches live here rather than in
     /// the store.
     ///
-    /// **The cache is smaller than what the pass already holds.** `resolve_all` materialises every
-    /// relation in the index before deciding any of them — 145,457 `Relation`s for `rust-lang/cargo`
-    /// — so keeping the entity rows for the same repository is not a new memory class, it is a
-    /// fraction of one. `Arc` because the callers iterate the list while calling back into the
-    /// resolver, so handing out a borrow of the cache would make the resolver immutable for the
-    /// whole lookup; a shared handle costs one atomic bump.
+    /// **The cache is smaller than what the pass already holds.** [`resolve_all`] materialises every
+    /// relation it is going to decide, in one `Vec`, before deciding any of them — 145,650 rows for
+    /// `rust-lang/cargo` against 27,440 entities, and a `Relation` is no smaller than an `Entity`,
+    /// since it carries an identity of its own plus the evidence the decision was made by. So the
+    /// entity rows are a fraction of a structure this pass already builds, not a new memory class.
+    /// `Arc` because the callers iterate the list while calling back into the resolver, so handing
+    /// out a borrow of the cache would make the resolver immutable for the whole lookup; a shared
+    /// handle costs one atomic bump.
     ///
     /// Note what is *not* here: no `truncated`. A read that had to ask for a second page was not cut
     /// short — it was completed. Counting a page boundary as a truncation would put the size of an
