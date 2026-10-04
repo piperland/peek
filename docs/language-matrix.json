@@ -1,0 +1,520 @@
+{
+  "schema": "peek.language-matrix/1",
+  "generated_by": "crates/peek-core/tests/language_gate.rs",
+  "engine_version": "0.1.0",
+  "contract_clause": "E4",
+  "dimensions": [
+    "symbol_precision",
+    "symbol_recall",
+    "definitions",
+    "calls",
+    "references",
+    "imports",
+    "imports_module_retained",
+    "members",
+    "inheritance_subject",
+    "inheritance_base",
+    "negative_references",
+    "negative_inheritance",
+    "incremental",
+    "query",
+    "context"
+  ],
+  "dimension_meanings": {
+    "symbol_precision": {
+      "measures": "of the declaration entities the engine emitted, how many the fixture labels",
+      "denominator": "emitted declaration entities, with repository-structure entities held out and counted"
+    },
+    "symbol_recall": {
+      "measures": "of the declarations the fixture labels, how many the engine emitted",
+      "denominator": "labelled declarations, counted with multiplicity"
+    },
+    "definitions": {
+      "measures": "of the labelled declarations, how many an incoming structural edge points at",
+      "denominator": "distinct labelled declaration identities"
+    },
+    "calls": {
+      "measures": "of the labelled call sites, how many produced a call relation",
+      "denominator": "labelled call sites, counted with multiplicity"
+    },
+    "references": {
+      "measures": "of the labelled uses of a name, how many produced a reference relation",
+      "denominator": "labelled uses of a name"
+    },
+    "imports": {
+      "measures": "of the labelled import bindings, how many produced an import relation carrying the same module and alias",
+      "denominator": "labelled import bindings"
+    },
+    "imports_module_retained": {
+      "measures": "of the imports whose module path must survive resolution, how many still carry it",
+      "denominator": "labelled imports whose module the graph has to be able to name"
+    },
+    "members": {
+      "measures": "of the labelled type members, how many a structural edge reaches from the owning type",
+      "denominator": "labelled type members"
+    },
+    "inheritance_subject": {
+      "measures": "of the labelled `inherits`/`implements` clauses, how many produced an edge naming both the base and the type that declared it",
+      "denominator": "labelled inheritance clauses"
+    },
+    "inheritance_base": {
+      "measures": "of the labelled `inherits`/`implements` clauses, how many produced an edge naming the base at all",
+      "denominator": "labelled inheritance clauses"
+    },
+    "negative_references": {
+      "measures": "of the labelled non-references, how many the engine kept non-references",
+      "denominator": "labelled non-references"
+    },
+    "negative_inheritance": {
+      "measures": "of the labelled types that declare no base, how many carry no inheritance edge",
+      "denominator": "labelled types that declare no base"
+    },
+    "incremental": {
+      "measures": "of the rows in an incrementally-refreshed index, how many are identical to a full build of the same tree",
+      "denominator": "entity and relation rows, summed over an edit, a delete and a rename, both indexes counted"
+    },
+    "query": {
+      "measures": "of the query assertions, how many the surface answered correctly",
+      "denominator": "the hand-written assertions, plus two derived from every labelled call that resolved"
+    },
+    "context": {
+      "measures": "of the context questions, how many the pack answered by naming the right entity",
+      "denominator": "labelled context questions, including the ones that must be refused as ambiguous"
+    }
+  },
+  "languages": [
+    {
+      "language": "typescript",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "javascript",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "python",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "rust",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": true,
+      "spec_registered": true,
+      "spec": {
+        "symbol_rules": 18,
+        "call_rules": 2,
+        "import_rules": 1,
+        "inheritance": true,
+        "references": true,
+        "module_layout": true
+      },
+      "measurements": {
+        "symbol_precision": {
+          "numerator": 87,
+          "denominator": 90,
+          "percent": "96.67"
+        },
+        "symbol_recall": {
+          "numerator": 87,
+          "denominator": 90,
+          "percent": "96.67"
+        },
+        "definitions": {
+          "numerator": 53,
+          "denominator": 88,
+          "percent": "60.23"
+        },
+        "calls": {
+          "numerator": 39,
+          "denominator": 40,
+          "percent": "97.50"
+        },
+        "references": {
+          "numerator": 0,
+          "denominator": 18,
+          "percent": "0.00"
+        },
+        "imports": {
+          "numerator": 10,
+          "denominator": 15,
+          "percent": "66.67"
+        },
+        "imports_module_retained": {
+          "numerator": 0,
+          "denominator": 3,
+          "percent": "0.00"
+        },
+        "members": {
+          "numerator": 22,
+          "denominator": 24,
+          "percent": "91.67"
+        },
+        "inheritance_subject": {
+          "numerator": 5,
+          "denominator": 5,
+          "percent": "100.00"
+        },
+        "inheritance_base": {
+          "numerator": 5,
+          "denominator": 5,
+          "percent": "100.00"
+        },
+        "negative_references": {
+          "numerator": 14,
+          "denominator": 14,
+          "percent": "100.00"
+        },
+        "negative_inheritance": {
+          "numerator": 3,
+          "denominator": 3,
+          "percent": "100.00"
+        },
+        "incremental": {
+          "numerator": 1200,
+          "denominator": 1200,
+          "percent": "100.00"
+        },
+        "query": {
+          "numerator": 29,
+          "denominator": 30,
+          "percent": "96.67"
+        },
+        "context": {
+          "numerator": 7,
+          "denominator": 7,
+          "percent": "100.00"
+        }
+      },
+      "floors": {
+        "calls": {
+          "basis_points": 9750,
+          "percent": "97.50"
+        },
+        "context": {
+          "basis_points": 10000,
+          "percent": "100.00"
+        },
+        "definitions": {
+          "basis_points": 6022,
+          "percent": "60.22"
+        },
+        "imports": {
+          "basis_points": 6666,
+          "percent": "66.66"
+        },
+        "imports_module_retained": {
+          "basis_points": 0,
+          "percent": "0.00"
+        },
+        "incremental": {
+          "basis_points": 10000,
+          "percent": "100.00"
+        },
+        "inheritance_base": {
+          "basis_points": 10000,
+          "percent": "100.00"
+        },
+        "inheritance_subject": {
+          "basis_points": 10000,
+          "percent": "100.00"
+        },
+        "members": {
+          "basis_points": 9166,
+          "percent": "91.66"
+        },
+        "negative_inheritance": {
+          "basis_points": 10000,
+          "percent": "100.00"
+        },
+        "negative_references": {
+          "basis_points": 10000,
+          "percent": "100.00"
+        },
+        "query": {
+          "basis_points": 9666,
+          "percent": "96.66"
+        },
+        "references": {
+          "basis_points": 0,
+          "percent": "0.00"
+        },
+        "symbol_precision": {
+          "basis_points": 9666,
+          "percent": "96.66"
+        },
+        "symbol_recall": {
+          "basis_points": 9666,
+          "percent": "96.66"
+        }
+      },
+      "entity_counts": {
+        "constant": 3,
+        "enum": 1,
+        "field": 9,
+        "file": 5,
+        "function": 14,
+        "macro": 1,
+        "method": 12,
+        "module": 18,
+        "package": 1,
+        "parameter": 20,
+        "static": 1,
+        "struct": 6,
+        "trait": 2,
+        "type_alias": 5,
+        "type_parameter": 2,
+        "union": 1
+      },
+      "entities_held_out_of_the_symbol_denominator": 11,
+      "relation_states": {
+        "calls": {
+          "ambiguous": 4,
+          "inferred": 1,
+          "resolved": 9,
+          "unresolved": 25
+        },
+        "contains": {
+          "resolved": 61
+        },
+        "implements": {
+          "resolved": 4
+        },
+        "imports": {
+          "inferred": 3,
+          "resolved": 10,
+          "unresolved": 2
+        },
+        "inherits": {
+          "resolved": 1
+        }
+      },
+      "index_report": {
+        "generation": 2,
+        "files_indexed": 5,
+        "files_skipped": 0,
+        "files_unsupported": 3,
+        "files_degraded": 0,
+        "files_removed": 0,
+        "entities_written": 101,
+        "entities_removed": 0,
+        "relations_written": 120,
+        "relations_undecided": 0,
+        "tests_found": 0
+      }
+    },
+    {
+      "language": "go",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "java",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "csharp",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "c",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "cpp",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "kotlin",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "swift",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "ruby",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "php",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "scala",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "elixir",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "erlang",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "dart",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "lua",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "r",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "julia",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "haskell",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "ocaml",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "clojure",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "bash",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "objectivec",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    },
+    {
+      "language": "zig",
+      "advertised_tier": "unverified",
+      "advertisable": false,
+      "extractable": false,
+      "spec_registered": false,
+      "spec": null,
+      "reason": "no LanguageSpec is registered, so this language has no extraction rules; a file in it is skipped with a stated reason"
+    }
+  ]
+}
