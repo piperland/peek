@@ -707,7 +707,7 @@ impl ResolutionReport {
         };
         format!(
             "{}: examined {}, resolved {}, inferred {}, ambiguous {}, unresolved {}{}, \
-             reconsidered {}, displaced {}, {} rows at generation {}{}{}",
+             reconsidered {}, displaced {}, {} rows at generation {}{}{}{}",
             Self::PASS,
             self.examined,
             self.resolved,
