@@ -308,6 +308,7 @@
 //! correct it: the extractor re-emits the edge as `Pending` and the pass decides it again.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use crate::model::entity::{EntityId, EntityKind};
 use crate::model::path::RepoPath;
@@ -771,12 +772,15 @@ fn placed_import(state: &ResolutionState) -> Option<String> {
     }
 }
 
-/// The resolver's per-pass state: the options, the read cache, and the truncation counter.
+/// The resolver's per-pass state: the options, the read caches, and the truncation counter.
 struct Resolver<'s> {
     store: &'s Store,
     options: ResolutionOptions,
     /// The import bindings of each file this pass has already read. A file is read once.
     imports: BTreeMap<RepoPath, Vec<ImportBinding>>,
+    /// Every entity of each file this pass has already read. A file is read once, and **not only
+    /// because the ladder wants it that way** — see [`Resolver::entities_in_file`].
+    files: BTreeMap<RepoPath, Arc<Vec<crate::model::Entity>>>,
     /// Lookups abandoned at a limit, carried into the report rather than hidden.
     truncated: u64,
 }
@@ -787,20 +791,53 @@ impl<'s> Resolver<'s> {
             store,
             options,
             imports: BTreeMap::new(),
+            files: BTreeMap::new(),
             truncated: 0,
         }
     }
 
-    /// Every entity one file declares, read a page at a time.
+    /// Every entity one file declares, read a page at a time and then kept.
     ///
-    /// A thin wrapper over [`all_entities_in_file`], so the ladder and the scope enumeration walk
-    /// a file by the same rule. Note what is *not* here: no `truncated`. A read that had to ask
-    /// for a second page was not cut short — it was completed. Counting a page boundary as a
-    /// truncation would put the size of an ordinary file into the counter and leave a caller
-    /// unable to tell "this build answered from a narrower view" from "this build read a big
-    /// file", which are opposite situations.
-    fn entities_in_file(&self, path: &RepoPath) -> Result<Vec<crate::model::Entity>, StoreError> {
-        all_entities_in_file(self.store, path, self.options.entities_page)
+    /// **Cached, and the reason is arithmetic rather than taste.** R4 — the same-file rung — is
+    /// reached by nearly every relation the ladder cannot place earlier, and each of those asks
+    /// for the entities of the file the relation is written in. So without a cache a file of *n*
+    /// entities is read *n* times per relation that names it, and reading all of it rather than a
+    /// prefix of it multiplies that by however much bigger *n* is than the old cut-off. Measured on
+    /// `BurntSushi/ripgrep`: paging `defs.rs` (1,363 entities) without this cache cost 38% of the
+    /// full build — 9.8s to 13.5s — because the file holds 2,469 relations the pass has to decide.
+    /// With the cache the file is read once and the cost disappears.
+    ///
+    /// Correct because the store does not change under a pass: the decisions go into one
+    /// [`IndexUpdate`] that is applied after every relation has been decided, so the entity rows
+    /// this read returns are the rows every later read would return. That is the same assumption
+    /// [`Resolver::imports`] already rests on, and the reason both caches exist here rather than in
+    /// the store.
+    ///
+    /// **The cache is smaller than what the pass already holds.** `resolve_all` materialises every
+    /// relation in the index before deciding any of them — 145,457 `Relation`s for `rust-lang/cargo`
+    /// — so keeping the entity rows for the same repository is not a new memory class, it is a
+    /// fraction of one. `Arc` because the callers iterate the list while calling back into the
+    /// resolver, so handing out a borrow of the cache would make the resolver immutable for the
+    /// whole lookup; a shared handle costs one atomic bump.
+    ///
+    /// Note what is *not* here: no `truncated`. A read that had to ask for a second page was not cut
+    /// short — it was completed. Counting a page boundary as a truncation would put the size of an
+    /// ordinary file into the counter and leave a caller unable to tell "this build answered from a
+    /// narrower view" from "this build read a big file", which are opposite situations.
+    fn entities_in_file(
+        &mut self,
+        path: &RepoPath,
+    ) -> Result<Arc<Vec<crate::model::Entity>>, StoreError> {
+        if let Some(known) = self.files.get(path) {
+            return Ok(Arc::clone(known));
+        }
+        let read = Arc::new(all_entities_in_file(
+            self.store,
+            path,
+            self.options.entities_page,
+        )?);
+        self.files.insert(path.clone(), Arc::clone(&read));
+        Ok(read)
     }
 
     /// Read the entities carrying one name, and whether the bound cut the read short.
@@ -964,7 +1001,7 @@ impl<'s> Resolver<'s> {
             let limit = self.options.outgoing_per_source;
             let mut bindings = Vec::new();
             let entities = self.entities_in_file(path)?;
-            for entity in &entities {
+            for entity in entities.iter() {
                 let relations =
                     self.store
                         .outgoing(&entity.id, Some(RelationKind::Imports), limit)?;
@@ -1022,7 +1059,7 @@ impl<'s> Resolver<'s> {
         let aliased = binding.alias.is_some();
         let mut found: Vec<EntityId> = Vec::new();
         for file in self.module_files(&binding.module, importer, !aliased)? {
-            for entity in self.entities_in_file(&file)? {
+            for entity in self.entities_in_file(&file)?.iter() {
                 let wanted = match &binding.alias {
                     Some(_) => entity.kind() == EntityKind::File,
                     None => is_declaration(entity.kind()) && entity.name == binding.local,
@@ -1227,7 +1264,7 @@ impl<'s> Resolver<'s> {
             // name only a namespace carries here came in through an import.
             named
                 .into_iter()
-                .filter(|(owner, _)| names_a_symbol(&in_file, owner))
+                .filter(|(owner, _)| names_a_symbol(in_file.as_slice(), owner))
                 .collect()
         };
 
@@ -1238,7 +1275,7 @@ impl<'s> Resolver<'s> {
         let mut found: Vec<Found> = Vec::new();
         for (owner, guessed) in &owners {
             let prefix = format!("{owner}.");
-            for entity in &in_file {
+            for entity in in_file.iter() {
                 if entity.name == name && entity.id.qualified_name().starts_with(&prefix) {
                     found.push(Found {
                         id: entity.id.clone(),
@@ -1330,7 +1367,7 @@ impl<'s> Resolver<'s> {
                     let declared = owner.id.name();
                     let prefix = format!("{declared}.");
                     let file = owner.id.path().clone();
-                    for entity in self.entities_in_file(&file)? {
+                    for entity in self.entities_in_file(&file)?.iter() {
                         let inside = entity.name == name;
                         if inside && entity.id.qualified_name().starts_with(&prefix) {
                             found.push(Found {
@@ -1391,7 +1428,7 @@ impl<'s> Resolver<'s> {
         };
         let mut found: Vec<Found> = Vec::new();
         for file in self.module_files(scope, relation.source.path(), true)? {
-            for entity in self.entities_in_file(&file)? {
+            for entity in self.entities_in_file(&file)?.iter() {
                 if entity.name == name && is_declaration(entity.kind()) {
                     found.push(Found {
                         id: entity.id.clone(),
@@ -1414,7 +1451,7 @@ impl<'s> Resolver<'s> {
     fn via_same_file(&mut self, relation: &Relation) -> Result<Option<Decision>, StoreError> {
         let name = relation.target_name.as_str();
         let mut found: Vec<Found> = Vec::new();
-        for entity in self.entities_in_file(relation.source.path())? {
+        for entity in self.entities_in_file(relation.source.path())?.iter() {
             if entity.name == name && is_declaration(entity.kind()) {
                 found.push(Found {
                     id: entity.id.clone(),
