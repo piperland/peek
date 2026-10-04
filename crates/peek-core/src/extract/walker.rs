@@ -297,12 +297,27 @@ impl<'a> Walker<'a> {
 
     /// The name of a declaration, following the spec's strategy.
     fn declaration_name(&self, node: Node<'_>, rule: &SymbolRule) -> Option<String> {
-        if let Some(field) = rule.name_field
-            && let Some(child) = node.child_by_field_name(field)
-            && let Some(text) = self.text(child)
-            && !text.is_empty()
-        {
-            return Some(text);
+        let named = self.declaration_name_node(node, rule)?;
+        self.text(named).filter(|text| !text.is_empty())
+    }
+
+    /// The **node** this declaration takes its name from, following the spec's strategy.
+    ///
+    /// The node rather than the text, because a name can occur twice in one declaration
+    /// and only one of them is the declaration: `fn f(f: u32)` declares `f` and binds a
+    /// parameter also called `f`, and a rule that compares names cannot tell which
+    /// occurrence introduced the symbol.
+    ///
+    /// `name_field` and `name_strategy` are alternatives rather than a fallback chain,
+    /// which is what [`SymbolRule::name_strategy`] documents: the strategy is how to
+    /// reach a name when the grammar has no field for it.
+    fn declaration_name_node<'t>(
+        &self,
+        node: Node<'t>,
+        rule: &SymbolRule,
+    ) -> Option<Node<'t>> {
+        if let Some(field) = rule.name_field {
+            return node.child_by_field_name(field);
         }
 
         match rule.name_strategy {
@@ -315,7 +330,7 @@ impl<'a> Walker<'a> {
                         current.kind(),
                         "identifier" | "type_identifier" | "field_identifier"
                     ) {
-                        return self.text(current);
+                        return Some(current);
                     }
                     current = current.named_child(0)?;
                 }
@@ -325,13 +340,11 @@ impl<'a> Walker<'a> {
             // `simple_identifier` child.
             NameStrategy::FirstSimpleIdentifier => node
                 .named_children(&mut node.walk())
-                .find(|child| child.kind() == "simple_identifier")
-                .and_then(|child| self.text(child)),
+                .find(|child| child.kind() == "simple_identifier"),
             // Java: a class's name is a `type_identifier` child, not a plain `identifier`.
             NameStrategy::FirstTypeIdentifier => node
                 .named_children(&mut node.walk())
-                .find(|child| child.kind() == "type_identifier")
-                .and_then(|child| self.text(child)),
+                .find(|child| child.kind() == "type_identifier"),
         }
     }
 
@@ -701,22 +714,42 @@ impl<'a> Walker<'a> {
 
         if let Some(references) = self.spec.references
             && references.node_types.contains(&node.kind())
-            && !self.is_excluded_reference(node, references.excluded_parents)
+            && !self.is_excluded_reference(node)
             && self.current_entity().is_some()
         {
             self.emit_reference(subject, node);
         }
     }
-    /// Whether a node's parent excludes its children from reference extraction.
+
+    /// Whether this identifier is the *name* of the declaration that encloses it.
     ///
-    /// Without this, every declaration's own name is emitted as a reference to itself.
-    fn is_excluded_reference(&self, node: Node<'_>, excluded: &[&str]) -> bool {
+    /// **A declaration's own name is not a use of that name.** `struct S` does not
+    /// reference `S`; `fn f` does not reference `f`. The occurrence that introduces a
+    /// name is the one place the name is not a use of something.
+    ///
+    /// The question is asked of the **nearest enclosing declaration**, not of the
+    /// immediate parent. Two things make that necessary and neither is a detail:
+    ///
+    /// * A declaration's name is not always a direct child of the declaration. C and
+    ///   C++ wrap it in one or more declarators, Kotlin and Java carry it as a bare
+    ///   child with no field at all, and [`SymbolRule::name_strategy`] exists precisely
+    ///   to describe those shapes. Stopping at the immediate parent would miss every one
+    ///   of them.
+    /// * Stopping at the first *declared* ancestor rather than the first declared
+    ///   ancestor **on the way out of this occurrence** is what makes the answer
+    ///   positive. A node type that the spec declares as a symbol is not a reason to
+    ///   drop everything beneath it: `fn f() { g() }` finds `function_item` on the way
+    ///   up, and `g` is a use of a name while `f` is not. Asking "is this node the name
+    ///   that declaration introduced" is the only question whose answer separates them.
+    fn is_excluded_reference(&self, node: Node<'_>) -> bool {
         let mut current = node;
-        // Walk up to the nearest declared ancestor, not just the immediate parent: a call's
-        // callee identifier is a grandchild of the function node.
         while let Some(parent) = current.parent() {
-            if self.spec.symbol_rule(parent.kind()).is_some() {
-                return excluded.contains(&parent.kind());
+            if let Some(rule) = self.spec.symbol_rule(parent.kind())
+                && self
+                    .declaration_name_node(parent, rule)
+                    .is_some_and(|named| named.id() == node.id())
+            {
+                return true;
             }
             current = parent;
         }

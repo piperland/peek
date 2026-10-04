@@ -214,11 +214,14 @@ pub enum InheritanceStyle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReferenceRule {
     /// The exact node types that count as an identifier reference.
+    ///
+    /// Every occurrence of one of these is a use of a name **except** a declaration's own
+    /// name, which the walker decides for itself — see
+    /// [`LanguageSpec::symbols`] and the walker's own-name test. There is deliberately no
+    /// second list here: a list of node types whose children are not references is a rule
+    /// about whole subtrees, and it cannot say which occurrence inside the subtree
+    /// introduced the name.
     pub node_types: &'static [&'static str],
-    /// Node types whose children must **not** be treated as references, because the parent
-    /// already accounts for them. This is what stops a call from also emitting a reference to
-    /// its own callee name.
-    pub excluded_parents: &'static [&'static str],
 }
 
 /// Everything Peek needs to know to extract one language.

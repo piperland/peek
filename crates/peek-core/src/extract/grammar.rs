@@ -217,11 +217,6 @@ impl GrammarFacts {
                     problems.push(self.missing_node(language, node_type, "reference"));
                 }
             }
-            for parent in references.excluded_parents {
-                if !self.has_node_type(parent) {
-                    problems.push(self.missing_node(language, parent, "excluded parent"));
-                }
-            }
         }
 
         if let Some(style) = spec.inheritance {
