@@ -116,6 +116,9 @@ fn measure_language(language: Language, directory: &Path) -> Row {
     let incremental = incremental::run(&corpus.directory, language);
     let (query, query_failures) = measure::score_queries(&corpus, &store, &graph);
     let (context, context_failures) = measure::score_context(&corpus, &store);
+    if std::env::var("PEEK_GATE_DUMP").is_ok() {
+        measure::dump(&store, &graph);
+    }
 
     let measurement: Measurement = measure::measure(
         &corpus,

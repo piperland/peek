@@ -570,6 +570,30 @@ impl Snapshot {
     }
 }
 
+/// Print every entity row and every relation row, for reading a regression.
+///
+/// Off unless `PEEK_GATE_DUMP` is set, because the point of the gate is the
+/// summary and a wall of rows is what makes a summary get ignored. The reason it
+/// exists at all is that "which rows did the engine emit" is the question every
+/// investigation of a surprising number ends at, and answering it should not
+/// require editing the gate.
+pub fn dump(store: &Store, graph: &Graph) {
+    println!("\n--- entity rows ---");
+    for row in graph.entities() {
+        println!("  {}", row.render());
+    }
+    println!("\n--- relation rows ---");
+    for relation in &graph.relations {
+        println!("  {}", relation.render());
+    }
+    println!("\n--- class states ---");
+    for (class, states) in graph.class_states() {
+        println!("  {class}: {states:?}");
+    }
+    let stats = store.stats().expect("stats");
+    println!("\n--- store stats ---\n  {stats:?}");
+}
+
 // ---------------------------------------------------------------------------
 // The dimensions
 // ---------------------------------------------------------------------------
