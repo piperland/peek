@@ -28,6 +28,15 @@
 #      This is the mutation worth having: it is the failure mode a validator that
 #      only checks node types would let through.
 #
+#   4. The reference rule's node types emptied.
+#      `references` is the one dimension whose score was produced by a rule rather
+#      than by a grammar, and it read `0.00 (0/18)` for a long time — not because
+#      references are rare but because `is_excluded_reference` dropped every
+#      identifier inside a declaration. An empty list is the same shape of mistake
+#      written the other way round, and it is the only mutation that proves the
+#      gate notices when the `References` class stops producing. A gate that cannot
+#      fail on a dimension is not measuring it.
+#
 # Usage:
 #   ./scripts/language-gate-mutation-check.sh
 #
@@ -137,14 +146,16 @@ step "baseline"
 BASE_CALLS="$(measure calls)"
 BASE_PRECISION="$(measure symbol_precision)"
 BASE_IMPORTS="$(measure imports)"
-for pair in "calls:$BASE_CALLS" "symbol_precision:$BASE_PRECISION" "imports:$BASE_IMPORTS"; do
+BASE_REFERENCES="$(measure references)"
+for pair in "calls:$BASE_CALLS" "symbol_precision:$BASE_PRECISION" \
+  "imports:$BASE_IMPORTS" "references:$BASE_REFERENCES"; do
   case "$pair" in
     ?*:?*) ;;
     *) fail "cannot read a baseline for ${pair%%:*}; the gate printed nothing for it" ;;
   esac
 done
-printf '  calls %s, symbol_precision %s, imports %s\n' \
-  "$BASE_CALLS" "$BASE_PRECISION" "$BASE_IMPORTS"
+printf '  calls %s, symbol_precision %s, imports %s, references %s\n' \
+  "$BASE_CALLS" "$BASE_PRECISION" "$BASE_IMPORTS" "$BASE_REFERENCES"
 
 mutate 'CallRule::new("macro_invocation", "macro"),' '' calls "$BASE_CALLS"
 mutate 'type_scope_nodes: &["impl_item", "trait_item"],' \
@@ -152,6 +163,12 @@ mutate 'type_scope_nodes: &["impl_item", "trait_item"],' \
 mutate '        "use_declaration",
         Some("argument"),' '        "mod_item",
         Some("argument"),' imports "$BASE_IMPORTS"
+mutate '        node_types: &[
+            "identifier",
+            "type_identifier",
+            "field_identifier",
+            "scoped_identifier",
+        ],' '        node_types: &[],' references "$BASE_REFERENCES"
 
 restore_registry
 trap - EXIT
