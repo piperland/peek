@@ -42,7 +42,7 @@ rendering `1.00`.
 | typescript | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | javascript | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | python | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| rust | unverified | yes | 96.67 (87/90) | 96.67 (87/90) | 60.23 (53/88) | 97.50 (39/40) | 0.00 (0/18) | 66.67 (10/15) | 91.67 (22/24) |
+| rust | unverified | yes | 96.67 (87/90) | 96.67 (87/90) | 60.23 (53/88) | 97.50 (39/40) | 94.74 (18/19) | 66.67 (10/15) | 91.67 (22/24) |
 | go | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | java | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | csharp | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
@@ -73,7 +73,7 @@ rendering `1.00`.
 | typescript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | javascript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | python | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| rust | 100.00 (5/5) | 100.00 (5/5) | 100.00 (14/14) | 100.00 (3/3) | 100.00 (1200/1200) | 96.67 (29/30) | 100.00 (7/7) |
+| rust | 100.00 (5/5) | 100.00 (5/5) | 100.00 (14/14) | 100.00 (3/3) | 100.00 (2288/2288) | 100.00 (30/30) | 100.00 (7/7) |
 | go | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | java | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | csharp | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
@@ -106,6 +106,7 @@ correct outcome for a name with two candidates and an incorrect one for `mod::f(
 |---|---|---|---|---|---|---|---|
 | rust | `contains` | 61 | 61 | 0 | 0 | 0 | 0 |
 | rust | `imports` | 15 | 10 | 3 | 0 | 2 | 0 |
+| rust | `references` | 192 | 77 | 17 | 21 | 77 | 0 |
 | rust | `calls` | 39 | 9 | 1 | 4 | 25 | 0 |
 | rust | `inherits` | 1 | 1 | 0 | 0 | 0 | 0 |
 | rust | `implements` | 4 | 4 | 0 | 0 | 0 | 0 |
