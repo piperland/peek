@@ -598,11 +598,11 @@ fn package_layout(
     batch: &[PathBuf],
 ) -> Result<crate::extract::modules::RepositoryLayout, IndexError> {
     let mut layout = crate::extract::modules::RepositoryLayout::new();
-    // **Only the paths that still exist.** A deleted `crates/foo/main.rs` is in the batch and is
-    // the file whose removal stops `crates/foo` being a package directory; observing it would put
-    // the root back and name every file under it after a crate root that is no longer there. The
-    // store's own path list is not filtered the same way, but a path only gets there after the
-    // removal lands, so the two agree on the direction that matters.
+    // **Only the paths that still exist, in both sources.** A deleted `crates/foo/main.rs` is in
+    // the batch and is the file whose removal stops `crates/foo` being a package directory;
+    // observing it would put the root back and name every file under it after a crate root that is
+    // no longer there. The store's own list needs the same filter and for a different reason,
+    // below.
     let relative: Vec<RepoPath> = batch
         .iter()
         .filter(|path| path.is_file())
@@ -614,7 +614,23 @@ fn package_layout(
         .filter_map(|spec| spec.module_layout())
         .any(|layout| crate::extract::modules::needs_package_roots(&relative, layout));
     if wanted {
-        layout.observe_all(store.indexed_paths(INDEXED_PATH_SCAN_LIMIT)?.iter());
+        // **A deleted path is dropped from the store's own list here, because it has not been
+        // removed from it yet.** The removal lands in the `apply_update` further down this
+        // function, so `indexed_paths` still holds `core/main.rs` when it is read — and observing
+        // it would put back the very crate root the batch deleted, naming every file under
+        // `core/` after a package that no longer exists. The full build of that tree would say
+        // something else, which is the disagreement this whole half exists to prevent.
+        let gone: BTreeSet<PathBuf> = batch
+            .iter()
+            .filter(|path| !path.is_file())
+            .cloned()
+            .collect();
+        layout.observe_all(
+            store
+                .indexed_paths(INDEXED_PATH_SCAN_LIMIT)?
+                .iter()
+                .filter(|path| !gone.contains(&root.join(path.as_str()))),
+        );
     }
     layout.observe_all(&relative);
     layout.derive();
