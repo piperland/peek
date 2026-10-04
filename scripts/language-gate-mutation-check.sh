@@ -59,9 +59,16 @@ fail() { printf '\n\033[1;31mMUTATION CHECK FAILED: %s\033[0m\n' "$1" >&2; exit 
 # script going quiet.
 measure() {
   local dimension="$1"
-  PEEK_GATE_DUMP= cargo test --test language_gate every_registered_language_meets \
+  # `cargo test` writes two kinds of line to stdout. The measurement table is
+  # indented by exactly two spaces and the dimension is followed by a rendered
+  # figure; `Running`, `Compiling` and `test gate::…` are not indented that way, so
+  # anchoring on `^  <name> ` picks the table row and nothing else. An earlier
+  # version matched the bare name and picked up the relation dump's
+  # `  calls from …` rows, which read as a fraction of `from/`.
+  unset PEEK_GATE_DUMP
+  cargo test --test language_gate every_registered_language_meets \
     -- --nocapture 2>/dev/null \
-    | awk -v want="$dimension" '$1 == want { split($2, p, "/"); print p[1] "/" p[2] }' \
+    | awk -v want="  $dimension " '$0 ~ "^" want { print $2 }' \
     | head -1
 }
 
@@ -85,7 +92,11 @@ PY
   local after
   after="$(measure "$dimension" || true)"
   local verdict
-  verdict="$(cargo test --test language_gate every_registered_language_meets 2>&1 | tail -1 || true)"
+  # The whole run, not one test: `cargo test` exits non-zero and its last line is
+  # a `rerun with` suggestion rather than a verdict, so the verdict is read from
+  # the test binary's own summary.
+  verdict="$(cargo test --test language_gate 2>&1 \
+    | awk '/^test result:/ { print }' | head -1 || true)"
 
   # Restore before deciding anything, so a failure below cannot leave the tree
   # mutated. The trap below is the backstop if this script is interrupted.
@@ -99,8 +110,13 @@ PY
   restore_registry
   touch "$REGISTRY"
 
-  if ! printf '%s' "$verdict" | grep -q '^test result: FAILED'; then
-    fail "the gate passed with the rule for $dimension removed, so it does not measure $dimension"
+  if [ -z "$verdict" ]; then
+    fail "the gate produced no test summary under the mutation for $dimension; the build is \
+broken rather than the measurement having moved"
+  fi
+  if ! printf '%s' "$verdict" | grep -q 'FAILED'; then
+    fail "the gate passed with the rule for $dimension removed, so it does not measure $dimension \
+($verdict)"
   fi
   if [ -z "$after" ] || [ "$after" = "$before" ]; then
     fail "the gate failed but $dimension did not move: it was $before and is now '${after:-unmeasured}'"
@@ -121,7 +137,12 @@ step "baseline"
 BASE_CALLS="$(measure calls)"
 BASE_PRECISION="$(measure symbol_precision)"
 BASE_IMPORTS="$(measure imports)"
-[ -n "$BASE_CALLS" ] || fail "cannot read a baseline measurement from the gate"
+for pair in "calls:$BASE_CALLS" "symbol_precision:$BASE_PRECISION" "imports:$BASE_IMPORTS"; do
+  case "$pair" in
+    ?*:?*) ;;
+    *) fail "cannot read a baseline for ${pair%%:*}; the gate printed nothing for it" ;;
+  esac
+done
 printf '  calls %s, symbol_precision %s, imports %s\n' \
   "$BASE_CALLS" "$BASE_PRECISION" "$BASE_IMPORTS"
 
