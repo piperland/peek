@@ -638,7 +638,7 @@ mod tests {
         std::fs::create_dir_all(&directory).expect("create the scratch directory");
         std::fs::write(
             directory.join("gate.expect"),
-            "binds | reference | src/lib.rs | summarise | out | a | b | c\n",
+            "binds | reference | src/lib.rs | function | summarise | out | a | b | c\n",
         )
         .expect("write the expectation file");
         let problems = super::parse(peek_core::model::Language::Rust, &directory)

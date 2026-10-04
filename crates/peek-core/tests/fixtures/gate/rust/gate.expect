@@ -656,7 +656,8 @@ floor | symbol_precision | 96.66
 floor | symbol_recall | 96.66
 floor | definitions | 60.22
 floor | calls | 97.50
-floor | references | 94.73
+floor | references | 96.14
+floor | resolution_correctness | 75.00
 floor | imports | 66.66
 floor | imports_module_retained | 0
 floor | members | 91.66
