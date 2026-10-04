@@ -397,6 +397,10 @@ pub fn to_json(rows: &[Row]) -> String {
                                                     "correct_entity_is_a_candidate",
                                                     Json::Bool(reach.correct_in_carriers),
                                                 ),
+                                                (
+                                                    "target_is_in_the_index",
+                                                    Json::Bool(reach.target_in_index),
+                                                ),
                                                 // The carriers themselves, so the count
                                                 // above can be recounted from the
                                                 // published file rather than believed.

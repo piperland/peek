@@ -1116,6 +1116,12 @@ pub struct Reach {
     /// The entity the label says the relation must point at, or `None` when the
     /// label says no entity is the referent.
     pub wants: Option<Key>,
+    /// The name the relation is about, as the relation spells it. Kept because an
+    /// aliased binding is spelled differently from the declaration it names, and
+    /// that difference is the whole of one of the verdicts.
+    pub name: String,
+    /// Whether the index holds the entity the label names at all.
+    pub target_in_index: bool,
     /// Whether any of the carriers is the entity the label names.
     pub correct_in_carriers: bool,
     /// Whether the symbol the relation is written in already declares that name
@@ -1130,14 +1136,14 @@ pub struct Reach {
 }
 
 impl Reach {
-    /// Which explanation the measurement supports, and what would have to be true
-    /// for it to be the other one.
+    /// Which explanation the measurement supports.
     ///
-    /// Three cases, not two, because "the extractor emitted an edge for a local"
-    /// and "the extractor emitted an edge whose correct target is nowhere in the
-    /// index" are different claims and only the first is a finding about the
-    /// engine.
-    pub fn verdict(&self) -> &'static str {
+    /// Four cases, and **none of them panics**. A measurement that can abort on
+    /// an unexpected fixture is a measurement that has been fitted to one fixture:
+    /// the next label it has not seen becomes a crash rather than a number, and a
+    /// crash in the middle of a gate run is a failure with no reading in it. Every
+    /// input produces a sentence.
+    pub fn verdict(&self) -> String {
         match &self.wants {
             // The label says the name has no referent, so the relation is
             // legitimate and no target is. A rung that answered anyway placed it
@@ -1145,17 +1151,29 @@ impl Reach {
             // was `Unresolved`. Whatever carried the name, the rung could not
             // have known it was the wrong one: nothing in the index says the name
             // is a binding rather than a declaration.
-            None => "extractor: the name denotes no declaration, so no rung could have placed it",
-            // The label names an entity and the index does not hold it. The
-            // label is what has to be checked here, not the engine.
-            Some(want) if !self.correct_in_carriers => unreachable!(
-                "the label names {want} and the index does not hold it; \
-                 this is a label to check, not a verdict about the engine"
+            None => "extractor: the name denotes no declaration, so no rung could have placed it"
+                .to_owned(),
+            // The label names an entity the index does not hold. Nothing to say
+            // about the engine: the label is what has to be checked.
+            Some(want) if !self.target_in_index => format!(
+                "label: `{want}` is not in this index, so the claim cannot be scored"
             ),
+            // The target is in the index but declares a different name than the
+            // relation names. That is what an import alias is, and it is the one
+            // shape a bare-name rung cannot reach by construction.
+            Some(want) if declared_name(&want.qualified_name) != self.name => format!(
+                "resolver: `{want}` declares `{}` and the relation names `{}`, so only the \
+                 import rung can reach it",
+                declared_name(&want.qualified_name),
+                self.name
+            ),
+            // The source's own scope declares the name, so a weaker rung answered
+            // over the declaration that was in front of it.
             Some(_) if self.shadowed_in_source => {
                 "resolver: the source's own scope declares the name, and a weaker rung answered"
+                    .to_owned()
             }
-            Some(_) => "resolver: the correct entity is a candidate by name",
+            Some(_) => "resolver: the correct entity is a candidate by name".to_owned(),
         }
     }
 }
@@ -1177,14 +1195,16 @@ pub fn measure_reach(corpus: &Corpus, graph: &Graph) -> Vec<Reach> {
                 .into_iter()
                 .map(EntityRow::render)
                 .collect();
-            let correct_in_carriers = bind.target.as_ref().is_some_and(|target| {
-                graph.holds(target)
-                    && graph.named(&bind.name).iter().any(|row| row.key() == *target)
-            });
+            let correct_in_carriers = bind
+                .target
+                .as_ref()
+                .is_some_and(|target| graph.named(&bind.name).iter().any(|row| row.key() == target));
             Reach {
                 key: bind.key(),
                 carriers,
                 wants: bind.target.clone(),
+                name: bind.name.clone(),
+                target_in_index: bind.target.as_ref().is_some_and(|target| graph.holds(target)),
                 correct_in_carriers,
                 shadowed_in_source: declares_in_scope(graph, bind),
             }
