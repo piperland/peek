@@ -517,7 +517,7 @@ enum ModuleFileOutcome {
 /// The inputs [`Resolver::module_files`] has, kept as a record rather than as arguments to five
 /// counters, so that the classification is written once. `discarded` says the table also answered
 /// and named a file the guess did not, which is the case the rule gives up on purpose.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ModuleFileLookup {
     /// How many qualified-name seeks the table was asked for.
     asked: usize,
@@ -1310,8 +1310,8 @@ impl<'s> Resolver<'s> {
 
         // Step 1. A file the guess could not have named is outside the importer's own tree, and the
         // guess's answer cannot be an answer about it.
-        let table_beyond_the_tree = !from_table.is_empty()
-            && !from_table.iter().all(|path| guess_paths.contains(path));
+        let table_beyond_the_tree =
+            !from_table.is_empty() && !from_table.iter().all(|path| guess_paths.contains(path));
         if table_beyond_the_tree {
             self.module_files.record(ModuleFileLookup {
                 asked,
