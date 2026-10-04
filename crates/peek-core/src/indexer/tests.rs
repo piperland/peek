@@ -315,12 +315,7 @@ fn a_refresh_touches_only_the_file_that_changed() {
 /// all, which is what an empty list here would mean.
 fn modules_in(store: &Store, path: &str) -> Vec<String> {
     let file = RepoPath::new(path).expect("valid path");
-    let file_id = EntityId::new(
-        file.clone(),
-        EntityKind::File,
-        file.file_name(),
-        0,
-    );
+    let file_id = EntityId::new(file.clone(), EntityKind::File, file.file_name(), 0);
     let mut names: Vec<String> = store
         .outgoing(&file_id, Some(RelationKind::Contains), 64)
         .expect("query")
@@ -450,7 +445,11 @@ fn deleting_a_crate_root_puts_the_files_beside_it_back_on_the_fallback() {
     );
     assert!(
         store
-            .entity(&id("core/flags/defs.rs", EntityKind::Module, "core::flags::defs"))
+            .entity(&id(
+                "core/flags/defs.rs",
+                EntityKind::Module,
+                "core::flags::defs"
+            ))
             .expect("query")
             .is_none(),
         "and the package-qualified name is gone"

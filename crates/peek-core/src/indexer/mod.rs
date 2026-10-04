@@ -659,11 +659,10 @@ fn widen_to_package_moves(
         return Ok(batch);
     }
     let already: BTreeSet<PathBuf> = batch.iter().cloned().collect();
-    let layouts: Vec<crate::extract::spec::ModuleLayout> =
-        crate::extract::registry::all()
-            .iter()
-            .filter_map(|spec| spec.module_layout())
-            .collect();
+    let layouts: Vec<crate::extract::spec::ModuleLayout> = crate::extract::registry::all()
+        .iter()
+        .filter_map(|spec| spec.module_layout())
+        .collect();
     for path in store.indexed_paths(INDEXED_PATH_SCAN_LIMIT)? {
         if !moved_package_root(&moves, &path) {
             continue;
