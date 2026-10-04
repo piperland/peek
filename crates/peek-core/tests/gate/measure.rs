@@ -266,9 +266,7 @@ impl Graph {
                 graph.relations.push(row);
             }
         }
-        graph
-            .relations
-            .sort_by(|left, right| left.render().cmp(&right.render()));
+        graph.relations.sort_by_key(RelationRow::render);
 
         for (index, row) in graph.rows.iter().enumerate() {
             graph

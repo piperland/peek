@@ -104,7 +104,7 @@ impl Fraction {
     pub fn floor_spelling(&self) -> String {
         match self.truncatable_hundredths() {
             None => "n/a".to_owned(),
-            Some(hundredths) if hundredths == 10_000 => "100".to_owned(),
+            Some(10_000) => "100".to_owned(),
             Some(hundredths) => format!("{}.{:02}", hundredths / 100, hundredths % 100),
         }
     }
@@ -112,7 +112,7 @@ impl Fraction {
     /// `1.00 (34/83)` — the figure and its denominator, always together.
     pub fn render(&self) -> String {
         match self.hundredths() {
-            None => format!("n/a (0/0)"),
+            None => "n/a (0/0)".to_owned(),
             Some(hundredths) => format!(
                 "{}.{:02} ({}/{})",
                 hundredths / 100,
@@ -337,7 +337,7 @@ mod tests {
             (Fraction::new(0, 18), "0.00"),
         ] {
             assert_eq!(value.floor_spelling(), floor);
-            let parsed = super::super::expect::floor_of(&floor).expect("the spelling parses");
+            let parsed = super::super::expect::floor_of(floor).expect("the spelling parses");
             assert!(
                 value.reaches(parsed),
                 "{floor} is the floor for {} and must be reachable",
