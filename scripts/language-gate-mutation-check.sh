@@ -89,7 +89,15 @@ PY
 
   # Restore before deciding anything, so a failure below cannot leave the tree
   # mutated. The trap below is the backstop if this script is interrupted.
-  mv "$REGISTRY.gate-mutation.bak" "$REGISTRY"
+  #
+  # **Then touch the file.** `mv` preserves the *original* modification time, and
+  # Cargo decides what to rebuild from mtime — so a restore that does not touch
+  # leaves a binary built from the mutated source in `target/`, and the next run
+  # measures the mutation while reading the clean source. That happened here: three
+  # runs in a row reported `calls` at 38/40 against a source that declares a macro
+  # call rule, and the cause was a stale test binary rather than the engine.
+  restore_registry
+  touch "$REGISTRY"
 
   if ! printf '%s' "$verdict" | grep -q '^test result: FAILED'; then
     fail "the gate passed with the rule for $dimension removed, so it does not measure $dimension"
@@ -100,11 +108,14 @@ PY
   printf '  %s: %s -> %s, and the gate failed\n' "$dimension" "$before" "$after"
 }
 
-restore() {
-  [ -f "$REGISTRY.gate-mutation.bak" ] && mv "$REGISTRY.gate-mutation.bak" "$REGISTRY"
+restore_registry() {
+  if [ -f "$REGISTRY.gate-mutation.bak" ]; then
+    mv "$REGISTRY.gate-mutation.bak" "$REGISTRY"
+    touch "$REGISTRY"
+  fi
   return 0
 }
-trap restore EXIT
+trap restore_registry EXIT
 
 step "baseline"
 BASE_CALLS="$(measure calls)"
@@ -121,14 +132,22 @@ mutate '        "use_declaration",
         Some("argument"),' '        "mod_item",
         Some("argument"),' imports "$BASE_IMPORTS"
 
-restore
+restore_registry
 trap - EXIT
 
-step "the tree is clean again"
+step "the tree is clean again, and so is the build"
 if ! git diff --quiet -- "$REGISTRY"; then
   fail "the registry was left modified; the mutations were not reverted"
 fi
-git diff --quiet -- "$REGISTRY" || fail "the registry still differs from HEAD"
+# Rebuild from the restored source and confirm the measurement is the one the
+# unmutated engine produces. Without this the script can report "the gate failed
+# correctly" while leaving a mutated binary behind for the next run.
+AFTER_ALL="$(measure calls)"
+if [ "$AFTER_ALL" != "$BASE_CALLS" ]; then
+  fail "after restoring the registry, calls is $AFTER_ALL rather than the baseline $BASE_CALLS; \
+a mutated build survived the restore"
+fi
+printf '  calls back at %s, matching the baseline\n' "$AFTER_ALL"
 
 printf '\n\033[1;32mMUTATION CHECK OK\033[0m\n'
 printf 'Each gate assertion failed when the extraction rule behind it was removed.\n'
