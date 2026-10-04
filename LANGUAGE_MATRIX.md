@@ -101,10 +101,10 @@ rendering `1.00`.
 ### Decided and wrong
 
 `resolution_correctness` is a fraction over the relations the engine **decided**, so
-it can be raised by declining to decide more. These four counts are published beside
-it for that reason: a language cannot read well by answering less. `wrong` is a
-confidently wrong edge — a claim — and `undecided` is a gap, an absence a reader can
-see. They are never added together.
+it can be raised by declining to decide more. These counts are published beside it for
+that reason: a language cannot read well by answering less. `Decided and wrong` is a
+confidently wrong edge, which is a claim, and `Undecided` is a gap, which is an
+absence a reader can see. They are never added together.
 
 | Language | Decided | Right | Decided and wrong | Undecided | Labelled but no relation |
 |---|---|---|---|---|---|
@@ -112,7 +112,9 @@ see. They are never added together.
 
 ### Every decided-and-wrong edge, by name
 
-A rate is not an audit. Four edges is a list somebody can read against the source.
+A rate is not an audit: a short list is one somebody can read against the source, and a
+fraction is not. Each line names the relation, the rung that placed it, the entity it
+landed on, and what the fixture says should have happened.
 
 **rust**
 
