@@ -387,13 +387,24 @@ impl RepositoryLayout {
 
     /// Read a repository's paths and derive the roots. The whole of it, for a caller that has the
     /// paths and wants the answer.
-    pub fn read<'a, I>(paths: I)
+    pub fn read<'a, I>(paths: I) -> Self
     where
         I: IntoIterator<Item = &'a RepoPath>,
     {
         let mut layout = Self::new();
         layout.observe_all(paths);
         layout.derive();
+        layout
+    }
+
+    /// Read a repository's paths, in whatever order the caller already has them.
+    pub fn observe_all<'a, I>(&mut self, paths: I)
+    where
+        I: IntoIterator<Item = &'a RepoPath>,
+    {
+        for path in paths {
+            self.observe(path);
+        }
     }
 }
 
