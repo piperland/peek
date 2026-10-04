@@ -1215,7 +1215,8 @@ impl<'s> Resolver<'s> {
         Ok(found)
     }
 
-    /// The files a module path names: the module table's first answer, or the path guess's.
+    /// The files a module path names: the guess's, if the guess can name one, and the
+    /// table's first answer otherwise.
     ///
     /// The extractor writes a `Module` entity for every file it reads, with a qualified name that
     /// is the path from the package's source root. That turns "which file does `alpha::gateway`
@@ -1223,41 +1224,64 @@ impl<'s> Resolver<'s> {
     /// anchor, per reading, with no way to cross a package boundary — into **one indexed seek** on
     /// `entities_with_qualified_name`.
     ///
-    /// ## The change, and it is a conflict rule between spellings rather than between routes
+    /// ## What was wrong, and it was two things and neither was "the table is inexact"
     ///
-    /// This used to collect the files of *every* qualified name it tried and return the union, and
-    /// to fall back to the path guess only when that union was empty. The controlled comparison in
+    /// This used to collect the files of *every* qualified name it tried, return the union, and
+    /// fall back to the path guess only when that union was empty. The controlled comparison in
     /// `.agent/EVIDENCE/MODULE-TABLE.md` measured that policy across five repositories and found it
     /// worth **+2.5pp** of resolved relations on `rust-lang/cargo` and **-1.1pp** on
-    /// `serde-rs/serde`, monotone in the count of cross-package references.
+    /// `serde-rs/serde`, monotone in the count of cross-package references. Both regressions were
+    /// diagnosed here, from the stored rows rather than from the counts:
     ///
-    /// Two things were wrong with it and neither was "the table is inexact":
+    /// 1. **The package prefix was usually missing, so the lookup could only offer a spelling meant
+    ///    for another package.** [`Resolver::package_of`] read the first
+    ///    [`ResolutionOptions::modules_per_lookup`] entities of the importing file, which is
+    ///    `ORDER BY kind` — and `Module` and `Package` sort *after* `function`, `constant` and
+    ///    `method` — so on a real source file it found no package at all: **43 of
+    ///    `BurntSushi/ripgrep`'s 110 indexed files**. With no package, `crate::decompress::X` was
+    ///    looked up as `decompress`, and that *is* a row this index holds, because
+    ///    `crates/cli/src/lib.rs` declares `mod decompress;`. The answer was the file that
+    ///    **declares** the module rather than the file that **is** it. Fixed in `package_of`.
+    /// 2. **The unprefixed spelling collides with a declaration row, and the guess can tell.** A
+    ///    repository whose crates keep their modules directly under the crate directory — ripgrep's
+    ///    `crates/core/flags/defs.rs` — gets every file named for the directory above it, so
+    ///    `extract::modules::locate` records the package as `flags` and the table still cannot
+    ///    spell `crate::flags::Flag`; it reaches `flags`, which is the `mod flags;` row in
+    ///    `crates/core/main.rs`. **That is a defect in the extractor's package naming and not
+    ///    something the resolver can repair** — the package is not in the index under any name the
+    ///    import uses. What the resolver *can* do is notice that the file it was handed is not a file
+    ///    the referring file's own import could have meant, and that the guess found one it could.
     ///
-    /// 1. **The package prefix was usually missing, so the lookup offered the wrong spelling.**
-    ///    [`Resolver::package_of`] could not name the package for 67 of `BurntSushi/ripgrep`'s 110
-    ///    files, so a `crate::decompress::X` path was looked up as `decompress` — a row this index
-    ///    holds, because `crates/cli/src/lib.rs` declares `mod decompress;`. The answer was the file
-    ///    that *declares* the module, not the file that *is* it. **349 of the 351 intra-crate
-    ///    proofs the policy cost that repository were `crate::` paths.** Fixed in `package_of`,
-    ///    which is the actual defect.
-    /// 2. **A spelling that hits is taken as the answer even when a better one was never tried.**
-    ///    The unprefixed `decompress` is a *fallback* spelling: it exists so that `use
-    ///    globset::GlobSet` can reach another package. It must not be allowed to answer a path the
-    ///    prefixed spelling can answer. So the loop now stops at the first qualified name that
-    ///    names a file, which is also why the union was the wrong shape — with the package missing
-    ///    the union was *wider than either route*, and a wider candidate set is an `Ambiguous`.
+    /// ## The rule
+    ///
+    /// 1. **The guess answers if it names a file the index holds.** [`files_for_module`] is a pure
+    ///    function of the module path and the importing file's directory: it joins the module's
+    ///    segments onto that directory and each of its ancestors, so every path it can produce lies
+    ///    inside the importing file's own tree. A path inside the referring file's own tree is a
+    ///    module that referring file can name, which is what an import in it means.
+    /// 2. **Otherwise the table answers**, at the first spelling that names a file, and the rest of
+    ///    the spellings are not tried. It is the only route that reaches another package — `src` is
+    ///    not a segment of a module path, so no anchor list can produce
+    ///    `crates/globset/src/lib.rs` from `crates/cli/src/` — and it is worth 4,369 proofs on
+    ///    `rust-lang/cargo`. First-hit-wins is what stops the cross-package *fallback* spelling from
+    ///    answering a path the package-prefixed spelling could answer.
+    /// 3. **Otherwise there is no file**, which is a decline, and the caller falls through the rest
+    ///    of the ladder.
     ///
     /// **The union of both routes was tried first and rejected by measurement**, which is worth
-    /// recording because it is the change that was asked for. On `BurntSushi/ripgrep`, full build,
-    /// release: 2,256 lookups, and searching the union of the table's and the guess's file sets
-    /// added a file the table had not named in **6** of them, recovering 7 of the 336 proofs the
-    /// policy was costing. The two routes do not disagree about intra-crate paths — whenever the
-    /// table answers, its set already contains the guess's — so widening it cannot help. **The
-    /// losing candidate was good for one thing the table cannot do at all**, and it is kept:
-    /// [`files_for_module`] expresses `super::`, a climb defined against the *importer's own
-    /// module*, which the table has no spelling for; and it still answers when the index is partly
-    /// built or the language has no module layout. It is the fallback, and the fallback is where
-    /// the guess belongs because it is the route that costs nothing the table does not already cost.
+    /// recording because a union is what "try both" most plainly means. On `BurntSushi/ripgrep`,
+    /// full build, release: 2,256 lookups, and searching the union of the table's and the guess's
+    /// file sets added a file the table had not named in **6** of them, recovering 7 of the 336
+    /// proofs the policy was costing. The two routes do not disagree about intra-crate paths —
+    /// whenever the table answers, its set already contains the guess's — so widening it cannot
+    /// help, and the rule has to be a precedence rather than a union.
+    ///
+    /// **What the losing candidate was good for, so this is not read as "the guess wins".** The
+    /// table reaches across a package boundary and the guess cannot, at any anchor depth; that is
+    /// the whole of its value and step 2 is where it is spent. The guess reaches what the table
+    /// cannot spell, because it is anchored to a *file* rather than to a package name; that is the
+    /// whole of its, and step 1 is where it is spent. Neither is a generalisation of the other,
+    /// which is the honest reason this is a precedence and not a preference.
     ///
     /// [`ResolutionOptions::use_module_table`] turns the whole of this off, which is how the two
     /// arms of the measurement come out of one build. **The off arm is [`files_for_module`] alone,
@@ -1276,8 +1300,36 @@ impl<'s> Resolver<'s> {
         // The importer's own package, so `crate::a::b` becomes `package::a::b`. Taken from the
         // module row the importing file *is*, which is the only place the package name is
         // recorded — a directory name would be a guess, and a guess here is what produced
-        // `no_candidate` for 343 of 344 edges on a real cross-crate repository.
+        // `no_candidate` for 343 of 344 edges on a real cross-crate repository. Read before the
+        // guess because it is one indexed seek and it is what makes the two counters below mean
+        // something.
         let package = self.package_of(importer)?;
+
+        // Step 1. Which of the guess's paths the index holds. A path it does not hold can never
+        // contribute a candidate — a candidate is an entity, and there are none in a file this
+        // build did not extract — and it is the overwhelming majority of what the guess produces:
+        // a three-segment path from a file four directories down is a dozen anchors of which at
+        // most one exists. The read is cached, and it is the same read the guess-only arm makes.
+        let mut guessed: Vec<RepoPath> = Vec::new();
+        for path in files_for_module(module, importer, strip_last) {
+            if guessed.contains(&path) {
+                continue;
+            }
+            if !self.entities_in_file(&path)?.is_empty() {
+                guessed.push(path);
+            }
+        }
+        if !guessed.is_empty() {
+            self.module_files.record(ModuleFileLookup {
+                asked: 0,
+                outcome: ModuleFileOutcome::Guess,
+                package_known: package.is_some(),
+                prefixed: false,
+            });
+            return Ok(guessed);
+        }
+
+        // Step 2.
         let mut asked = 0usize;
         for qualified in self.module_qualified_names(module, package.as_deref(), strip_last) {
             asked += 1;
@@ -1308,20 +1360,14 @@ impl<'s> Resolver<'s> {
             }
         }
 
-        // The table named nothing, so the guess answers, and it answers with every path it can
-        // reach — indexed or not, because this is the arm the recorded per-rung figures were read
-        // from and a path the index does not hold costs one cached read and contributes nothing.
-        let guessed = files_for_module(module, importer, strip_last);
+        // Step 3. No file either way.
         self.module_files.record(ModuleFileLookup {
             asked,
-            outcome: match guessed.is_empty() {
-                true => ModuleFileOutcome::Neither,
-                false => ModuleFileOutcome::Guess,
-            },
+            outcome: ModuleFileOutcome::Neither,
             package_known: package.is_some(),
             prefixed: false,
         });
-        Ok(guessed)
+        Ok(Vec::new())
     }
 
     /// The qualified names a module path could have, in the order they should be tried.
