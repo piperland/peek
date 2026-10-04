@@ -451,7 +451,8 @@ fn doctor_reports_a_healthy_install_as_healthy_and_exits_zero() {
                 "the integrity check must have run: {answer:?}"
             );
             assert!(
-                answer.findings
+                answer
+                    .findings
                     .iter()
                     .filter(|f| f.check == "ambiguity")
                     .all(|f| f.detail.contains("not guesses")),
