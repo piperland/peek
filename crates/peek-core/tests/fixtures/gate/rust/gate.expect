@@ -373,18 +373,18 @@ context_ambiguous | format_line
 # fixture produces. Raising one is a reviewable act belonging to the commit that
 # improves the number.
 # ---------------------------------------------------------------------------
-floor | symbol_precision | PLACEHOLDER
-floor | symbol_recall | PLACEHOLDER
-floor | definitions | PLACEHOLDER
-floor | calls | PLACEHOLDER
-floor | references | PLACEHOLDER
-floor | imports | PLACEHOLDER
-floor | imports_module_retained | PLACEHOLDER
-floor | members | PLACEHOLDER
-floor | inheritance_subject | PLACEHOLDER
-floor | inheritance_base | PLACEHOLDER
-floor | negative_references | PLACEHOLDER
-floor | negative_inheritance | PLACEHOLDER
+floor | symbol_precision | 0
+floor | symbol_recall | 0
+floor | definitions | 0
+floor | calls | 0
+floor | references | 0
+floor | imports | 0
+floor | imports_module_retained | 0
+floor | members | 0
+floor | inheritance_subject | 0
+floor | inheritance_base | 0
+floor | negative_references | 0
+floor | negative_inheritance | 0
 floor | incremental | 100
-floor | query | PLACEHOLDER
-floor | context | PLACEHOLDER
+floor | query | 0
+floor | context | 0
