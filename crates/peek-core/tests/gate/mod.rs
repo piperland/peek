@@ -49,7 +49,6 @@ use std::path::{Path, PathBuf};
 
 use peek_core::model::Language;
 
-use expect::Corpus;
 use matrix::Row;
 use measure::{DIMENSIONS, Measurement};
 
@@ -161,13 +160,13 @@ fn all_rows() -> Vec<Row> {
     for language in Language::ALL {
         match discovered()
             .into_iter()
-            .find(|(candidate, _)| *candidate == language)
+            .find(|(candidate, _)| candidate == &language)
         {
-            Some((_, directory)) => rows.push(measure_language(language, &directory)),
+            Some((_, directory)) => rows.push(measure_language(*language, &directory)),
             None => rows.push(Row {
-                language,
+                language: *language,
                 measurement: None,
-                reason: reason_for(language),
+                reason: reason_for(*language),
                 floors: BTreeMap::new(),
             }),
         }
@@ -358,8 +357,8 @@ fn a_language_without_a_specification_is_not_extractable() {
         if peek_core::extract::LanguageSpec::for_language(row.language).is_some() {
             continue;
         }
-        assert_eq!(
-            row.measurement, None,
+        assert!(
+            row.measurement.is_none(),
             "{} has no specification and so nothing to measure",
             row.language.as_str()
         );

@@ -390,8 +390,7 @@ mod tests {
     fn parse_fixtures() -> Corpus {
         super::parse(
             peek_core::model::Language::Rust,
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/gate/rust"),
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gate/rust"),
         )
         .unwrap_or_else(|problems| panic!("{}", problems[0]))
     }

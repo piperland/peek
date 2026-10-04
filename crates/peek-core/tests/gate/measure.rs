@@ -19,8 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use peek_core::discover::DiscoveryOptions;
 use peek_core::indexer::{self, IndexReport};
 use peek_core::model::{
-    EntityId, Evidence, Language, Relation, RelationKind, RepoPath, ResolutionState,
-    UnresolvedReason,
+    EntityId, Evidence, Language, Relation, RelationKind, ResolutionState, UnresolvedReason,
 };
 use peek_core::query::{Direction, Query, QueryError, WalkRequest};
 use peek_core::store::Store;
@@ -243,7 +242,7 @@ impl Graph {
 
         for state in all_states() {
             for relation in store
-                .relations_in_state(state, usize::MAX)
+                .relations_in_state(&state, usize::MAX)
                 .expect("relations in state")
             {
                 let row = flatten(relation);
@@ -530,7 +529,7 @@ impl Snapshot {
         }
         for state in all_states() {
             for relation in store
-                .relations_in_state(state, usize::MAX)
+                .relations_in_state(&state, usize::MAX)
                 .expect("relations in state")
             {
                 snapshot
@@ -995,7 +994,7 @@ pub fn score_queries(corpus: &Corpus, store: &Store, graph: &Graph) -> (Fraction
             } else {
                 failures.push(format!(
                     "{label}({}) does not contain {}",
-                    pair.target.qualified_name(),
+                    pair.target.qualified_name,
                     pair.expected.render()
                 ));
             }
