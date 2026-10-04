@@ -1103,12 +1103,12 @@ fn a_paged_file_listing_is_still_an_index_range() {
     assert!(plan.contains("USING INDEX"), "plan: {plan}");
     assert!(plan.contains("sqlite_autoindex_entity_1"), "plan: {plan}");
     // The row value has to become an index *constraint*, not a filter over the file's rows. Both
-    // plans name the primary key and neither says "SCAN entity", so the index name alone does not
-    // discriminate them — but a range reports its bound as `>?` in the index detail, and a filter
-    // reports only `(path=?)`. Reading a page with the second shape means re-walking every row of
-    // the file that is already behind the cursor, so a file of *n* entities costs O(n²/page).
+    // shapes name the primary key and neither says "SCAN entity", so the index name alone does not
+    // discriminate them: a filter plan reports `(path=?)` and re-walks every row already behind the
+    // cursor, which makes a file of *n* entities cost O(n²/page). A range reports the row value in
+    // the constraint, and that is the whole difference between a page and a rescan.
     assert!(
-        plan.contains(">?"),
+        plan.contains("(kind,qualified_name,entity_ordinal)>(?,?,?)"),
         "the cursor must be an index range rather than a filter over the file's rows: {plan}"
     );
     assert!(
