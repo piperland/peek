@@ -37,15 +37,21 @@
 #      gate notices when the `References` class stops producing. A gate that cannot
 #      fail on a dimension is not measuring it.
 #
-#   5. `scoped_identifier` dropped from the reference rule's node types.
+#   5. `field_identifier` dropped from the reference rule's node types.
 #      Every other mutation breaks extraction as well as resolution, so none of them
-#      can tell the new column from the ones already in the table. This one emits
-#      **one fewer reference row per qualified path** and changes nothing else:
-#      `service::describe` was a row nobody could place, and it is gone. The
-#      undecided count falls and `resolution_correctness` moves, because the
-#      denominator is the decided relations and dropping an unplaceable row changes
-#      which ones remain. It is the mutation that shows the new column is computed
-#      from the graph rather than from a number in a file.
+#      can tell the new column from the ones already in the table. This one removes
+#      `entry.count` and `entry.label` — the two field reads — and with them the two
+#      decided-and-wrong `count` edges the `same_file` rung places on
+#      `format_line.count`. `resolution_correctness` therefore **rises**, and that is
+#      the point: it is the mutation that demonstrates the hazard the column's design
+#      is built against. An engine that decided less and got the rest right would read
+#      better here, which is exactly why the wrong-edge count and the undecided count
+#      are published beside the fraction rather than folded into it.
+#
+#      It is also why this column is not a second `references`. `references` falls to
+#      near zero under this mutation and `resolution_correctness` rises: the two
+#      dimensions move in opposite directions on the same edit, which is the clearest
+#      evidence available that they measure different things.
 #
 # Usage:
 #   ./scripts/language-gate-mutation-check.sh
@@ -181,8 +187,10 @@ mutate '        node_types: &[
             "field_identifier",
             "scoped_identifier",
         ],' '        node_types: &[],' references "$BASE_REFERENCES"
-mutate '            "field_identifier",
-            "scoped_identifier",' '            "field_identifier",' resolution_correctness "$BASE_PLACEMENT"
+mutate '            "type_identifier",
+            "field_identifier",
+            "scoped_identifier",' '            "type_identifier",
+            "scoped_identifier",' resolution_correctness "$BASE_PLACEMENT"
 
 restore_registry
 trap - EXIT
