@@ -242,7 +242,8 @@ impl Price {
         price
     }
 
-    fn render(self) -> String {
+    /// The four numbers as a reader wants them, which is also what a gate run prints.
+    pub fn render(self) -> String {
         format!(
             "{} repair, {} DAMAGE, {} already undecided, {} decided with no placement claim",
             self.repair, self.damage, self.no_op, self.unknown

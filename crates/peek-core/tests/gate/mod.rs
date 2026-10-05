@@ -1024,11 +1024,12 @@ fn no_scope_clause_damages_a_placement_the_fixture_gives_a_referent_for() {
         for clause in scope::Clause::BOTH {
             let price = scope::Price::of(&labelled, clause, &graph);
             println!(
-                "{}: `{}` refuses {} of {} labelled placements ({price})",
+                "{}: `{}` refuses {} of {} labelled placements: {}",
                 language.as_str(),
                 clause.as_str(),
                 price.repair + price.damage,
-                labelled.len()
+                labelled.len(),
+                price.render()
             );
             assert_eq!(
                 price.damage,
