@@ -653,7 +653,10 @@ fn a_refusal_handed_back_to_the_ladder_stays_a_refusal() {
 /// inside the body of the function it belongs to.
 fn shadowed_import_tree(label: &str) -> TempTree {
     let tree = TempTree::new(label);
-    tree.write("src/model.rs", "pub fn entry(value: u8) -> u8 {\n    value\n}\n");
+    tree.write(
+        "src/model.rs",
+        "pub fn entry(value: u8) -> u8 {\n    value\n}\n",
+    );
     tree.write(
         "src/report.rs",
         "use crate::model::entry;\n\n\
