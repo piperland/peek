@@ -533,9 +533,9 @@ fn a_re_decision_reads_the_refusal_in_all_three_states_that_carry_the_class() {
             .find(|relation| relation.span.start_byte == original.span.start_byte + shift)
             .unwrap_or_else(|| {
                 panic!(
-                    "the row at offset {shift} is not in the store as a refusal; the {} relations \
-                     there are {:?}",
-                    refused_state,
+                    "the row at offset {shift} is not in the store as a refusal; the store holds \
+                     {} local_binding rows, at bytes {:?}",
+                    after.len(),
                     after
                         .iter()
                         .map(|relation| relation.span.start_byte)
