@@ -1011,8 +1011,7 @@ fn no_scope_clause_damages_a_placement_the_fixture_gives_a_referent_for() {
     for (language, directory) in discovered() {
         let (corpus, _scratch, graph) = measured(language, &directory);
         let items: Vec<scope::Item<'_>> = scope::items(&corpus, &graph);
-        let labelled: Vec<&scope::Item<'_>> =
-            items.iter().filter(|item| item.claimed).collect();
+        let labelled: Vec<&scope::Item<'_>> = items.iter().filter(|item| item.claimed).collect();
         for clause in scope::Clause::BOTH {
             let damage = scope::Price::of(&labelled, clause, &graph).damage;
             assert_eq!(

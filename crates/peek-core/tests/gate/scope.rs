@@ -131,11 +131,9 @@ pub fn covers(corpus: &Corpus, graph: &Graph, clause: Clause) -> BTreeSet<String
     corpus
         .binds
         .iter()
-        .filter(|bind| {
-            match clause {
-                Clause::OwnScope => !own_scope_declares(graph, bind).is_empty(),
-                Clause::ForeignBinding => !foreign_bindings(graph, bind).is_empty(),
-            }
+        .filter(|bind| match clause {
+            Clause::OwnScope => !own_scope_declares(graph, bind).is_empty(),
+            Clause::ForeignBinding => !foreign_bindings(graph, bind).is_empty(),
         })
         .map(Bind::key)
         .collect()
@@ -195,11 +193,7 @@ fn every_row(graph: &Graph) -> Vec<&RelationRow> {
 fn row_key(row: &RelationRow) -> String {
     format!(
         "{}|{}|{}|{}|{}",
-        row.kind,
-        row.source.path,
-        row.source.kind,
-        row.source.qualified_name,
-        row.target_name
+        row.kind, row.source.path, row.source.kind, row.source.qualified_name, row.target_name
     )
 }
 

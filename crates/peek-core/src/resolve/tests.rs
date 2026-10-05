@@ -637,6 +637,199 @@ fn a_refusal_handed_back_to_the_ladder_stays_a_refusal() {
 }
 
 // ---------------------------------------------------------------------------
+// A candidate has to be in scope where the use is written
+// ---------------------------------------------------------------------------
+//
+// Four tests, one per clause plus the pair that could have been one rule. Each is a
+// source a reviewer can read, and each names the answer the ladder would have given
+// before the rule as well as the one it gives after — because a rule whose damage is
+// invisible is a rule whose damage is unbounded.
+
+/// The fixture the first clause needs: an imported name a parameter shadows.
+///
+/// `describe` takes a parameter called `entry` and the file also imports a function
+/// called `entry` from another crate. Inside `describe` the parameter is the one the
+/// source means, in every language this engine reads, because a parameter list is
+/// inside the body of the function it belongs to.
+fn shadowed_import_tree(label: &str) -> TempTree {
+    let tree = TempTree::new(label);
+    tree.write("src/model.rs", "pub fn entry(value: u8) -> u8 {\n    value\n}\n");
+    tree.write(
+        "src/report.rs",
+        "use crate::model::entry;\n\n\
+         pub fn describe(entry: u8) -> u8 {\n    entry\n}\n\n\
+         pub fn renamed() -> u8 {\n    entry(1)\n}\n",
+    );
+    tree
+}
+
+#[test]
+fn a_declaration_in_the_source_own_scope_beats_the_import_it_shadows() {
+    // The first clause, and the fixture is shaped so a rung that ignored it would look right.
+    // `model.rs` declares exactly one entity named `entry`, so a repository-wide lookup agrees
+    // with the parameter by accident; only the *import* rung can be shown to have been wrong.
+    let tree = shadowed_import_tree("own-scope");
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let shadowed = references_from(
+        &relations_of(&store, RelationKind::References),
+        "describe",
+        "entry",
+    );
+    assert_eq!(
+        shadowed.len(),
+        1,
+        "the fixture writes `entry` once in `describe` and once as its parameter's own \
+         declaration, and only the body use is a reference"
+    );
+    assert_eq!(
+        shadowed[0].target,
+        Some(id("src/report.rs", EntityKind::Parameter, "describe.entry")),
+        "the parameter is what the body means, and it is in the same file as the import that beat \
+         it before: {}",
+        state_of(shadowed[0])
+    );
+    assert_eq!(
+        rung_name(&decided_by(shadowed[0])),
+        "same_file",
+        "and the rung that answered is the one that reads the source's own scope: {}",
+        state_of(shadowed[0])
+    );
+
+    // The other half of the clause, and the case that makes it a *scope* rule rather than a
+    // blunt one: the same import still answers everywhere the parameter is not in scope. A rule
+    // that refused the import for the whole file would break this row.
+    let elsewhere = references_from(
+        &relations_of(&store, RelationKind::References),
+        "renamed",
+        "entry",
+    );
+    assert_eq!(
+        elsewhere[0].target,
+        Some(id("src/model.rs", EntityKind::Function, "entry")),
+        "`renamed` has no `entry` of its own, so the import is the answer there: {}",
+        state_of(elsewhere[0])
+    );
+}
+
+#[test]
+fn a_binding_of_another_declaration_is_not_in_scope_even_in_the_same_file() {
+    // The second clause, and the sense in which same file is not the same scope.
+    //
+    // Two functions in one file each declare a parameter called `count`, and a third reads
+    // `charge.count` through a parameter of its own. The field read is the answer, and a
+    // same-file rung that offered the parameters would get it wrong for both reasons at once:
+    // the name belongs to a different declaration, and a field is not a binding at all.
+    let tree = TempTree::new("foreign-binding");
+    tree.write(
+        "src/model.rs",
+        "pub struct Charge {\n    pub count: u8,\n}\n",
+    );
+    tree.write(
+        "src/report.rs",
+        "pub fn first(count: u8) -> u8 {\n    count\n}\n\n\
+         pub fn second(count: u8) -> u8 {\n    count\n}\n\n\
+         pub fn total(charge: &Charge) -> u8 {\n    charge.count\n}\n",
+    );
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let read = references_from(
+        &relations_of(&store, RelationKind::References),
+        "total",
+        "count",
+    );
+    assert_eq!(
+        read[0].target,
+        Some(id("src/model.rs", EntityKind::Field, "Charge.count")),
+        "`charge.count` is a field read, and both parameters called `count` are in the same file: {}",
+        state_of(read[0])
+    );
+
+    // And the two parameters are still each function's own. The clause is not "a parameter is a
+    // worse candidate" — it is "a parameter of a function this use is not written inside is not a
+    // candidate", so both of these are unchanged by it.
+    for (subject, qualified) in [("first", "first.count"), ("second", "second.count")] {
+        let own = references_from(&relations_of(&store, RelationKind::References), subject, "count");
+        assert_eq!(
+            own[0].target,
+            Some(id("src/report.rs", EntityKind::Parameter, qualified)),
+            "`{subject}` reads its own parameter: {}",
+            state_of(own[0])
+        );
+    }
+}
+
+#[test]
+fn a_call_through_a_parameter_is_not_a_call_of_the_parameter() {
+    // The third clause, and the only one that reads the relation's class — so it is the clause
+    // most likely to be got wrong by a reader who assumes one rule fits both classes.
+    //
+    // `body` is a parameter of type `impl Fn() -> usize`. A reference to `body` is the parameter,
+    // and a call of `body` invokes the value the parameter holds, which no entity in the index
+    // denotes. Getting this backwards produces an edge saying a function calls its own parameter.
+    let tree = TempTree::new("call-through-a-binding");
+    tree.write(
+        "src/lib.rs",
+        "pub fn run(body: impl Fn() -> usize, limit: usize) -> usize {\n    \
+         let mut last = 0;\n    for step in 0..limit {\n        last = body();\n    }\n    last\n}\n",
+    );
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let call = the_call(&store, "body");
+    assert!(
+        !call.target.is_some(),
+        "a call through a parameter has no static target, and naming the parameter would say this \
+         function invokes itself: {}",
+        state_of(&call)
+    );
+
+    // The same name, referred to rather than invoked. This is the pair the two clauses differ on,
+    // and asserting it is what stops the third clause being read as a relaxation of the first.
+    let reference = references_from(
+        &relations_of(&store, RelationKind::References),
+        "run",
+        "body",
+    );
+    assert_eq!(
+        reference[0].target,
+        Some(id("src/lib.rs", EntityKind::Parameter, "run.body")),
+        "a reference to `body` is the parameter, and only the call has no static target: {}",
+        state_of(reference[0])
+    );
+}
+
+#[test]
+fn a_declaration_in_an_enclosing_scope_answers_for_everything_inside_it() {
+    // The shape that makes the rule a rule about scope rather than about a function's own
+    // parameters: a field on a type, read from a method of that type and from a function that
+    // takes one. Both are answered by the declaration the scope encloses, and neither falls
+    // through to a repository-wide lookup.
+    let tree = TempTree::new("enclosing-scope");
+    tree.write(
+        "src/lib.rs",
+        "pub struct Charge {\n    pub count: u8,\n}\n\n\
+         impl Charge {\n    pub fn count(&self) -> u8 {\n        self.count\n    }\n}\n\n\
+         pub fn total(charge: &Charge) -> u8 {\n    charge.count\n}\n",
+    );
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    for subject in ["Charge.count", "total"] {
+        let read = references_from(&relations_of(&store, RelationKind::References), subject, "count");
+        assert_eq!(
+            read[0].target,
+            Some(id("src/lib.rs", EntityKind::Field, "Charge.count")),
+            "`{subject}` reads a field of `Charge`, and the field is declared in a scope that \
+             encloses it: {}",
+            state_of(read[0])
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The evidence order
 // ---------------------------------------------------------------------------
 

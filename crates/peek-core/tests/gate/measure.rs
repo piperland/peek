@@ -450,7 +450,9 @@ impl Graph {
 
     /// The entity one rendered identity names, if this graph holds it.
     pub fn row_at(&self, rendered: &str) -> Option<&EntityRow> {
-        self.by_key.get(rendered).and_then(|found| found.first())
+        self.by_key
+            .get(rendered)
+            .and_then(|found| found.first())
             .map(|index| &self.rows[*index])
     }
 
@@ -599,8 +601,7 @@ impl EntityRow {
     /// Whether this entity's own name is `name`, and it is a declaration rather
     /// than the harness's own layout.
     fn declares(&self, name: &str) -> bool {
-        self.qualified_name.rsplit('.').next() == Some(name)
-            && !is_a_structure_kind(&self.kind)
+        self.qualified_name.rsplit('.').next() == Some(name) && !is_a_structure_kind(&self.kind)
     }
 
     /// Whether the name is a binding, which exists only inside what binds it.
@@ -612,7 +613,10 @@ impl EntityRow {
     /// written in a scope wide enough that the same-file and repository-wide
     /// rungs can still offer it, and the measurement does not claim otherwise.
     pub fn is_binding(&self) -> bool {
-        matches!(self.kind.as_str(), "parameter" | "variable" | "type_parameter")
+        matches!(
+            self.kind.as_str(),
+            "parameter" | "variable" | "type_parameter"
+        )
     }
 }
 
@@ -1472,9 +1476,7 @@ pub fn measure_reach(corpus: &Corpus, graph: &Graph) -> Vec<Reach> {
                         .is_some_and(|rendered| scope_declarations.contains(rendered)),
                 ),
                 placed_in_source_file: Some(
-                    placed
-                        .as_ref()
-                        .is_some_and(|row| row.path == bind.path),
+                    placed.as_ref().is_some_and(|row| row.path == bind.path),
                 ),
                 placed_is_foreign_binding: placed.as_ref().map(|row| {
                     row.is_binding() && !scope_declarations.contains(&row.key().render())
