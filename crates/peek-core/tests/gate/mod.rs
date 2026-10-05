@@ -359,6 +359,64 @@ fn every_registered_language_meets_its_recorded_floor() {
     );
 }
 
+/// R-020. Two counts of different things must never share an arithmetic population.
+///
+/// `placement` publishes `decided` (relation rows) beside `wrong_sites` (labelled sites) and
+/// `wrong_edges` (rows). A reader who took `wrong_sites` for the row count computed `48 - 6 = 42`
+/// where the answer is `48 - 12 = 36`. Both numbers were true about their own quantity and the error
+/// was entirely in the reader's arithmetic — which is the failure mode: nothing in the artefact said
+/// which population a number belonged to.
+///
+/// So this asserts the *relationship* rather than the values. `decided - correct` must equal
+/// `wrong_edges`, and `wrong_sites` must be at most `wrong_edges`, because one labelled site can
+/// carry several rows. If a future change ever conflates the two, the second assertion fails.
+#[test]
+fn the_placement_counts_are_distinguishable_populations() {
+    let rows = all_rows();
+    let json = matrix::to_json(&rows);
+    let placement = json
+        .split("\"placement\"")
+        .nth(1)
+        .expect("the matrix publishes a placement block");
+
+    let number = |key: &str| -> u64 {
+        let at = placement
+            .find(&format!("\"{key}\":"))
+            .unwrap_or_else(|| panic!("placement publishes `{key}`"))
+            + format!("\"{key}\":").len();
+        placement[at..]
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .unwrap_or_else(|_| panic!("`{key}` is not a number"))
+    };
+
+    let decided = number("decided");
+    let correct = number("correct");
+    let wrong_edges = number("wrong_edges");
+    let wrong_sites = number("wrong_sites");
+
+    assert_eq!(
+        decided - correct,
+        wrong_edges,
+        "every decided relation is either right or wrong: decided {decided} - correct {correct} \
+         must be the wrong EDGE count, which is {wrong_edges}. If this fails, the two counts have \
+         been mixed."
+    );
+    assert!(
+        wrong_sites <= wrong_edges,
+        "a labelled site is a place, not a row: {wrong_sites} sites cannot carry more edges than \
+         there are {wrong_edges} wrong edges. If this fails, sites and edges are the same number \
+         under two names."
+    );
+    assert!(
+        correct <= decided,
+        "correct {correct} cannot exceed decided {decided}: the fraction would be above 1"
+    );
+}
+
 #[test]
 fn the_published_matrix_is_the_current_measurement() {
     // The check that makes a published number honest. It fails when the engine

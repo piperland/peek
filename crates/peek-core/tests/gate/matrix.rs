@@ -359,11 +359,42 @@ pub fn to_json(rows: &[Row]) -> String {
                             ("correct", Json::Num(measurement.placement.correct)),
                             // `wrong_sites` and `wrong_edges` are different populations and are both
                             // published: only the second subtracts from `decided`.
+                            //
+                            // R-020. These two were once published as `6` beside a `Decided` that
+                            // counts rows, and a reader computed `48 - 6 = 42` where the answer is
+                            // `48 - 12 = 36`. Both numbers were true about their own quantity and the
+                            // error was in putting them in one column. So every count here carries
+                            // its unit in the key, and the two are never summed against `decided`
+                            // by anything that does not say which it is using.
                             (
                                 "wrong_sites",
                                 Json::Num(measurement.placement.wrong.len() as u64),
                             ),
                             ("wrong_edges", Json::Num(measurement.placement.wrong_edges)),
+                            // The identity that makes the two counts checkable, so a reader never has
+                            // to take the relationship on trust: decided - correct = wrong_edges,
+                            // and wrong_sites <= wrong_edges because one site can carry several rows.
+                            (
+                                "invariant",
+                                Json::obj(vec![
+                                    ("decided_minus_correct", Json::Num(
+                                        measurement.placement.decided
+                                            - measurement.placement.correct,
+                                    )),
+                                    ("equals_wrong_edges", Json::Bool(
+                                        measurement.placement.decided
+                                            - measurement.placement.correct
+                                            == measurement.placement.wrong_edges,
+                                    )),
+                                    (
+                                        "sites_at_most_edges",
+                                        Json::Bool(
+                                            measurement.placement.wrong.len() as u64
+                                                <= measurement.placement.wrong_edges,
+                                        ),
+                                    ),
+                                ]),
+                            ),
                             (
                                 "undecided",
                                 Json::Num(measurement.placement.undecided.len() as u64),
