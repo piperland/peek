@@ -1404,6 +1404,16 @@ impl<'s> Resolver<'s> {
     /// another function, and the distinction is the whole of the second half of the rule:
     /// `report.rs` declares a parameter `format_line.count`, and a use of `count` written
     /// in `render` cannot mean it.
+    ///
+    /// **And the scope chain is never a candidate.** A declaration does not use its own name, and a
+    /// name declared *outside* the use is not a use of it either — which is the rule the fixture's
+    /// own negative labels state. It is not a formality either: a Rust `impl` block's module is
+    /// **not** contained by the type it belongs to (the walker gives the block its own scope row and
+    /// the type does not enclose it), so the chain of a method runs through the block and a method
+    /// whose own name is the field it reads — `impl Charge { pub fn count(&self) { self.count } }` —
+    /// would otherwise offer *itself* as the in-scope declaration of `count` and answer with a
+    /// self-edge. Measured, not reasoned: without this clause that fixture resolves `self.count`
+    /// onto `Charge.count` the method, and with it the reference lands on the field.
     fn declared_around(
         &mut self,
         relation: &Relation,
@@ -1425,6 +1435,7 @@ impl<'s> Resolver<'s> {
                 };
                 if target.name() == name
                     && is_declaration(target.kind())
+                    && !scope.contains(&target)
                     && !found.contains(&target)
                 {
                     found.push(target);

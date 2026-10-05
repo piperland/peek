@@ -816,9 +816,11 @@ fn a_declaration_in_an_enclosing_scope_answers_for_everything_inside_it() {
         );
     }
 
-    // The shape the fixture above avoids: a method whose own name is the field it reads. Printed
-    // rather than asserted, because a method and a field of one struct share a qualified name and
-    // differ only by kind, and the answer decides whether the scope rule has to rank its own set.
+    // The shape the fixture above avoids, and the one the rule's last clause is about: a method
+    // whose **own** name is the field it reads. An `impl` block's module row is not contained by
+    // the type it belongs to, so the method's scope chain runs through the block — and the block
+    // contains the method. Without the clause that makes the method the in-scope declaration of
+    // `count`, and the reference lands on itself.
     let same = TempTree::new("method-named-after-the-field");
     same.write(
         "src/lib.rs",
@@ -827,38 +829,15 @@ fn a_declaration_in_an_enclosing_scope_answers_for_everything_inside_it() {
     );
     let mut store = same.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
-    let rows = relations_of(&store, RelationKind::References);
-    println!("METHOD-NAMED-AFTER-THE-FIELD");
-    for relation in rows.iter().filter(|r| r.target_name == "count") {
-        println!(
-            "  {} -> {} on {:?}",
-            relation.source, relation.resolution.describe(), relation.target
-        );
-    }
-    println!(
-        "  the entities in the file: {:?}",
-        store
-            .entities_in_file(
-                &crate::model::RepoPath::new("src/lib.rs").expect("a path"),
-                64,
-            )
-            .expect("entities")
-            .iter()
-            .map(|e| e.summary())
-            .collect::<Vec<_>>()
-    );
-    println!(
-        "  candidates in the store for it: {:?}",
-        store
-            .ambiguous_candidates(
-                &id("src/lib.rs", EntityKind::Method, "Charge.count"),
-                RelationKind::References,
-                "count",
-            )
-            .expect("candidates")
-    );
     let all = relations_of(&store, RelationKind::References);
-    let _ = all;
+    let read = references_from(&all, "Charge.count", "count");
+    assert_eq!(
+        read[0].target,
+        Some(id("src/lib.rs", EntityKind::Field, "Charge.count")),
+        "`self.count` inside a method of the same name is the field, and a declaration does not \
+         use its own name: {}",
+        state_of(read[0])
+    );
 }
 
 // ---------------------------------------------------------------------------
