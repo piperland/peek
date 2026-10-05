@@ -377,15 +377,21 @@ pub fn to_json(rows: &[Row]) -> String {
                             (
                                 "invariant",
                                 Json::obj(vec![
-                                    ("decided_minus_correct", Json::Num(
-                                        measurement.placement.decided
-                                            - measurement.placement.correct,
-                                    )),
-                                    ("equals_wrong_edges", Json::Bool(
-                                        measurement.placement.decided
-                                            - measurement.placement.correct
-                                            == measurement.placement.wrong_edges,
-                                    )),
+                                    (
+                                        "decided_minus_correct",
+                                        Json::Num(
+                                            measurement.placement.decided
+                                                - measurement.placement.correct,
+                                        ),
+                                    ),
+                                    (
+                                        "equals_wrong_edges",
+                                        Json::Bool(
+                                            measurement.placement.decided
+                                                - measurement.placement.correct
+                                                == measurement.placement.wrong_edges,
+                                        ),
+                                    ),
                                     (
                                         "sites_at_most_edges",
                                         Json::Bool(
