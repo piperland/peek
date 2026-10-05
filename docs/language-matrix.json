@@ -156,9 +156,9 @@
           "percent": "96.15"
         },
         "resolution_correctness": {
-          "numerator": 36,
-          "denominator": 41,
-          "percent": "87.80"
+          "numerator": 52,
+          "denominator": 52,
+          "percent": "100.00"
         },
         "imports": {
           "numerator": 10,
@@ -298,10 +298,10 @@
       "entities_held_out_of_the_symbol_denominator": 11,
       "relation_states": {
         "calls": {
-          "ambiguous": 4,
+          "ambiguous": 2,
           "inferred": 1,
           "resolved": 9,
-          "unresolved": 25
+          "unresolved": 27
         },
         "contains": {
           "resolved": 61
@@ -318,9 +318,9 @@
           "resolved": 1
         },
         "references": {
-          "ambiguous": 19,
-          "inferred": 14,
-          "resolved": 66,
+          "ambiguous": 6,
+          "inferred": 21,
+          "resolved": 72,
           "unresolved": 93
         }
       },
@@ -338,16 +338,16 @@
         "tests_found": 0
       },
       "placement": {
-        "decided": 41,
-        "correct": 36,
-        "wrong_sites": 4,
-        "wrong_edges": 5,
+        "decided": 52,
+        "correct": 52,
+        "wrong_sites": 0,
+        "wrong_edges": 0,
         "invariant": {
-          "decided_minus_correct": 5,
+          "decided_minus_correct": 0,
           "equals_wrong_edges": true,
           "sites_at_most_edges": true
         },
-        "undecided": 50,
+        "undecided": 40,
         "unlabelled_relations": 3,
         "reach": [
           {
@@ -713,13 +713,13 @@
           },
           {
             "label": "references|src/model.rs|function|entry|label",
-            "verdict": "resolver: the source's own scope declares the name, and a rung placed the edge outside it",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 2,
             "declared_in_the_source_scope": true,
             "label_in_source_scope": true,
-            "placed_in_source_scope": false,
-            "placed_in_source_file": false,
-            "placed_is_a_foreign_binding": null,
+            "placed_in_source_scope": true,
+            "placed_in_source_file": true,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [
               "src/model.rs | parameter | entry.label"
             ],
@@ -732,13 +732,13 @@
           },
           {
             "label": "references|src/model.rs|function|entry|count",
-            "verdict": "resolver: the source's own scope declares the name, and a rung placed the edge outside it",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 4,
             "declared_in_the_source_scope": true,
             "label_in_source_scope": true,
-            "placed_in_source_scope": false,
-            "placed_in_source_file": false,
-            "placed_is_a_foreign_binding": null,
+            "placed_in_source_scope": true,
+            "placed_in_source_file": true,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [
               "src/model.rs | parameter | entry.count"
             ],
@@ -759,7 +759,7 @@
             "label_in_source_scope": false,
             "placed_in_source_scope": false,
             "placed_in_source_file": false,
-            "placed_is_a_foreign_binding": null,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [],
             "correct_entity_is_a_candidate": true,
             "target_is_in_the_index": true,
@@ -770,13 +770,13 @@
           },
           {
             "label": "references|src/report.rs|function|render|count",
-            "verdict": "resolver: the edge is on a binding of another declaration in the same file, which the use cannot see",
+            "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 4,
             "declared_in_the_source_scope": false,
             "label_in_source_scope": false,
             "placed_in_source_scope": false,
-            "placed_in_source_file": true,
-            "placed_is_a_foreign_binding": true,
+            "placed_in_source_file": false,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [],
             "correct_entity_is_a_candidate": true,
             "target_is_in_the_index": true,
@@ -795,7 +795,7 @@
             "label_in_source_scope": false,
             "placed_in_source_scope": false,
             "placed_in_source_file": false,
-            "placed_is_a_foreign_binding": null,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [],
             "correct_entity_is_a_candidate": true,
             "target_is_in_the_index": true,
@@ -812,7 +812,7 @@
             "label_in_source_scope": false,
             "placed_in_source_scope": false,
             "placed_in_source_file": false,
-            "placed_is_a_foreign_binding": null,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [],
             "correct_entity_is_a_candidate": true,
             "target_is_in_the_index": true,
@@ -823,13 +823,13 @@
           },
           {
             "label": "references|src/service.rs|function|describe|count",
-            "verdict": "resolver: the edge is on a binding of another declaration in the same file, which the use cannot see",
+            "verdict": "resolver: the correct entity is a candidate by name",
             "entities_carrying_the_name": 4,
             "declared_in_the_source_scope": false,
             "label_in_source_scope": false,
             "placed_in_source_scope": false,
-            "placed_in_source_file": true,
-            "placed_is_a_foreign_binding": true,
+            "placed_in_source_file": false,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [],
             "correct_entity_is_a_candidate": true,
             "target_is_in_the_index": true,
@@ -848,7 +848,7 @@
             "label_in_source_scope": false,
             "placed_in_source_scope": false,
             "placed_in_source_file": false,
-            "placed_is_a_foreign_binding": null,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [],
             "correct_entity_is_a_candidate": true,
             "target_is_in_the_index": true,
@@ -867,7 +867,7 @@
             "label_in_source_scope": false,
             "placed_in_source_scope": false,
             "placed_in_source_file": false,
-            "placed_is_a_foreign_binding": null,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [],
             "correct_entity_is_a_candidate": true,
             "target_is_in_the_index": true,
@@ -1170,13 +1170,13 @@
           },
           {
             "label": "references|src/traits.rs|method|Ticks.save|entry",
-            "verdict": "resolver: the source's own scope declares the name, and a rung placed the edge outside it",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": true,
             "label_in_source_scope": true,
-            "placed_in_source_scope": false,
-            "placed_in_source_file": false,
-            "placed_is_a_foreign_binding": null,
+            "placed_in_source_scope": true,
+            "placed_in_source_file": true,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [
               "src/traits.rs | parameter | Ticks.save.entry"
             ],
@@ -1193,13 +1193,13 @@
           },
           {
             "label": "references|src/traits.rs|method|Meters.save|entry",
-            "verdict": "resolver: the source's own scope declares the name, and a rung placed the edge outside it",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": true,
             "label_in_source_scope": true,
-            "placed_in_source_scope": false,
-            "placed_in_source_file": false,
-            "placed_is_a_foreign_binding": null,
+            "placed_in_source_scope": true,
+            "placed_in_source_file": true,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [
               "src/traits.rs | parameter | Meters.save.entry"
             ],
@@ -1448,12 +1448,12 @@
           },
           {
             "label": "references|src/report.rs|function|format_line_inner|entry",
-            "verdict": "resolver: the source's own scope declares the name, and a rung placed the edge outside it",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": true,
             "label_in_source_scope": true,
-            "placed_in_source_scope": false,
-            "placed_in_source_file": false,
+            "placed_in_source_scope": true,
+            "placed_in_source_file": true,
             "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [
               "src/report.rs | parameter | format_line_inner.entry"
@@ -1824,13 +1824,13 @@
           },
           {
             "label": "references|src/service.rs|method|Runner.run|body",
-            "verdict": "resolver: the source's own scope declares the name, and a rung placed the edge outside it",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 3,
             "declared_in_the_source_scope": true,
             "label_in_source_scope": true,
-            "placed_in_source_scope": false,
-            "placed_in_source_file": false,
-            "placed_is_a_foreign_binding": null,
+            "placed_in_source_scope": true,
+            "placed_in_source_file": true,
+            "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [
               "src/service.rs | parameter | Runner.run.body"
             ],
@@ -1862,12 +1862,12 @@
           },
           {
             "label": "references|src/service.rs|function|describe|entry",
-            "verdict": "resolver: the source's own scope declares the name, and a rung placed the edge outside it",
+            "verdict": "resolver: the source's own scope declares the name, and a weaker rung answered",
             "entities_carrying_the_name": 6,
             "declared_in_the_source_scope": true,
             "label_in_source_scope": true,
-            "placed_in_source_scope": false,
-            "placed_in_source_file": false,
+            "placed_in_source_scope": true,
+            "placed_in_source_file": true,
             "placed_is_a_foreign_binding": false,
             "the_source_scope_declares": [
               "src/service.rs | parameter | describe.entry"
