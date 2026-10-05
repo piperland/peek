@@ -112,9 +112,18 @@
 //! **A refusal for `local_binding` is the case where that limit has teeth**, and it is written down
 //! here rather than discovered on a later pass. [`ResolutionState::Unresolved`] carries no evidence,
 //! so the moment the head rule fires the class that justified it is gone from the stored row. A
-//! second pass reading only the class would find nothing and walk the ladder, and R5 would place
-//! `out` on `report.rs`'s `render.out` parameter — the confidently-wrong edge the refusal exists to
+//! second pass handed the row would find nothing in it and walk the ladder, and R5 would place `out`
+//! on `report.rs`'s `render.out` parameter — the confidently-wrong edge the refusal exists to
 //! remove, put back by the act of removing it.
+//!
+//! How often that happens is a separate question and it is measured rather than assumed. **A scoped
+//! pass does not re-decide a refused row at all**: [`resolve_paths`] reaches a row either through the
+//! outgoing edges of a path it was given or through [`Store::incoming`], which matches on
+//! `target_path`, and a refusal has no target. So the stored reason is a guard on what a caller may
+//! hand [`resolve_paths`] rather than a repair for a path the engine walks on its own, and the two
+//! routes that do re-decide these rows both arrive carrying the class — a re-extracted file re-emits
+//! the relation as `Pending` with `local_binding` on it. [`refused_for_local_binding`] states which
+//! is which.
 //!
 //! **The alternative was to give [`ResolutionState::Unresolved`] a payload, and it was rejected for
 //! the wire format rather than for the model.** [`UnresolvedReason`] is a unit variant for every
@@ -129,11 +138,6 @@
 //!   its own variant, counted in [`ResolutionReport::unresolved_by_reason`] and printed by
 //!   [`ResolutionReport::summary`], where `no_candidate` would have hidden the difference between
 //!   "this name is not in the repository" and "this occurrence does not mean an entity".
-//!
-//! [`refused_for_local_binding`] is the other half of the trade: the stored reason is read back, so a
-//! second pass refuses the same relation for the same reason instead of placing it. That is what
-//! stops the loss from being *silent*. It does not restore the binder, and nothing here claims it
-//! does.
 //!
 //! # What each rung does, and what it refuses to do
 //!
@@ -950,13 +954,13 @@ fn scope_evidence(state: &ResolutionState) -> Option<String> {
 
 /// The binder node type a relation carries as a local binding, in whichever state it is in.
 ///
-/// **Three states, and the second and third are not hypothetical.** `Ambiguous` and `Unresolved`
-/// carry no evidence, so a relation refused by [`local_binding`] leaves this reading with `None` on
-/// the second pass — which is the whole of the cost written down in this module's documentation
-/// and is why [`Resolver::decide`] reads the refusal itself rather than only the class. The
-/// `Resolved` and `Inferred` arms are read even though nothing in this engine produces them,
-/// because the class is the field that carries the claim and a reader who found a `Resolved` row
-/// carrying it must get the same answer as one who found it `Pending`.
+/// **Three states, and the second and third are read for a reason rather than in case.** This engine
+/// produces none of them — the head rule refuses before either could be reached — and they are read
+/// anyway because the class is the field that carries the claim, and a row a `Resolved`/`Inferred`
+/// build, or a future build, left carrying it has to get the same answer as one found `Pending`. The
+/// second pass is the case that makes this a habit rather than a precaution: [`resolve_paths`]
+/// re-decides rows that already hold an answer, and a `Pending`-only read finds `None` there and
+/// walks a different ladder — see [`refused_for_local_binding`].
 fn local_binding(state: &ResolutionState) -> Option<String> {
     match state {
         ResolutionState::Pending {
@@ -976,21 +980,22 @@ fn local_binding(state: &ResolutionState) -> Option<String> {
 
 /// Whether a relation is refused because a binder claims the name, in any state it can be in.
 ///
-/// **The fourth arm is the cost, and it is the reason this is a separate function rather than a
-/// fourth case in [`local_binding`].** [`ResolutionState::Unresolved`] carries no evidence, so once
-/// the head rule fires the class is gone from the stored row and `peek explain` can name the reason
-/// but not the binder. A re-decision that then reads only the class finds nothing and walks the
-/// ladder — and R5 will happily place `out` on `report.rs`'s `render.out`, which is the exact
-/// confidently-wrong edge the rule exists to remove.
+/// **The fourth arm is the cost, and it is why this is a separate function rather than a fourth
+/// case in [`local_binding`].** [`ResolutionState::Unresolved`] carries no evidence, so once the
+/// head rule fires the class is gone from the stored row and `peek explain` can name the reason but
+/// not the binder. Handed the row, the ladder finds nothing in it and R5 will place `out` on
+/// `report.rs`'s `render.out` — the exact confidently-wrong edge the rule exists to remove, restored
+/// by the act of removing it.
 ///
-/// The repair is to let the refusal refuse again, and the reason that is sound rather than a
-/// shortcut: the claim is about a byte in the **source** file, and a re-decision re-reads the
-/// **index**, not that file. Every relation that comes back through [`resolve_paths`] holding this
-/// reason came from a file that was not re-extracted — a scoped pass re-reads the outgoing edges
-/// of the paths it was given (which the extractor has just re-emitted as `Pending`, carrying the
-/// class) and the incoming edges of the entities those paths declare (whose sources were not
-/// touched). So the claim is exactly as true on the second pass as on the first, and a fresh
-/// `Pending` row from a re-extracted file is refused by the class arm anyway.
+/// **How often a refused row is handed back is a separate question, and it was measured rather than
+/// assumed.** [`resolve_paths`] opens two doors: the outgoing edges of the paths it was given, and
+/// the incoming edges of the entities those paths declare. A refusal has no target, so
+/// `Store::incoming` matches on `target_path` and cannot find it — a scoped pass therefore does not
+/// re-decide a refused row at all, and this arm never fires from one. The two routes that do hand a
+/// row over are the caller's displaced snapshot (this function's arm, and the reason it is here) and
+/// a re-extraction of the row's own file, which re-emits the relation as `Pending` **with the class**
+/// and is refused by the arm above. So the arm is a guard on a public function's input rather than a
+/// repair for a path the engine walks, and it is written as one.
 ///
 /// What it does not do is make the claim checkable. The binder is gone from the row and this
 /// function cannot put it back; that is a real loss and it is why the reason exists as a variant
