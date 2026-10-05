@@ -399,7 +399,9 @@ mod tests {
                 language.field_count()
             );
             assert_eq!(
-                language.field_id_for_name(name).map(|found| found as usize),
+                language
+                    .field_id_for_name(name)
+                    .map(|found| usize::from(found.get())),
                 Some(id),
                 "field `{name}` is id {id} and the lookup disagrees, so the two APIs do not \
                  agree on the numbering this enumeration walks"

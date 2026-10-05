@@ -44,6 +44,19 @@ cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 BINDING="crates/peek-core/tests/gate/binding.rs"
 
+# **The other three, and the three are the three things that can make the class lie.** The
+# measurement reads the tree itself, the extractor writes the class the index will carry, and
+# the grammar validator decides whether the binding table's strings name anything real. A
+# mutation that breaks only the measurement proves the measurement is load-bearing and says
+# nothing about the engine, which is the half that reaches a stored index.
+EXTRACT_BINDINGS="crates/peek-core/src/extract/bindings.rs"
+REGISTRY="crates/peek-core/src/extract/registry.rs"
+GRAMMAR="crates/peek-core/src/extract/grammar.rs"
+
+for required in "$BINDING" "$EXTRACT_BINDINGS" "$REGISTRY" "$GRAMMAR"; do
+  [ -f "$required" ] || fail "$required not found"
+done
+
 if [ -f "$HOME/.cargo/env" ]; then
   # shellcheck disable=SC1091
   . "$HOME/.cargo/env"
@@ -53,28 +66,37 @@ export PATH="$HOME/.cargo/bin:$PATH"
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
 fail() { printf '\n\033[1;31mMUTATION CHECK FAILED: %s\033[0m\n' "$1" >&2; exit 1; }
 
-[ -f "$BINDING" ] || fail "$BINDING not found"
+for required in "$BINDING" "$EXTRACT_BINDINGS" "$REGISTRY" "$GRAMMAR"; do
+  [ -f "$required" ] || fail "$required not found"
+done
 
-restore_binding() {
-  if [ -f "$BINDING.mutation.bak" ]; then
-    mv "$BINDING.mutation.bak" "$BINDING"
-    touch "$BINDING"
-  fi
+restore_files() {
+  for file in "$BINDING" "$EXTRACT_BINDINGS" "$REGISTRY" "$GRAMMAR"; do
+    if [ -f "$file.mutation.bak" ]; then
+      mv "$file.mutation.bak" "$file"
+      touch "$file"
+    fi
+  done
   return 0
 }
-trap restore_binding EXIT
+trap restore_files EXIT
 
-# `mutate <search> <replacement> <test that must fail>`
+# `mutate <file> <search> <replacement> <test that must fail> [cargo target]`
 #
 # The whole test binary runs rather than one test, because `cargo test` exits non-zero and
 # its last line is a `rerun with` suggestion rather than a verdict.
+#
+# The target defaults to the gate, because that is where most of the claims live. The two
+# checks that live in the library name their own: a test in one binary cannot observe a
+# mutation made on behalf of another.
 mutate() {
-  local search="$1" replacement="$2" test="$3"
+  local file="$1" search="$2" replacement="$3" test="$4" target="${5:---test language_gate}"
 
   step "mutation for $test"
-  cp "$BINDING" "$BINDING.mutation.bak"
+  [ -f "$file" ] || fail "$file not found"
+  cp "$file" "$file.mutation.bak"
 
-  python3 - "$BINDING" "$search" "$replacement" <<'PY'
+  python3 - "$file" "$search" "$replacement" <<'PY'
 import sys
 path, search, replacement = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(path, encoding="utf-8").read()
@@ -84,7 +106,7 @@ open(path, "w", encoding="utf-8").write(text.replace(search, replacement))
 PY
 
   local output
-  output="$(cargo test --test language_gate -- --test-threads=1 "$test" 2>&1 || true)"
+  output="$(cargo test $target -- --test-threads=1 "$test" 2>&1 || true)"
 
   # Restore before deciding anything, so a failure below cannot leave the tree mutated.
   # The trap is the backstop if this script is interrupted.
@@ -94,15 +116,14 @@ PY
   # built from the mutated source in `target/`, and the next run measures the mutation
   # while reading the clean source. That has already cost three rounds on the sibling
   # script; it is written down here so it is not paid twice.
-  restore_binding
-  touch "$BINDING"
+  restore_files
 
   if ! printf '%s' "$output" | grep -q '^test result:'; then
     printf '%s\n' "$output"
     fail "$test did not run: the mutation does not compile, so the result is unknown rather \
 than a pass"
   fi
-  if ! printf '%s' "$output" | grep -q '^test gate::.*FAILED'; then
+  if ! printf '%s' "$output" | grep -Eq "^test .*${test} .*FAILED"; then
     printf '%s\n' "$output"
     fail "$test passed with the measurement it checks broken, so it does not measure it"
   fi
@@ -117,12 +138,12 @@ case "$BASE" in
   *) ;;
 esac
 
-mutate \
+mutate "$BINDING" \
   'const ENTITYLESS_BINDERS: &[&str] = &["let_declaration", "for_expression", "closure_expression"];' \
   'const ENTITYLESS_BINDERS: &[&str] = &[];' \
   'a_binding_is_classified_entityless_at_least_once'
 
-mutate \
+mutate "$BINDING" \
   '                    .flatten(),
                 introduces: introduces.is_some(),' \
   '                    .flatten()
@@ -130,16 +151,54 @@ mutate \
                 introduces: introduces.is_some(),' \
   'the_binding_rule_damages_no_relation_the_fixture_gives_a_referent_for'
 
-mutate \
+mutate "$BINDING" \
   'in_body: has_ancestor_of_kind(node, "block"),' \
   'in_body: introduces.is_some(),' \
   'the_positional_rule_damages_something_and_that_is_why_it_was_rejected'
 
-restore_binding
+# The three below break the **engine**, not the measurement. Without them this script proves
+# only that a second implementation of the reading is load-bearing, which is not the claim.
+# The claim is that the class the index carries is the class the reading produced.
+
+# Clause 1: a name in a parent's `field` slot names a member of whatever the local holds, and
+# is not classified by the binder that binds the receiver.
+mutate "$REGISTRY" \
+  '        member_fields: &["field"],' \
+  '        member_fields: &[],' \
+  'the_extractor_writes_the_local_binding_class_and_damages_nothing'
+
+# The table itself, so the failure above is known to be about the clause and not about the
+# classifier having stopped firing for some unrelated reason.
+mutate "$REGISTRY" \
+  '    bindings: &[
+        BindingRule::new("let_declaration", "pattern", Some("value")),
+        BindingRule::new("for_expression", "pattern", Some("value")),
+        BindingRule::new("closure_expression", "parameters", Some("return_type")),
+    ],' \
+  '    bindings: &[],' \
+  'the_extractor_writes_the_local_binding_class_and_damages_nothing'
+
+# Clause 3: the occurrence that writes the binding. Every `binds_nothing` row of this shape is
+# local only because of it.
+mutate "$EXTRACT_BINDINGS" \
+  '    introduces(spec, node, source, name).or_else(|| bound_around(spec, node, source, name))' \
+  '    bound_around(spec, node, source, name)' \
+  'the_class_reaches_every_relation_the_fixture_says_binds_nothing'
+
+# The enumeration, and not the classifier. Field ids run `1..=count`, so walking `0..count`
+# drops the highest-numbered field of every grammar; in `tree-sitter-rust` that is `value`,
+# which both a `let` and a `for` use. The check that catches it lives in the library, so it is
+# exercised through the library.
+mutate "$GRAMMAR" \
+  '        for id in 1..=field_count {' \
+  '        for id in 0..field_count {' \
+  'every_field_the_grammar_has_is_enumerated' '--lib'
+
+restore_files
 trap - EXIT
 
 step 'the tree is clean again, and so is the build'
-if ! git diff --quiet -- "$BINDING"; then
+if ! git diff --quiet -- "$BINDING" "$EXTRACT_BINDINGS" "$REGISTRY" "$GRAMMAR"; then
   fail "the measurement was left modified; the mutations were not reverted"
 fi
 AFTER="$(cargo test --test language_gate -- --test-threads=1 2>&1 | awk '/^test result:/ { print }' | head -1)"
@@ -150,9 +209,13 @@ case "$AFTER" in
 esac
 
 printf '\n\033[1;32mBINDING MEASUREMENT MUTATION CHECK OK\033[0m\n'
-printf 'Each of the four claims the binding measurement makes failed when the code\n'
-printf 'behind it was broken. The join over the whole population is not asserted\n'
-printf 'here: it was observed failing, on a relation whose span holds a\n'
-printf 'scoped_identifier rather than an identifier, and fixing the measurement to\n'
-printf 'join every row meant reading the reference rule out of the specification\n'
-printf 'instead of listing the node types again.\n'
+printf 'Each of the seven claims failed when the code behind it was broken: three\n'
+printf 'in the measurement that prices the two candidate rules, three in the extractor\n'
+printf 'that writes the class the index carries, and one in the grammar validator that\n'
+printf 'keeps the binding table honest.\n'
+printf '\n'
+printf 'The join over the whole population is not asserted here: it was observed\n'
+printf 'failing, on a relation whose span holds a scoped_identifier rather than an\n'
+printf 'identifier, and fixing the measurement to join every row meant reading the\n'
+printf 'reference rule out of the specification instead of listing the node types\n'
+printf 'again.\n'
