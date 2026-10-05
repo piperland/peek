@@ -235,7 +235,7 @@ fn three_state(value: Option<bool>) -> Json {
 }
 
 /// Build the JSON document.
-fn to_json(rows: &[Row]) -> String {
+pub fn to_json(rows: &[Row]) -> String {
     let languages = rows
         .iter()
         .map(|row| {
