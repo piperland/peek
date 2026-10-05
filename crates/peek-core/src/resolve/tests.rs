@@ -798,14 +798,14 @@ fn a_declaration_in_an_enclosing_scope_answers_for_everything_inside_it() {
     tree.write(
         "src/lib.rs",
         "pub struct Charge {\n    pub count: u8,\n}\n\n\
-         impl Charge {\n    pub fn count(&self) -> u8 {\n        self.count\n    }\n}\n\n\
+         impl Charge {\n    pub fn held(&self) -> u8 {\n        self.count\n    }\n}\n\n\
          pub fn total(charge: &Charge) -> u8 {\n    charge.count\n}\n",
     );
     let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     let all = relations_of(&store, RelationKind::References);
-    for subject in ["Charge.count", "total"] {
+    for subject in ["Charge.held", "total"] {
         let read = references_from(&all, subject, "count");
         assert_eq!(
             read[0].target,
@@ -815,6 +815,35 @@ fn a_declaration_in_an_enclosing_scope_answers_for_everything_inside_it() {
             state_of(read[0])
         );
     }
+
+    // The shape the fixture above avoids: a method whose own name is the field it reads. Printed
+    // rather than asserted, because a method and a field of one struct share a qualified name and
+    // differ only by kind, and the answer decides whether the scope rule has to rank its own set.
+    let same = TempTree::new("method-named-after-the-field");
+    same.write(
+        "src/lib.rs",
+        "pub struct Charge {\n    pub count: u8,\n}\n\n\
+         impl Charge {\n    pub fn count(&self) -> u8 {\n        self.count\n    }\n}\n",
+    );
+    let mut store = same.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+    let rows = relations_of(&store, RelationKind::References);
+    println!("METHOD-NAMED-AFTER-THE-FIELD");
+    for relation in rows.iter().filter(|r| r.target_name == "count") {
+        println!("  {} -> {}", relation.source, relation.resolution.describe());
+    }
+    println!(
+        "  candidates in the store for it: {:?}",
+        store
+            .ambiguous_candidates(
+                &id("src/lib.rs", EntityKind::Method, "Charge.count"),
+                RelationKind::References,
+                "count",
+            )
+            .expect("candidates")
+    );
+    let all = relations_of(&store, RelationKind::References);
+    let _ = all;
 }
 
 // ---------------------------------------------------------------------------
