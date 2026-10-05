@@ -65,6 +65,9 @@
 //! | 50 | `same_file` | the target is declared in the same file as the reference | **R4** |
 //! | 40 | `unique_name` | exactly one entity in the repository carries the name | **R5** |
 //! | 10 | `name_only` | a bare name with nothing else known about it | evidence the extractor records, never an answer |
+//! | — | `local_binding` | the name is bound by a binder the index holds no entity for | **not implemented here**: a
+//!   relation carrying it must end `unresolved`, and the rule that says so belongs at the head
+//!   of [`Resolver::decide`] — see [`rung_name`]
 //!
 //! The order *is* the rung order. Rungs are tried strongest first and the **first rung that
 //! returns any candidate decides**; a rung that returns none falls through to the next. A rung
@@ -483,6 +486,13 @@ pub fn rule_name(evidence: &Evidence) -> &'static str {
 /// vocabulary: R2 records `receiver_type` but is the *receiver owner* rule. The mapping is total
 /// and a test pins it, because a rung that quietly stopped firing would be a silent change in
 /// what the engine believes.
+///
+/// **`local_binding` is the one class that names a rule rather than belonging to one.** It is a
+/// claim that the relation has **no** target, so it cannot rank candidates: the rule it names
+/// is a refusal at the head of [`Resolver::decide`], and until that rule is written it is
+/// carried by the extractor, read by nothing, and moves no number. That is stated here rather
+/// than left to be found, because a class in the evidence vocabulary that no rung implements
+/// is exactly the kind of hole this table exists to make visible.
 #[must_use]
 pub fn rung_name(evidence: &Evidence) -> &'static str {
     match evidence {
@@ -494,6 +504,7 @@ pub fn rung_name(evidence: &Evidence) -> &'static str {
         Evidence::SameFile => "same_file",
         Evidence::UniqueName => "unique_name",
         Evidence::NameOnly => "name_only",
+        Evidence::LocalBinding { .. } => "local_binding",
     }
 }
 

@@ -243,6 +243,40 @@ pub enum Evidence {
     /// For second-parity languages where no stronger evidence is available. Explicitly marked
     /// so a consumer can discount it.
     NameOnly,
+    /// **This use of the name is bound by a binder in the source's own scope that the index
+    /// holds no entity for**, so no entity anywhere in the repository can be its referent.
+    ///
+    /// # What it asserts
+    ///
+    /// At this occurrence's byte, a `let`/`for`/untyped-closure pattern — a node type in
+    /// [`crate::extract::spec::LanguageSpec::bindings`] — either introduced this name or has a
+    /// name in force over it. `binder` is that node type, as the grammar spells it, so the
+    /// claim is auditable without re-parsing the file.
+    ///
+    /// # What it does **not** assert
+    ///
+    /// * **Not that the name is free.** The same name may be declared in an enclosing scope, in
+    ///   another file, or nowhere at all. This relation's referent is not that declaration;
+    ///   another relation may name it and resolve to it perfectly well.
+    /// * **Not that no entity shares the name.** `out` is local to `summarise` and is also
+    ///   `render.out`'s parameter. What makes the difference is *which* one this occurrence
+    ///   means, and that is what the binder settles.
+    /// * **Not that the occurrence is not a reference.** The relation still exists and is still
+    ///   a use of the name; only the placement is refused.
+    /// * **Not an error.** A local is ordinary code. The honest outcome is an undecided edge,
+    ///   which is a gap in the graph rather than a wrong one.
+    ///
+    /// # Why it is evidence and not a resolution
+    ///
+    /// Every other class is a claim *about a target*, and this one is a claim that there is
+    /// none — so it is the only class that must never appear on a `Resolved` or `Inferred`
+    /// relation. `Resolver::decide` has to refuse the relation when it sees it (D-0036's
+    /// "decline, do not guess", read in the other direction); until that rule lands, this class
+    /// is carried on every relation it applies to and moves no number.
+    LocalBinding {
+        /// The node type of the binder, e.g. `let_declaration`.
+        binder: String,
+    },
 }
 
 impl Evidence {
@@ -257,6 +291,7 @@ impl Evidence {
             Evidence::SameFile => "same_file",
             Evidence::PathMatch => "path_match",
             Evidence::NameOnly => "name_only",
+            Evidence::LocalBinding { .. } => "local_binding",
         }
     }
 
@@ -278,6 +313,11 @@ impl Evidence {
             Evidence::SameFile => 50,
             Evidence::UniqueName => 40,
             Evidence::NameOnly => 10,
+            // The only class that is not a claim about a target, so it has no place in the
+            // order. Zero rather than the bottom of the ladder on purpose: a relation carrying
+            // it must be refused, and a ranking that treated it as the weakest *candidate*
+            // would be ranking something that is not a candidate at all.
+            Evidence::LocalBinding { .. } => 0,
         }
     }
 }
