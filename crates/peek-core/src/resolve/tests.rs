@@ -672,11 +672,8 @@ fn a_declaration_in_the_source_own_scope_beats_the_import_it_shadows() {
     let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
-    let shadowed = references_from(
-        &relations_of(&store, RelationKind::References),
-        "describe",
-        "entry",
-    );
+    let all = relations_of(&store, RelationKind::References);
+    let shadowed = references_from(&all, "describe", "entry");
     assert_eq!(
         shadowed.len(),
         1,
@@ -700,11 +697,7 @@ fn a_declaration_in_the_source_own_scope_beats_the_import_it_shadows() {
     // The other half of the clause, and the case that makes it a *scope* rule rather than a
     // blunt one: the same import still answers everywhere the parameter is not in scope. A rule
     // that refused the import for the whole file would break this row.
-    let elsewhere = references_from(
-        &relations_of(&store, RelationKind::References),
-        "renamed",
-        "entry",
-    );
+    let elsewhere = references_from(&all, "renamed", "entry");
     assert_eq!(
         elsewhere[0].target,
         Some(id("src/model.rs", EntityKind::Function, "entry")),
@@ -735,11 +728,8 @@ fn a_binding_of_another_declaration_is_not_in_scope_even_in_the_same_file() {
     let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
-    let read = references_from(
-        &relations_of(&store, RelationKind::References),
-        "total",
-        "count",
-    );
+    let all = relations_of(&store, RelationKind::References);
+    let read = references_from(&all, "total", "count");
     assert_eq!(
         read[0].target,
         Some(id("src/model.rs", EntityKind::Field, "Charge.count")),
@@ -751,7 +741,7 @@ fn a_binding_of_another_declaration_is_not_in_scope_even_in_the_same_file() {
     // worse candidate" — it is "a parameter of a function this use is not written inside is not a
     // candidate", so both of these are unchanged by it.
     for (subject, qualified) in [("first", "first.count"), ("second", "second.count")] {
-        let own = references_from(&relations_of(&store, RelationKind::References), subject, "count");
+        let own = references_from(&all, subject, "count");
         assert_eq!(
             own[0].target,
             Some(id("src/report.rs", EntityKind::Parameter, qualified)),
@@ -788,11 +778,8 @@ fn a_call_through_a_parameter_is_not_a_call_of_the_parameter() {
 
     // The same name, referred to rather than invoked. This is the pair the two clauses differ on,
     // and asserting it is what stops the third clause being read as a relaxation of the first.
-    let reference = references_from(
-        &relations_of(&store, RelationKind::References),
-        "run",
-        "body",
-    );
+    let all = relations_of(&store, RelationKind::References);
+    let reference = references_from(&all, "run", "body");
     assert_eq!(
         reference[0].target,
         Some(id("src/lib.rs", EntityKind::Parameter, "run.body")),
@@ -817,8 +804,9 @@ fn a_declaration_in_an_enclosing_scope_answers_for_everything_inside_it() {
     let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
+    let all = relations_of(&store, RelationKind::References);
     for subject in ["Charge.count", "total"] {
-        let read = references_from(&relations_of(&store, RelationKind::References), subject, "count");
+        let read = references_from(&all, subject, "count");
         assert_eq!(
             read[0].target,
             Some(id("src/lib.rs", EntityKind::Field, "Charge.count")),
