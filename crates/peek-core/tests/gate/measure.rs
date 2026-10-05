@@ -496,7 +496,11 @@ impl Graph {
                 continue;
             }
             let parsed = parse_key(&current);
-            frontier.extend(self.containers_of(&parsed).map(|key| key.render()));
+            frontier.extend(
+                self.containers_of(&parsed)
+                    .into_iter()
+                    .map(|key| key.render()),
+            );
         }
         scope
     }

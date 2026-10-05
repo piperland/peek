@@ -221,8 +221,7 @@ impl Row {
     }
 }
 
-/// Build the JSON document.
-pub /// A three-valued answer, rendered so the third value survives into the file.
+/// A three-valued answer, rendered so the third value survives into the file.
 ///
 /// **`null` is not `false`.** "The placement is outside the scope" and "there is no placement to be
 /// outside it" are different facts, and an undecided edge has no placement at all. Collapsing them
@@ -235,6 +234,7 @@ fn three_state(value: Option<bool>) -> Json {
     }
 }
 
+/// Build the JSON document.
 fn to_json(rows: &[Row]) -> String {
     let languages = rows
         .iter()
