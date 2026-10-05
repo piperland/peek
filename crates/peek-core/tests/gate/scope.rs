@@ -86,11 +86,16 @@ impl Clause {
         let Some(placed) = row.target.as_ref() else {
             return false;
         };
-        let scope = graph.enclosing_scope(&key_of_source(bind));
-        let in_scope = scope.contains(&placed.key().render());
+        // "In scope" is **a declaration the use's own lexical scope makes under this
+        // name**, not a member of the scope chain. The two are different sets and
+        // conflating them reads every right answer as wrong: `counted.body` is
+        // enclosed by `counted`, so it is not a member of the chain, and a predicate
+        // that asked whether it was would refuse the very edges the clause is meant
+        // to keep. It took a damage count of six to find that out.
+        let visible = own_scope_declares(graph, bind);
         match self {
-            Clause::OwnScope => !own_scope_declares(graph, bind).is_empty() && !in_scope,
-            Clause::ForeignBinding => placed.is_binding() && !in_scope,
+            Clause::OwnScope => !visible.is_empty() && !visible.contains(&placed.key()),
+            Clause::ForeignBinding => placed.is_binding() && !visible.contains(&placed.key()),
         }
     }
 }

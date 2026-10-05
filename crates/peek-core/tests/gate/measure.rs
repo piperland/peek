@@ -1476,9 +1476,9 @@ pub fn measure_reach(corpus: &Corpus, graph: &Graph) -> Vec<Reach> {
                         .as_ref()
                         .is_some_and(|row| row.path == bind.path),
                 ),
-                placed_is_foreign_binding: placed.as_ref().map(|row| {
-                    row.is_binding() && !scope.contains(&row.key().render())
-                }),
+                placed_is_foreign_binding: Some(
+                    row.is_binding() && !scope_declarations.contains(&row.key().render()),
+                ),
                 scope_declarations,
             }
         })
