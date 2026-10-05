@@ -817,12 +817,13 @@ fn the_extractor_writes_the_local_binding_class_and_damages_nothing() {
         // The class has to reach real relations, or "it damaged nothing" is an absence.
         assert!(
             binding::engine_refusals(&rows) > 0,
-            "{}: the extractor wrote no `{}` on any of its {} `{CLASS}` relations, so the \
+            "{}: the extractor wrote no `{}` on any of its {} `{}` relations, so the \
              binding table matched nothing and every count below would be over an empty \
              population",
             language.as_str(),
             binding::LOCAL_BINDING,
-            rows.len()
+            rows.len(),
+            binding::CLASS
         );
 
         // The engine's classifier and the measurement are two implementations of one reading,
@@ -831,11 +832,12 @@ fn the_extractor_writes_the_local_binding_class_and_damages_nothing() {
         let disagreeing = binding::disagreements(&rows);
         assert!(
             disagreeing.is_empty(),
-            "{}: the extractor and the measurement disagree on {} of {} `{CLASS}` relations. \
+            "{}: the extractor and the measurement disagree on {} of {} `{}` relations. \
              One of the two is wrong about a row nobody looked at by hand:\n  {}",
             language.as_str(),
             disagreeing.len(),
             rows.len(),
+            binding::CLASS,
             disagreeing.join("\n  ")
         );
 
@@ -879,8 +881,8 @@ fn the_class_reaches_every_relation_the_fixture_says_binds_nothing() {
             .count();
         let outstanding = binding::nothing_but_decided(&rows);
         println!(
-            "  {}: {reached} of {nothing} relations labelled `binds_nothing` carry `{}`, and \
-             {outstanding} of those are still decided and wrong",
+            "  {}: {reached} of {nothing} relations labelled `binds_nothing` carry `{}`, and {} \
+             of those are still decided and wrong",
             language.as_str(),
             binding::LOCAL_BINDING,
             outstanding.len()

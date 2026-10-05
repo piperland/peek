@@ -669,7 +669,7 @@ fn extracted_classes(corpus: &Corpus) -> BTreeMap<(String, u32), &'static str> {
         for relation in extracted
             .relations
             .iter()
-            .filter(|relation| relation.kind == CLASS)
+            .filter(|relation| relation.kind == peek_core::model::RelationKind::References)
         {
             classes.insert(
                 (path.clone(), relation.span.start_byte),
