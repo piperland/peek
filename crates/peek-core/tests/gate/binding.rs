@@ -659,7 +659,7 @@ fn extracted_classes(corpus: &Corpus) -> BTreeMap<(String, u32), &'static str> {
     };
     let mut classes = BTreeMap::new();
     for path in source_files(&corpus.directory, corpus.language) {
-        let Ok(text) = std::fs::read_to_string(&corpus.directory.join(&path)) else {
+        let Ok(text) = std::fs::read_to_string(corpus.directory.join(&path)) else {
             continue;
         };
         let Some(repo_path) = peek_core::model::RepoPath::new(&path) else {
