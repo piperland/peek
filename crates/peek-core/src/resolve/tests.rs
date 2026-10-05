@@ -316,12 +316,14 @@ fn a_name_a_binder_claims_is_refused_before_the_ladder_runs() {
     let refusals = relations_in(&store, &refused_state);
     let refused = &references_from(&refusals, "summarise", "out")[0];
     assert_eq!(
-        refused.target, None,
+        refused.target,
+        None,
         "a refused relation points at nothing: {}",
         state_of(refused)
     );
     assert_eq!(
-        refused.resolution, refused_state,
+        refused.resolution,
+        refused_state,
         "and it says so in the stored state, not only in this test: {}",
         state_of(refused)
     );
@@ -506,15 +508,11 @@ fn a_re_decision_reads_the_refusal_in_all_three_states_that_carry_the_class() {
         },
     ];
 
-    let report = resolve_paths(
-        &mut store,
-        &[],
-        &displaced,
-        ResolutionOptions::default(),
-    )
-    .expect("a scoped pass over the displaced rows");
+    let report = resolve_paths(&mut store, &[], &displaced, ResolutionOptions::default())
+        .expect("a scoped pass over the displaced rows");
     assert_eq!(
-        report.examined, 3,
+        report.examined,
+        3,
         "all three rows must have reached the ladder: {}",
         report.summary()
     );
@@ -548,7 +546,8 @@ fn a_re_decision_reads_the_refusal_in_all_three_states_that_carry_the_class() {
                 )
             });
         assert_eq!(
-            row.target, None,
+            row.target,
+            None,
             "a row shifted by {shift} arrived carrying a target and kept it, so the class was read \
              from the wrong state and the ladder answered it: {}",
             state_of(row)
@@ -605,10 +604,16 @@ fn a_refusal_handed_back_to_the_ladder_stays_a_refusal() {
     );
     let handed_back = before[0].clone();
 
-    let report = resolve_paths(&mut store, &[], &[handed_back], ResolutionOptions::default())
-        .expect("a scoped pass over the displaced row");
+    let report = resolve_paths(
+        &mut store,
+        &[],
+        &[handed_back],
+        ResolutionOptions::default(),
+    )
+    .expect("a scoped pass over the displaced row");
     assert_eq!(
-        report.examined, 1,
+        report.examined,
+        1,
         "the row must have reached the ladder: {}",
         report.summary()
     );
