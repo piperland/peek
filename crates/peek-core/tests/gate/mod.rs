@@ -38,6 +38,7 @@
 //! the committed copy stops matching a fresh render. A number in a document that
 //! nobody recomputes is a number that drifts; this way it cannot.
 
+mod binding;
 mod expect;
 mod incremental;
 mod matrix;
@@ -138,6 +139,26 @@ fn measure_language(language: Language, directory: &Path) -> Row {
         reason: String::new(),
         floors,
     }
+}
+
+/// One language's ground truth and the index built from a copy of its fixture.
+///
+/// The scratch is kept alive for as long as the borrow, so a caller cannot be handed a
+/// graph whose tree has already been deleted. Split out of [`measure_language`] because
+/// the binding measurement wants the same index and no summary.
+fn measured(language: Language, directory: &Path) -> (expect::Corpus, measure::Scratch, measure::Graph) {
+    let corpus = expect::parse(language, directory).unwrap_or_else(|problems| {
+        panic!(
+            "the ground truth for {} does not parse:\n  {}",
+            language,
+            problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n  ")
+        )
+    });
+    let scratch = measure::Scratch::new(&format!("gate-{}", language.as_str()));
+    let live = scratch.crate_copy(&corpus.directory);
+    let (store, _report) = measure::build(&live);
+    let graph = measure::Graph::read(&store);
+    (corpus, scratch, graph)
 }
 
 /// The reason a language has no measurements.
@@ -531,6 +552,130 @@ fn an_incremental_refresh_leaves_nothing_undecided_and_nothing_dangling() {
                 .map(incremental::Operation::describe)
                 .collect::<Vec<_>>()
                 .join("\n  ")
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Which rule for a local binding the population supports
+// ---------------------------------------------------------------------------
+//
+// Four tests, and each can fail on its own. They are deliberately not one test: the first
+// two are preconditions on the measurement being complete and its entityless list being
+// spelled the way the grammar spells it, and a failure in either says the measurement
+// never ran rather than that an engine change moved a number. Only the last two are
+// claims about the two candidate rules.
+
+#[test]
+fn every_reference_relation_is_joined_to_exactly_one_occurrence() {
+    // The precondition, by name. `binding::measure` panics on a relation whose span holds
+    // no identifier, so this passes when the join is total; it exists so that a failure
+    // names the *coverage* rather than arriving as a panic from inside a helper.
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let rows = binding::measure(&corpus, &graph);
+        assert!(
+            !rows.is_empty(),
+            "{}: no `{}` relation was joined to the source, so every count would be over an \
+             empty population",
+            language.as_str(),
+            binding::CLASS
+        );
+        assert_eq!(
+            rows.len(),
+            graph
+                .relations
+                .iter()
+                .filter(|relation| relation.kind == binding::CLASS)
+                .count(),
+            "{}: the joined rows are not the relations the index holds",
+            language.as_str()
+        );
+    }
+}
+
+#[test]
+fn a_binding_is_classified_entityless_at_least_once() {
+    // The entityless node-type list has to be spelled the way the grammar spells it, or the
+    // classifier simply never fires and Q's damage reads as zero for the wrong reason. This
+    // is the check that separates "Q does no harm" from "Q matched nothing".
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let rows = binding::measure(&corpus, &graph);
+        let entityless = binding::refusals(&rows, binding::Rule::Entityless);
+        assert!(
+            entityless > 0,
+            "{}: no identifier was found to be bound by an entityless binder, so the rule under \
+             test matched nothing and its damage count of zero says nothing",
+            language.as_str()
+        );
+        assert!(
+            entityless < binding::refusals(&rows, binding::Rule::Positional),
+            "{}: `{}` refuses {} occurrences and `{}` refuses {entityless}. A binding inside a \
+             body is also inside a body, so the first rule must have the larger population; if \
+             the two are the same size the two rules cannot be told apart and this measurement \
+             cannot choose between them",
+            language.as_str(),
+            binding::Rule::Entityless.as_str(),
+            entityless,
+            binding::Rule::Positional.as_str()
+        );
+    }
+}
+
+#[test]
+fn a_binding_rule_damages_nothing_it_claims_a_referent_for() {
+    // The discriminating assertion. P is refuted here, by arithmetic: it refuses every use
+    // of a name in a body, and a use in a body is most of what the fixture says has a
+    // referent — a field read, a parameter, an imported symbol. Q is the rule with no
+    // damage, and the count that says so is printed rather than summarised.
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let rows = binding::measure(&corpus, &graph);
+        binding::report(&rows);
+
+        for rule in binding::Rule::BOTH {
+            let damage = binding::named_referents(&rows)
+                .into_iter()
+                .filter(|(_, refused_by)| *refused_by == rule)
+                .map(|(relation, _)| relation)
+                .collect::<Vec<_>>();
+            assert!(
+                damage.is_empty(),
+                "{}: `{}` refuses {} labelled relations the fixture says do have a referent. A \
+                 rule is admissible only while that is zero, so this is the count that decides \
+                 it:\n  {}",
+                language.as_str(),
+                rule.as_str(),
+                damage.len(),
+                damage.join("\n  ")
+            );
+        }
+    }
+}
+
+#[test]
+fn every_relation_the_fixture_says_names_nothing_is_bound_by_an_entityless_binder() {
+    // The other half, and the one that keeps Q from being vacuously true. If a
+    // `binds_nothing` site were not bound by a binder with no entity, Q would refuse nothing
+    // there either and the decided-and-wrong edges would survive it.
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let rows = binding::measure(&corpus, &graph);
+        let unbound = binding::named_locals(&rows)
+            .into_iter()
+            .filter(|(_, binder)| binder.is_none())
+            .map(|(relation, _)| relation)
+            .collect::<Vec<_>>();
+        assert!(
+            unbound.is_empty(),
+            "{}: {} labelled relations say no entity is the referent, but no binder with no \
+             entity introduces the name, so `{}` would not refuse them and the repair it is \
+             supposed to buy would not happen:\n  {}",
+            language.as_str(),
+            unbound.len(),
+            binding::Rule::Entityless.as_str(),
+            unbound.join("\n  ")
         );
     }
 }

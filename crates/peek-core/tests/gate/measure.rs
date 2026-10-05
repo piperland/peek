@@ -152,6 +152,14 @@ pub struct RelationRow {
     pub target: Option<EntityRow>,
     pub module: Option<String>,
     pub alias: Option<String>,
+    /// The relation's first byte in its file.
+    ///
+    /// Carried so a measurement can ask a **syntactic** question about the row — what
+    /// the occurrence is, and what binds it — by joining on the file rather than on the
+    /// name. A name is not enough: `Entry.label` and `entry.label` are two declarations
+    /// of one name, and the placement dimensions tell them apart by qualified name
+    /// while a question about the source can only be told by going back to the byte.
+    pub start_byte: u32,
 }
 
 impl RelationRow {
@@ -485,6 +493,7 @@ fn flatten(relation: Relation) -> RelationRow {
         target: relation.target.as_ref().map(row_of),
         module: imported.as_ref().map(|(module, _)| module.clone()),
         alias: imported.and_then(|(_, alias)| alias),
+        start_byte: relation.span.start_byte,
     }
 }
 

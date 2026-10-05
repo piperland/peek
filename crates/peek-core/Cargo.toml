@@ -24,3 +24,10 @@ notify = { workspace = true }
 
 [dev-dependencies]
 # Fixtures are parsed from inline strings; nothing else is needed yet.
+#
+# The gate's binding measurement re-reads the fixture's own tree, because the question
+# it asks — *what binds this name here* — is syntactic and cannot be answered from the
+# index. These are the same versions the crate already builds against, so no second copy
+# of a grammar is compiled.
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
