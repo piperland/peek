@@ -152,6 +152,12 @@
 //! import of the same name are two claims about one symbol; when they disagree the receiver is the
 //! more specific one, and letting the import win would re-create audit B3 under a new name.
 //!
+//! It also declines when the occurrence's own lexical scope declares the name, which is the first
+//! clause of the scope rule — see [A candidate has to be in scope where the use is
+//! written](#a-candidate-has-to-be-in-scope-where-the-use-is-written). The rung's evidence is a
+//! fact about a *name* in a file; a declaration in front of the use is a fact about *this
+//! occurrence*, and the second is the more specific of the two.
+//!
 //! It is asked a second time, and only for a receiver, when R2 declines. The receiver's *name* is
 //! then the local name an import binds, and R1 is the rung that knows which file it came from.
 //! [`Resolver::via_imported_receiver`] is the whole of that hand-off.
@@ -218,12 +224,21 @@
 //! extractor emits this is the strong claim it sounds like, and it is the rung that makes a
 //! single-file call resolve.
 //!
+//! **Same file is not the same scope**, and this is where the second clause of the scope rule is
+//! spent — see [A candidate has to be in scope where the use is
+//! written](#a-candidate-has-to-be-in-scope-where-the-use-is-written).
+//!
 //! ## R5 — unique name
 //!
 //! Exactly one entity in the repository carries the name. That is a fact about the index, not an
 //! intent, so it produces [`ResolutionState::Inferred`] and never [`ResolutionState::Resolved`].
 //! Two or more matches is `Ambiguous` — the case the engine Peek replaces resolved by taking the
 //! alphabetically first file in the repository.
+//!
+//! **The uniqueness is over the candidates a use written here can see.** A binding of an unrelated
+//! declaration is not one of them, so the sentence this rung stores is narrower than it looks and the
+//! `basis` says so. See [A candidate has to be in scope where the use is
+//! written](#a-candidate-has-to-be-in-scope-where-the-use-is-written).
 //!
 //! R5 is the only rung that reaches outside the source file. It exists because the alternative is
 //! a large class of honest `Unresolved`, and it is safe precisely because it can only fire when
@@ -251,6 +266,75 @@
 //! What it does buy is the other half of audit B21, which the file entity made a one-sided rule:
 //! a name shared by a namespace and a symbol means the symbol, because a call cannot target a
 //! namespace and an expression is not one.
+//!
+//! # A candidate has to be in scope where the use is written
+//!
+//! The second rule every name lookup applies, and the one this section exists for. **Not in
+//! scope is not "lower priority": it is not a candidate.** A bare name is read against the
+//! declarations *enclosing* the occurrence — [`Resolver::declared_around`] walks the `Contains`
+//! chain up from the relation's source and asks each link what it declares — and a candidate
+//! outside that set is dropped rather than ranked.
+//!
+//! It has two clauses, and they are one rule because they answer one question.
+//!
+//! * **A declaration in front of the use beats one the use cannot see.** R1 declines when the
+//!   occurrence's own scope declares the name: `use crate::model::{entry, Entry}` beside
+//!   `fn format_line_inner(entry: &Entry)` is two declarations of one name, and inside that
+//!   function the parameter is the one the source means. This is the ordinary meaning of a
+//!   shadowed name and it needs no new rung to say so.
+//! * **A binding of an unrelated declaration is not a candidate at all.** A parameter belongs to
+//!   the function that declares it ([`is_binding`]). `report.rs` declares a parameter
+//!   `format_line.count`, and a use of `count` written in `render` or in `describe` cannot mean
+//!   it — which is the sense in which **same file is not the same scope**.
+//!
+//! ## The naive version of this is wrong, and it was measured before it was written
+//!
+//! "The source's own scope wins" is one rule, and it is not this one. It is silent on the whole
+//! second class: `render`'s own scope declares `entries` and `out` and **not** `count`, so the
+//! rule has nothing to say about the `count` read written inside it — and what is worse, the wrong
+//! target it would leave in place (`format_line.count`) *is* in the source's own file, so the rule
+//! read backwards endorses it rather than refusing it.
+//!
+//! The two clauses were priced separately, over **every relation the index holds** rather than over
+//! the wrong edges, and that is what settled it:
+//!
+//! | clause | repairs | damage |
+//! |---|---:|---:|
+//! | own scope wins | 3 edges over 2 labelled sites | **0** |
+//! | a binding of an unrelated declaration is not a candidate | 2 edges over 2 labelled sites | **0** |
+//!
+//! **Damage zero is the admissibility criterion**, and it is arithmetic rather than taste: a clause
+//! is only safe to adopt while the edges it would un-place are edges the fixture says are right. Both
+//! hold, and that is why the rule is written as two clauses over one question rather than as one
+//! clause that would have to be split later.
+//!
+//! Sixteen labelled relations are covered by the first clause and thirty-one by the second, and
+//! **fifteen are covered by the second and not the first** — including all four of the surviving
+//! wrong edges and seven more of the identical shape. That difference is the measurement: if the two
+//! clause populations were the same set, "the source's own scope wins" would have been the whole
+//! answer and the second clause would be redundant. It is not, and the test that says so is
+//! `gate::the_two_scope_clauses_are_not_one_rule`, over the whole labelled population and not over
+//! the four rows that motivated the question.
+//!
+//! **What the rule must not become.** Preferring the source's own scope *blindly* would replace
+//! `model.rs`'s answer to `label` and `count` — where the field shorthand reads the **parameter** —
+//! with the field of the same name, and `format_line`'s answer to `count` with `Entry.count`. Both
+//! are decided-and-right today. That is why the first clause says "over a candidate the use cannot
+//! see" rather than "over any candidate", and the second says "not a candidate" rather than "a
+//! weaker candidate": the difference between the two clauses and a third rule that breaks six edges
+//! is entirely in what each one refuses.
+//!
+//! ## What it costs, and what it cannot do
+//!
+//! A field is reached through a receiver and not by a bare name, and the extractor records no
+//! receiver on a `References` edge, so **no rung here can tell `entry.count` from `count`.** The
+//! field stays a candidate everywhere for that reason, and it is the reason a name that only a
+//! receiver could disambiguate may still answer with a field of the wrong type. Closing that needs a
+//! receiver on a reference edge, which is an extractor change.
+//!
+//! The scope walk is a handful of indexed seeks per distinct relation source and is cached per
+//! source for the pass, on the same assumption as every other cache in this module: the store does
+//! not change under a pass.
 //!
 //! # `Resolved` and `Inferred` are different claims
 //!
@@ -1053,6 +1137,15 @@ struct Resolver<'s> {
     /// Every entity of each file this pass has already read. A file is read once, and **not only
     /// because the ladder wants it that way** — see [`Resolver::entities_in_file`].
     files: BTreeMap<RepoPath, Arc<Vec<crate::model::Entity>>>,
+    /// The lexical scope of each relation source this pass has already walked.
+    ///
+    /// **Cached per source rather than per file**, because the scope is a chain of
+    /// declarations and not a list: a relation written in a parameter has a longer
+    /// chain than one written in a function, and a file holds both. The chain is
+    /// four links deep in every shape the extractors emit and the walk is bounded by
+    /// a `seen` set rather than by a depth counter, so the cost is a handful of
+    /// indexed seeks per distinct source.
+    scope: BTreeMap<EntityId, Vec<EntityId>>,
     /// Lookups abandoned at a limit, carried into the report rather than hidden.
     truncated: u64,
     /// How the table and the guess compared, read out into the report at the end of the pass for the
@@ -1068,6 +1161,7 @@ impl<'s> Resolver<'s> {
             options,
             imports: BTreeMap::new(),
             files: BTreeMap::new(),
+            scope: BTreeMap::new(),
             truncated: 0,
             module_files: ModuleFileReport::default(),
         }
@@ -1253,11 +1347,112 @@ impl<'s> Resolver<'s> {
         })
     }
 
+    /// Every declaration `source` is lexically written inside, nearest first.
+    ///
+    /// **Containment, not the qualified name.** `A.b.c` is declared inside `A.b`, but a
+    /// qualified name does not say that: the layout module a file is given and the
+    /// `mod x { .. }` block beside it both qualify the things under them differently, and
+    /// only the `Contains` edge says what encloses what. The chain is walked upwards with
+    /// [`Store::incoming`] and terminates on a `seen` set rather than a depth counter, so
+    /// it is total even for a graph whose containment is not a tree.
+    fn scope_of(&mut self, source: &EntityId) -> Result<Vec<EntityId>, StoreError> {
+        if let Some(known) = self.scope.get(source) {
+            return Ok(known.clone());
+        }
+        let limit = self.options.outgoing_per_source;
+        let mut chain: Vec<EntityId> = vec![source.clone()];
+        let mut seen: BTreeSet<EntityId> = BTreeSet::new();
+        let mut at = 0usize;
+        while at < chain.len() {
+            let current = chain[at].clone();
+            at += 1;
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            for relation in self
+                .store
+                .incoming(&current, Some(RelationKind::Contains), limit)?
+            {
+                if chain.contains(&relation.source) {
+                    continue;
+                }
+                chain.push(relation.source);
+            }
+        }
+        self.scope.insert(source.clone(), chain.clone());
+        Ok(chain)
+    }
+
+    /// Every declaration the use's own scope makes under `name`, nearest first.
+    ///
+    /// **This is the whole of what "in scope" means in this module, and it is the rule
+    /// every name lookup applies on top of its own evidence** — the same place
+    /// [`prefer_symbols`] applies one. A bare name is read against the declarations
+    /// enclosing the occurrence, not against the file and not against the repository:
+    /// `format_line_inner`'s own parameter `entry` is in scope inside `format_line_inner`
+    /// and means nothing anywhere else, which is what makes it the answer there even
+    /// though the file also imports a function called `entry`, and what makes it
+    /// *not* the answer inside `render`.
+    ///
+    /// **Direct children only.** A parameter of a sibling function is not in scope inside
+    /// another function, and the distinction is the whole of the second half of the rule:
+    /// `report.rs` declares a parameter `format_line.count`, and a use of `count` written
+    /// in `render` cannot mean it.
+    fn declared_around(
+        &mut self,
+        relation: &Relation,
+        name: &str,
+    ) -> Result<Vec<EntityId>, StoreError> {
+        let limit = self.options.outgoing_per_source;
+        let scope = self.scope_of(&relation.source)?;
+        let mut found: Vec<EntityId> = Vec::new();
+        for owner in scope {
+            let enclosed = self
+                .store
+                .outgoing(&owner, Some(RelationKind::Contains), limit)?;
+            if enclosed.len() >= limit {
+                self.truncated += 1;
+            }
+            for relation in enclosed {
+                let Some(target) = relation.target else {
+                    continue;
+                };
+                if target.name() == name
+                    && is_declaration(target.kind())
+                    && !found.contains(&target)
+                {
+                    found.push(target);
+                }
+            }
+        }
+        Ok(found)
+    }
+
     /// R1: the name is bound by an import in the referring file.
+    ///
+    /// **Declines when the use's own scope already declares the name**, and that is the
+    /// first of the two places the scope rule reads. The rung's evidence is "the author
+    /// wrote an import in this file naming this symbol", which is a fact about a *name* in
+    /// a file; it is not a fact about *this occurrence*. `use crate::model::{entry, Entry}`
+    /// beside `fn format_line_inner(entry: &Entry)` is two declarations of one name, and
+    /// the parameter shadows the import inside the function that declares it — in every
+    /// language this engine reads, and in Rust because the parameter list is inside the
+    /// body of the function.
+    ///
+    /// The decline is not a refusal: the relation falls through to R4, which finds the
+    /// parameter the scope makes. A file that imports `charge` and has an unrelated
+    /// function with a parameter called `charge` is untouched, because that function's own
+    /// scope is the one that declares it.
     fn via_import_binding(&mut self, relation: &Relation) -> Result<Option<Decision>, StoreError> {
         let source_path = relation.source.path().clone();
         let bindings = self.bindings_for(&relation.target_name, &source_path)?;
         if bindings.is_empty() {
+            return Ok(None);
+        }
+        if !self
+            .declared_around(relation, &relation.target_name)?
+            .is_empty()
+        {
             return Ok(None);
         }
 
@@ -1978,13 +2173,47 @@ impl<'s> Resolver<'s> {
     }
 
     /// R4: the target is declared in the same file as the reference.
+    ///
+    /// **Same file is not the same scope, and the difference is decided here.**
+    /// [`Resolver::declared_around`] answers what the occurrence's own lexical scope
+    /// declares, and the rung answers from that alone when it declares anything: a
+    /// declaration in front of the use beats one in the same file it cannot see, which is
+    /// the ordinary meaning of a shadowed name and needs no new rung to say so.
+    ///
+    /// When the scope says nothing, the answer is every declaration in the file **except a
+    /// binding of an unrelated one**. A parameter belongs to the function that declares it
+    /// and means nothing anywhere else, so `report.rs`'s `format_line.count` is not a
+    /// candidate for the `count` read in `render` or in `describe` — and dropping it rather
+    /// than ranking it lower is deliberate: with nothing else in the file carrying the
+    /// name, ranking it lower would leave the rung answering with the only thing it has.
+    ///
+    /// A field and a method are **not** bindings and stay candidates everywhere. A field is
+    /// reached through a receiver and not by a bare name in the source, and the extractor
+    /// records no receiver on a `References` edge, so the rung cannot tell `entry.count`
+    /// from `count` and must offer the field rather than refuse. That is a limit of what the
+    /// index holds, not a claim that a field is in scope; it is stated here rather than left
+    /// to be found by a reader who assumes otherwise.
     fn via_same_file(&mut self, relation: &Relation) -> Result<Option<Decision>, StoreError> {
         let name = relation.target_name.as_str();
+        let in_scope = self.declared_around(relation, name)?;
         let mut found: Vec<Found> = Vec::new();
-        for entity in self.entities_in_file(relation.source.path())?.iter() {
-            if entity.name == name && is_declaration(entity.kind()) {
+        if in_scope.is_empty() {
+            for entity in self.entities_in_file(relation.source.path())?.iter() {
+                if entity.name == name
+                    && is_declaration(entity.kind())
+                    && !is_binding(entity.kind())
+                {
+                    found.push(Found {
+                        id: entity.id.clone(),
+                        by: Evidence::SameFile,
+                        guessed: false,
+                    });
+                }
+            }
+        } else {
+            for id in in_scope {
                 found.push(Found {
-                    id: entity.id.clone(),
+                    id,
                     by: Evidence::SameFile,
                     guessed: false,
                 });
@@ -2040,16 +2269,28 @@ impl<'s> Resolver<'s> {
     /// whole repository.
     fn via_unique_name(&mut self, relation: &Relation) -> Result<Option<Decision>, StoreError> {
         let name = relation.target_name.as_str();
+        // The second place the scope rule reads, and the one that decides a field read.
+        //
+        // **A binding outside the scope is not a weaker candidate; it is not a candidate.**
+        // `Entry.count` is a field and `entry.count` is a parameter of another file's
+        // function, and only the first is something a use written here can mean. Ranking
+        // rather than dropping would leave two candidates and an `Ambiguous` where one
+        // entity is the answer, which is the difference between a gap and an edge.
+        let in_scope = self.declared_around(relation, name)?;
         let mut found: Vec<Found> = Vec::new();
         let (entities, cut_short) = self.entities_named(name)?;
         for entity in entities {
-            if is_declaration(entity.kind()) {
-                found.push(Found {
-                    id: entity.id.clone(),
-                    by: Evidence::UniqueName,
-                    guessed: false,
-                });
+            if !is_declaration(entity.kind()) {
+                continue;
             }
+            if is_binding(entity.kind()) && !in_scope.contains(&entity.id) {
+                continue;
+            }
+            found.push(Found {
+                id: entity.id.clone(),
+                by: Evidence::UniqueName,
+                guessed: false,
+            });
         }
         let mut found = prefer_symbols(found);
         if found.is_empty() {
@@ -2072,8 +2313,8 @@ impl<'s> Resolver<'s> {
         // The basis names where the single candidate is, so `peek explain` can be checked against
         // the file rather than taken on trust. Built before the move, for the obvious reason.
         let basis = format!(
-            "exactly one entity named `{name}` is indexed, at {}; a name that happens to be \
-             unique in this repository is a claim about the index, not about the code",
+            "exactly one entity a use of `{name}` written here can see is indexed, at {}; a name \
+             that happens to be unique among those is a claim about the index, not about the code",
             only.id
         );
         Ok(Some(Decision::Inferred {
@@ -2169,6 +2410,25 @@ fn is_resolvable(relation: &Relation) -> bool {
 /// from competing with a symbol that shares the name.
 fn is_declaration(kind: EntityKind) -> bool {
     kind != EntityKind::File
+}
+
+/// Whether an entity kind is a **binding**: a name introduced by a declaration and
+/// meaningless outside it.
+///
+/// **Three kinds, and the list is the rule.** A parameter, a local variable and a type
+/// parameter are the declarations whose name is lexically local; everything else — a
+/// field, a method, a constant, a free function — is written in a scope wide enough that
+/// the same-file and repository-wide rungs can still offer it. See
+/// [`Resolver::declared_around`] for what the distinction decides.
+///
+/// A property is deliberately **not** here. A property belongs to an object literal, so
+/// the name is as local as a parameter's, but no fixture measures a language that
+/// indexes one and adding it on reasoning alone would be a rule fitted to nothing.
+fn is_binding(kind: EntityKind) -> bool {
+    matches!(
+        kind,
+        EntityKind::Parameter | EntityKind::Variable | EntityKind::TypeParameter
+    )
 }
 
 /// Whether an entity kind is a namespace rather than something a name can denote.
