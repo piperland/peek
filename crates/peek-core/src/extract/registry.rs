@@ -173,8 +173,14 @@ static RUST: LanguageSpec = LanguageSpec {
         // `sink.text` is a `field_expression`'s `field` slot and `Sink { text: .. }` is a
         // `field_initializer`'s. Both name a member of whatever the local holds, so a name in
         // that slot is not classified by the binder that binds the receiver. Without this the
-        // binding rule below would unresolve `render | text` -> `Sink.text` — a correct edge
-        // replaced by a gap, which no published column would show.
+        // binding rule below would call a field read local wherever a local of the same name
+        // is in scope — a correct edge replaced by a gap, which no published column shows.
+        //
+        // **This list is load-bearing and the gate cannot tell you so.** Emptied, every gate
+        // test still passes: the fixture has no labelled row whose name is both a member and a
+        // local in scope. The check that does catch it is beside the classifier —
+        // `a_field_name_is_not_classified_by_a_binder_that_binds_that_name` — and it needs a
+        // source the fixture does not contain.
         member_fields: &["field"],
     }),
     scope_nodes: &[

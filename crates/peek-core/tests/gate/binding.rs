@@ -294,19 +294,20 @@ fn occurrences(text: &str) -> BTreeMap<u32, Occurrence> {
 }
 
 fn collect(node: Node<'_>, source: &[u8], found: &mut BTreeMap<u32, Occurrence>) {
-    // A name that is the **field** of something is a field, whatever it is read through.
+    // A name that is the **field** of something is a member of that thing, whatever it is
+    // read through.
     //
-    // This clause is the direct answer to the objection that a name inside a body may still
-    // be a field of something, and it was added because the measurement found the case
-    // rather than because the argument suggested it: `render` reads `sink.text` and
-    // `self.text.push_str(..)`, the local is `sink`, and the name `text` resolves correctly
-    // to `Sink.text` today. Without this clause a rule about which names are local refuses
-    // those two edges and unresolves them — a wrong edge replaced by a gap, which no
-    // published column would show and the gate would score as neither.
+    // **This clause bites only when the same name is also bound in scope, and the fixture has
+    // no row of that shape.** It was added to the engine because dropping it destroys real
+    // edges somewhere, not because the measurement here found them: `member_fields: &[]`
+    // leaves every test in this file green, which is the measurement refusing to support the
+    // clause rather than the clause being unnecessary. `render` reads `sink.text` and binds a
+    // local called `text` — but the `let mut text = sink.text;` that binds it comes *after*
+    // the field read, and a binding is not in force before its own pattern. So the two facts
+    // are on the page and never meet.
     //
-    // So a field name is not classified by the binder of the receiver. The receiver is a
-    // local; the field is a member of the thing the local holds, and naming it is the one
-    // thing about it that reaches a declaration.
+    // The check that does discriminate it is beside the classifier, in
+    // `extract::bindings::tests`, because it needs a source this fixture does not contain.
     //
     // Recorded with no binder rather than skipped, because the join in `measure` is over
     // every reference relation the index holds and a missing entry would fail the

@@ -20,9 +20,18 @@
 //!
 //! # Three clauses, and each was found by measurement rather than by argument
 //!
-//! 1. **A member name is not classified by its receiver's binder.** `render` reads
-//!    `sink.text`; the local is `sink` and the name `text` resolves to `Sink.text` today.
-//!    Classifying it by the binder of the receiver replaces a correct edge with a gap.
+//! 1. **A member name is not classified by a binder that binds that name.** `sink` is a
+//!    `let`; `sink.text` names a member of whatever `sink` holds, and that is the one
+//!    thing about it that reaches a declaration. Classifying it by the binder of the
+//!    receiver replaces a correct edge with a gap.
+//!
+//!    **The condition on that clause is the name, and it is easy to leave out.** The clause
+//!    only has work to do when the *same* name is also bound by a binder in scope. With
+//!    `let sink = ..; sink.text.push_str(..)` nothing binds `text`, so the clause has nothing
+//!    to overrule and the field is not local either way — which is why the obvious test of
+//!    it cannot fail. `let text = ..` followed by `Sink { text: .. }` and `sink.text` is the
+//!    shape that needs it, and the gate fixture has no labelled row of that shape, so this is
+//!    pinned beside the classifier instead of by a published column.
 //! 2. **A name such a binder binds is local.** `let mut out = ..` then `out.push_str(..)`.
 //!    The binder is a **sibling** of the use, not an ancestor — walking ancestors finds
 //!    nothing at all, which classifies nothing and reads as a rule that does no harm.
@@ -66,8 +75,10 @@ pub fn local_binding(spec: &LanguageSpec, node: Node<'_>, source: &[u8]) -> Opti
     }
 
     // Clause 1. Asked first because it is the only clause that can answer for an occurrence
-    // whose *parent* already answers it: the field of `sink.text` names a member of
-    // whatever `sink` holds, and no binder that binds `sink` has anything to say about it.
+    // whose *parent* already answers it: the `field` slot of `sink.text` and of
+    // `Sink { text: .. }` names a member of whatever `sink` holds, and no binder that binds
+    // `sink` has anything to say about it. It bites only when the name is *also* bound in
+    // scope, which is why the test beside it writes that shape rather than the obvious one.
     if names_a_member(spec, node) {
         return None;
     }
@@ -441,16 +452,35 @@ mod tests {
     }
 
     #[test]
-    fn a_field_name_is_not_classified_by_the_binder_of_its_receiver() {
-        // The clause without which the rule is inadmissible: `sink` is a `let`, `text` is a
-        // member of the `Sink` it holds, and `Sink.text` resolves correctly today. Classifying
-        // it here would replace a correct edge with a gap — which no published column shows
-        // and a damage count over labelled rows would call a repair.
-        let source = "struct Sink { text: String } fn f() { let sink = Sink { text: String::new() }; sink.text.push_str(\"x\"); }";
-        assert!(is_local("sink", source), "the receiver is a local");
-        assert!(
-            !is_local("text", source),
-            "the field is a member of the sink"
+    fn a_field_name_is_not_classified_by_a_binder_that_binds_that_name() {
+        // The clause without which the rule is inadmissible, **and the source it takes to
+        // discriminate it.**
+        //
+        // The obvious version of this test — `let sink = ..; sink.text.push_str(..)` — does
+        // not test the clause at all: nothing in it binds the name `text`, so the clause has
+        // nothing to overrule and the field is not local either way. Removing the clause
+        // leaves that test green, which is what a mutation check found: `member_fields: &[]`
+        // passed every gate test on the fixture. **A check that cannot fail is not evidence,
+        // and this one could not.**
+        //
+        // So the name has to be both a member *and* a local, and that is the shape the clause
+        // is for: `let text = ..` puts `text` in scope for everything after it, and after it
+        // come two slots where `text` means a member of something rather than the local —
+        // the `field` of a `field_initializer` and the `field` of a `field_expression`. Drop
+        // the clause and all four of the later occurrences become local, which would unresolve
+        // two correct edges and make the remaining two wrong.
+        let source = "struct Sink { text: String } fn f() { let text = String::new(); let sink = \
+                      Sink { text: String::new() }; sink.text.push_str(&text); }";
+        assert_eq!(
+            locals(source),
+            vec![
+                (occurrence(source, "text", 1), "text".to_owned()),
+                (occurrence(source, "text", 4), "text".to_owned()),
+            ],
+            "only the declaration and the argument read are local. Occurrences 2 and 3 are the \
+             `field` of a `field_initializer` and of a `field_expression`: they name a member \
+             of the sink, and no binder that binds `text` has anything to say about them. \
+             {source:?}"
         );
     }
 

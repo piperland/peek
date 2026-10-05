@@ -231,9 +231,10 @@ pub struct ReferenceRule {
     /// name in one of these slots is **not** classified by any binder that binds the
     /// receiver — see [`LanguageSpec::bindings`].
     ///
-    /// Without this the rule below destroys real edges: `render` reads `sink.text` and
-    /// `self.text.push_str(..)`, the local is `sink`, and `text` resolves to `Sink.text`
-    /// today. A correct edge replaced by a gap is a defect no published column shows.
+    /// Without this a name in one of those slots is called local wherever a local of the
+    /// **same name** is in scope, which unresolves two correct edges and makes two more
+    /// wrong. That condition is the whole clause: with `let sink = ..; sink.text` nothing
+    /// binds `text`, so the slot makes no difference and a test written that way cannot fail.
     ///
     /// A **field name**, not a node type, because the question is which slot of the parent
     /// the occurrence sits in, and asking the parent is exact: `field_name_for_named_child`

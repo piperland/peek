@@ -41,17 +41,21 @@ impl GrammarFacts {
         let field_count = language.field_count();
         // **Field ids run `1..=count`, and enumerating `0..count` drops the last one.**
         //
-        // `ts_language_field_name_for_id` accepts an id when `id <= count` and indexes
-        // `field_names[id]`, and `field_names[0]` is the empty entry rather than a field —
-        // `ts_language_field_id_for_name` loops `for (i = 1; i < count + 1; i++)`, so the
-        // first real id is 1 and the last is `count`. A `0..count` walk therefore misses the
+        // `ts_language_field_name_for_id` accepts an id when `id <= count` and returns
+        // `field_names[id]`, and `ts_language_field_id_for_name` — the lookup, which is what
+        // `child_by_field_name` resolves a field through — loops `for (i = 1; i < count + 1;
+        // i++)`. So the first real id is 1, the last is `count`, and id 0 is not a field at
+        // all. A `0..count` walk therefore reads one entry that names nothing and misses the
         // highest-numbered field of every grammar, and it misses it *quietly*.
         //
         // In `tree-sitter-rust` that field is `value`, which both `let_declaration` and
         // `for_expression` use for their initialiser and their iterable. So the validator
         // reported the two most ordinary fields of the language as absent from it, and the
         // spec that named them correctly was refused. A validator that rejects the truth is
-        // worse than one that accepts a typo, because the fix is to delete the field.
+        // worse than one that accepts a typo, because the fix is then to delete the field.
+        //
+        // `every_field_the_grammar_has_is_enumerated` below pins the numbering against the
+        // lookup, so this cannot rot back into the same off-by-one unnoticed.
         for id in 1..=field_count {
             if let Some(name) = language.field_name_for_id(id as u16)
                 && !name.is_empty()

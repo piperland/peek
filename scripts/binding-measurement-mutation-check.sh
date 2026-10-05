@@ -160,15 +160,8 @@ mutate "$BINDING" \
 # only that a second implementation of the reading is load-bearing, which is not the claim.
 # The claim is that the class the index carries is the class the reading produced.
 
-# Clause 1: a name in a parent's `field` slot names a member of whatever the local holds, and
-# is not classified by the binder that binds the receiver.
-mutate "$REGISTRY" \
-  '        member_fields: &["field"],' \
-  '        member_fields: &[],' \
-  'the_extractor_writes_the_local_binding_class_and_damages_nothing'
-
-# The table itself, so the failure above is known to be about the clause and not about the
-# classifier having stopped firing for some unrelated reason.
+# The binding table itself. Emptied, the classifier fires never and "it damaged nothing" is
+# an absence.
 mutate "$REGISTRY" \
   '    bindings: &[
         BindingRule::new("let_declaration", "pattern", Some("value")),
@@ -184,6 +177,21 @@ mutate "$EXTRACT_BINDINGS" \
   '    introduces(spec, node, source, name).or_else(|| bound_around(spec, node, source, name))' \
   '    bound_around(spec, node, source, name)' \
   'the_class_reaches_every_relation_the_fixture_says_binds_nothing'
+
+# Clause 1: a name in a parent's `field` slot, in a source where the same name is *also* a
+# local in scope. Deliberately **not** checked through the gate.
+#
+# `member_fields: &[]` was first run against the gate and passed every test there, which is a
+# finding rather than a nuisance: no labelled row in the fixture has a name that is both a
+# member and a local in scope, so the fixture cannot fail the clause and R-021's claim that
+# dropping it destroys four correct edges is not reproduced by this fixture. Pinning it needs
+# a source the fixture does not have, and adding one would move `references` and
+# `resolution_correctness` for an unrelated change — so the check lives beside the classifier
+# and the gate's silence is recorded rather than papered over.
+mutate "$REGISTRY" \
+  '        member_fields: &["field"],' \
+  '        member_fields: &[],' \
+  'a_field_name_is_not_classified_by_a_binder_that_binds_that_name' '--lib'
 
 # The enumeration, and not the classifier. Field ids run `1..=count`, so walking `0..count`
 # drops the highest-numbered field of every grammar; in `tree-sitter-rust` that is `value`,
