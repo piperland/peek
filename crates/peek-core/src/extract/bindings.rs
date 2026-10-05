@@ -231,7 +231,10 @@ fn binds(spec: &LanguageSpec, names: &Node<'_>, source: &[u8], name: &str) -> bo
     if spec.symbol_rule(names.kind()).is_some() {
         return false;
     }
-    let holds = std::str::from_utf8(source.get(names.byte_range())).is_ok_and(|text| text == name);
+    let holds = source
+        .get(names.byte_range())
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .is_some_and(|text| text == name);
     if holds {
         return true;
     }

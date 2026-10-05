@@ -362,9 +362,11 @@ mod tests {
         // about a misspelling rather than by trusting that it would notice one. A classifier
         // keyed on a node type the grammar has never heard of fires **never**, and a rule
         // that fires never looks exactly like a rule that does no harm.
+        static MISSPELT: &[BindingRule] =
+            &[BindingRule::new("let_declaraton", "pattern", Some("value"))];
         let facts = GrammarFacts::of(&tree_sitter_rust::LANGUAGE.into());
         let mut spec = rust();
-        spec.bindings = &[BindingRule::new("let_declaraton", "pattern", Some("value"))];
+        spec.bindings = MISSPELT;
         let problems = facts.validate(&spec);
         assert!(
             problems
@@ -379,9 +381,10 @@ mod tests {
         // The quieter half of the same rot. `child_by_field_name("patern")` returns `None`,
         // every binder in the table then introduces nothing, and the classifier classifies
         // nothing at all — which no count of damage would show.
+        static MISSPELT_FIELD: &[BindingRule] = &[BindingRule::new("let_declaration", "patern", None)];
         let facts = GrammarFacts::of(&tree_sitter_rust::LANGUAGE.into());
         let mut spec = rust();
-        spec.bindings = &[BindingRule::new("let_declaration", "patern", None)];
+        spec.bindings = MISSPELT_FIELD;
         let problems = facts.validate(&spec);
         assert!(
             problems
