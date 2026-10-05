@@ -412,7 +412,7 @@ fn the_local_binding_refusal_never_becomes_a_decision() {
         .filter(|relation| relation.kind == RelationKind::References)
         .filter(|relation| relation.source.qualified_name() == "summarise")
         .filter(|relation| relation.target_name == "out")
-        .map(|relation| state_of(relation))
+        .map(state_of)
         .collect::<Vec<_>>();
     assert!(
         placed.is_empty(),
@@ -628,7 +628,7 @@ fn a_refusal_handed_back_to_the_ladder_stays_a_refusal() {
     let placed = references_from(&after, "summarise", "out")
         .into_iter()
         .filter(|row| row.target.is_some())
-        .map(|row| state_of(row))
+        .map(state_of)
         .collect::<Vec<_>>();
     assert!(
         placed.is_empty(),
