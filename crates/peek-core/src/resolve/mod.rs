@@ -1422,10 +1422,10 @@ impl<'s> Resolver<'s> {
         let limit = self.options.outgoing_per_source;
         let scope = self.scope_of(&relation.source)?;
         let mut found: Vec<EntityId> = Vec::new();
-        for owner in scope {
+        for owner in &scope {
             let enclosed = self
                 .store
-                .outgoing(&owner, Some(RelationKind::Contains), limit)?;
+                .outgoing(owner, Some(RelationKind::Contains), limit)?;
             if enclosed.len() >= limit {
                 self.truncated += 1;
             }
