@@ -342,6 +342,11 @@
         "correct": 36,
         "wrong_sites": 6,
         "wrong_edges": 12,
+        "invariant": {
+          "decided_minus_correct": 12,
+          "equals_wrong_edges": true,
+          "sites_at_most_edges": true
+        },
         "undecided": 48,
         "unlabelled_relations": 3,
         "reach": [
