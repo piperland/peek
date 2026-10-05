@@ -838,7 +838,10 @@ fn a_declaration_in_an_enclosing_scope_answers_for_everything_inside_it() {
     println!(
         "  the entities in the file: {:?}",
         store
-            .entities_in_file(&"src/lib.rs".parse().expect("a path"), 64)
+            .entities_in_file(
+                &crate::model::RepoPath::new("src/lib.rs").expect("a path"),
+                64,
+            )
             .expect("entities")
             .iter()
             .map(|e| e.summary())
