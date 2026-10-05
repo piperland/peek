@@ -298,7 +298,12 @@ mod tests {
             .iter()
             .filter(|relation| relation.kind == RelationKind::References)
             .filter(|relation| relation.resolution.evidence_class() == Some("local_binding"))
-            .map(|relation| (relation.span.start_byte as usize, relation.target_name.clone()))
+            .map(|relation| {
+                (
+                    relation.span.start_byte as usize,
+                    relation.target_name.clone(),
+                )
+            })
             .collect()
     }
 
@@ -322,9 +327,9 @@ mod tests {
             }
             at = end;
         }
-        *found
-            .get(index)
-            .unwrap_or_else(|| panic!("{source:?} has {index} occurrences of `{needle}`, not one more"))
+        *found.get(index).unwrap_or_else(|| {
+            panic!("{source:?} has {index} occurrences of `{needle}`, not one more")
+        })
     }
 
     fn is_word_byte(byte: u8) -> bool {
