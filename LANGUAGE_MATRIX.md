@@ -74,7 +74,7 @@ rendering `1.00`.
 | typescript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | javascript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | python | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| rust | 100.00 (5/5) | 100.00 (5/5) | 100.00 (14/14) | 100.00 (3/3) | 87.80 (36/41) | 100.00 (2288/2288) | 100.00 (30/30) | 100.00 (7/7) |
+| rust | 100.00 (5/5) | 100.00 (5/5) | 100.00 (14/14) | 100.00 (3/3) | 100.00 (52/52) | 100.00 (2288/2288) | 100.00 (30/30) | 100.00 (7/7) |
 | go | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | java | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | csharp | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
@@ -116,7 +116,7 @@ wrong by a factor of two.
 
 | Language | Decided | Right | Wrong edges | Wrong sites | Undecided | Labelled but no relation |
 |---|---|---|---|---|---|---|
-| rust | 41 | 36 | 5 | 4 | 50 | 3 |
+| rust | 52 | 52 | 0 | 0 | 40 | 3 |
 
 ### Every decided-and-wrong edge, by name
 
@@ -124,17 +124,7 @@ A rate is not an audit: a short list is one somebody can read against the source
 fraction is not. Each line names the relation, the rung that placed it, the entity it
 landed on, and what the fixture says should have happened.
 
-**rust**
-
-- references from src/report.rs | format_line_inner names `entry` and the import_binding rung placed it on src/model.rs | function | entry | #0; the label says `src/report.rs | parameter | format_line_inner.entry`
-  - reachability of `references|src/report.rs|function|format_line_inner|entry`: resolver: the source's own scope declares the name, and a rung placed the edge outside it (6 in the index declare the name: src/model.rs | function | entry | #0, src/report.rs | parameter | format_line_inner.entry | #0, src/service.rs | parameter | describe.entry | #0, src/traits.rs | parameter | Meters.save.entry | #0, src/traits.rs | parameter | Saveable.save.entry | #0, src/traits.rs | parameter | Ticks.save.entry | #0)
-- references from src/report.rs | render names `count` and the same_file rung placed it on src/report.rs | parameter | format_line.count | #0; the label says `src/model.rs | field | Entry.count`
-  - reachability of `references|src/report.rs|function|render|count`: resolver: the edge is on a binding of another declaration in the same file, which the use cannot see (4 in the index declare the name: src/model.rs | field | Entry.count | #0, src/model.rs | parameter | entry.count | #0, src/report.rs | parameter | format_line.count | #0, src/service.rs | parameter | format_line.count | #0)
-- references from src/service.rs | describe names `count` and the same_file rung placed it on src/service.rs | parameter | format_line.count | #0; the label says `src/model.rs | field | Entry.count`
-  - reachability of `references|src/service.rs|function|describe|count`: resolver: the edge is on a binding of another declaration in the same file, which the use cannot see (4 in the index declare the name: src/model.rs | field | Entry.count | #0, src/model.rs | parameter | entry.count | #0, src/report.rs | parameter | format_line.count | #0, src/service.rs | parameter | format_line.count | #0)
-- references from src/service.rs | describe names `entry` and the import_binding rung placed it on src/model.rs | function | entry | #0; the label says `src/service.rs | parameter | describe.entry`
-  - reachability of `references|src/service.rs|function|describe|entry`: resolver: the source's own scope declares the name, and a rung placed the edge outside it (6 in the index declare the name: src/model.rs | function | entry | #0, src/report.rs | parameter | format_line_inner.entry | #0, src/service.rs | parameter | describe.entry | #0, src/traits.rs | parameter | Meters.save.entry | #0, src/traits.rs | parameter | Saveable.save.entry | #0, src/traits.rs | parameter | Ticks.save.entry | #0)
-
+No language has a decided edge pointing at the wrong entity.
 
 ## Relation states per class
 
@@ -145,8 +135,8 @@ correct outcome for a name with two candidates and an incorrect one for `mod::f(
 |---|---|---|---|---|---|---|---|
 | rust | `contains` | 61 | 61 | 0 | 0 | 0 | 0 |
 | rust | `imports` | 15 | 10 | 3 | 0 | 2 | 0 |
-| rust | `references` | 192 | 66 | 14 | 19 | 93 | 0 |
-| rust | `calls` | 39 | 9 | 1 | 4 | 25 | 0 |
+| rust | `references` | 192 | 72 | 21 | 6 | 93 | 0 |
+| rust | `calls` | 39 | 9 | 1 | 2 | 27 | 0 |
 | rust | `inherits` | 1 | 1 | 0 | 0 | 0 | 0 |
 | rust | `implements` | 4 | 4 | 0 | 0 | 0 | 0 |
 
