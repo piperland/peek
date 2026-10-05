@@ -39,8 +39,23 @@ impl GrammarFacts {
 
         let mut field_names = BTreeSet::new();
         let field_count = language.field_count();
-        for id in 0..field_count {
-            if let Some(name) = language.field_name_for_id(id as u16) {
+        // **Field ids run `1..=count`, and enumerating `0..count` drops the last one.**
+        //
+        // `ts_language_field_name_for_id` accepts an id when `id <= count` and indexes
+        // `field_names[id]`, and `field_names[0]` is the empty entry rather than a field —
+        // `ts_language_field_id_for_name` loops `for (i = 1; i < count + 1; i++)`, so the
+        // first real id is 1 and the last is `count`. A `0..count` walk therefore misses the
+        // highest-numbered field of every grammar, and it misses it *quietly*.
+        //
+        // In `tree-sitter-rust` that field is `value`, which both `let_declaration` and
+        // `for_expression` use for their initialiser and their iterable. So the validator
+        // reported the two most ordinary fields of the language as absent from it, and the
+        // spec that named them correctly was refused. A validator that rejects the truth is
+        // worse than one that accepts a typo, because the fix is to delete the field.
+        for id in 1..=field_count {
+            if let Some(name) = language.field_name_for_id(id as u16)
+                && !name.is_empty()
+            {
                 field_names.insert(name.to_owned());
             }
         }
@@ -350,6 +365,46 @@ mod tests {
         assert!(facts.has_field("type"));
         assert!(facts.has_field("function"));
         assert!(!facts.has_field("no_such_field"));
+    }
+
+    #[test]
+    fn every_field_the_grammar_has_is_enumerated() {
+        // **The check that keeps the enumeration honest, and it pins a real defect.**
+        //
+        // `GrammarFacts::of` walked field ids `0..count` while the runtime numbers them
+        // `1..=count`, so the highest-numbered field of every grammar was missing from the
+        // set — and a set that is missing a field *rejects a spec that is right*. In
+        // `tree-sitter-rust` the lost field is `value`, which both a `let` and a `for` use,
+        // so `every_registered_spec_validates_against_its_real_grammar` failed on a spec
+        // whose every string was correct.
+        //
+        // The direction that is trustworthy is the **lookup**: `field_id_for_name` loops
+        // `1..count + 1`, so a name it answers for is a name the grammar has. Each such name
+        // must come back out of the enumeration, under the id the lookup gives it. That is
+        // an assertion about the relationship between the two APIs rather than about a
+        // count, so it fails again if either side is renumbered.
+        let language = tree_sitter_rust::LANGUAGE.into();
+        let facts = GrammarFacts::of(&language);
+        assert!(
+            language.field_count() > 0,
+            "the grammar declares no fields, so this test would pass over an empty set"
+        );
+        for id in 1..=language.field_count() {
+            let Some(name) = language.field_name_for_id(id as u16) else {
+                continue;
+            };
+            assert!(
+                facts.has_field(name),
+                "field `{name}` is id {id} of {} and the enumeration does not hold it",
+                language.field_count()
+            );
+            assert_eq!(
+                language.field_id_for_name(name).map(|found| found as usize),
+                Some(id),
+                "field `{name}` is id {id} and the lookup disagrees, so the two APIs do not \
+                 agree on the numbering this enumeration walks"
+            );
+        }
     }
 
     #[test]

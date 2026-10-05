@@ -279,12 +279,56 @@ mod tests {
             .any(|(candidate, class)| candidate == name && class == "local_binding")
     }
 
-    /// How many references carry `local_binding`, whatever they are called.
-    fn local_count(source: &str) -> usize {
-        classes(source)
-            .into_iter()
-            .filter(|(_, class)| *class == "local_binding")
-            .count()
+    /// Every occurrence the extractor marks local, as its start byte and its name.
+    ///
+    /// **The byte, and not the name.** `is_local` answers "is this name ever local", which
+    /// is a question about the *source* rather than about an occurrence, and it is blind to
+    /// the case the two thirds of this module are about: one name that is local in one place
+    /// and reaches a declaration in another. `let size = size + 1` has three occurrences of
+    /// `size` and they are three different answers, so a test about it has to say which
+    /// occurrence it means. Reading the byte is also what makes the assertions checkable by
+    /// eye against the source above them.
+    fn locals(source: &str) -> Vec<(usize, String)> {
+        let file = crate::extract::walker::extract_with(
+            registry::get(Language::Rust).expect("rust spec"),
+            crate::model::RepoPath::new("src/lib.rs").expect("valid path"),
+            source,
+        );
+        file.relations
+            .iter()
+            .filter(|relation| relation.kind == RelationKind::References)
+            .filter(|relation| relation.resolution.evidence_class() == Some("local_binding"))
+            .map(|relation| (relation.span.start_byte as usize, relation.target_name.clone()))
+            .collect()
+    }
+
+    /// The start byte of the `index`th occurrence of `needle` in `source`.
+    ///
+    /// Counting occurrences rather than writing offsets out is what keeps a test readable
+    /// after the source is reworded, and it is checked rather than trusted: an index past the
+    /// end of the list panics here, with the source in the message, instead of silently
+    /// comparing against nothing.
+    fn occurrence(source: &str, needle: &str, index: usize) -> usize {
+        let bytes = source.as_bytes();
+        let mut found = Vec::new();
+        let mut at = 0;
+        while let Some(offset) = source[at..].find(needle) {
+            let start = at + offset;
+            let end = start + needle.len();
+            let whole_word = (start == 0 || !is_word_byte(bytes[start - 1]))
+                && (end == bytes.len() || !is_word_byte(bytes[end]));
+            if whole_word {
+                found.push(start);
+            }
+            at = end;
+        }
+        *found
+            .get(index)
+            .unwrap_or_else(|| panic!("{source:?} has {index} occurrences of `{needle}`, not one more"))
+    }
+
+    fn is_word_byte(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || byte == b'_'
     }
 
     /// The binder node type the class records for `name`.
@@ -358,14 +402,36 @@ mod tests {
 
     #[test]
     fn an_initialiser_is_not_bound_by_the_declaration_it_is_the_initialiser_of() {
-        // `let size = size + 1` reads the `size` that already existed. The occurrence is
-        // textually after the pattern, which is exactly why this is a separate test.
-        let source = "fn f(size: u32) { let size = size + 1; let _ = size; }";
-        assert!(!is_local("size", source));
+        // `let size = size + 1` reads the `size` that existed before the statement, so the
+        // occurrence inside the initialiser is **not** local even though the extractor now
+        // classifies the declaration itself as local.
+        //
+        // **Two sources that differ in one thing only, because one source cannot carry this
+        // claim.** `size` appears three times in `let size = size + 1` and the three are three
+        // different answers, so the question is not "is `size` local" — it is *which*
+        // occurrence. Written the obvious way the test contradicts the module: asking whether
+        // any `size` is local must be **yes** because of the declaration, and asking for a
+        // count of one must be **two** because of the declaration and the read after it. Both
+        // of those were asserted here, and both were wrong.
+        //
+        // Moving the read from inside the initialiser to after it changes nothing else about
+        // either source, so the difference between the two answers is exactly the clause.
+        let in_initialiser = "fn f(size: u32) { let size = size + 1; }";
+        let after = "fn f(size: u32) { let size = 0; let _ = size; }";
         assert_eq!(
-            local_count(source),
-            1,
-            "only the declaration is local; the initialiser's read is not"
+            locals(in_initialiser),
+            vec![(occurrence(in_initialiser, "size", 1), "size".to_owned())],
+            "only the declaration is local: the parameter is an entity and the read inside the \
+             initialiser is the `size` that existed before the statement. {in_initialiser:?}"
+        );
+        assert_eq!(
+            locals(after),
+            vec![
+                (occurrence(after, "size", 1), "size".to_owned()),
+                (occurrence(after, "size", 2), "size".to_owned()),
+            ],
+            "the declaration and the read after it are both local, and the parameter is not. \
+             {after:?}"
         );
     }
 
