@@ -410,14 +410,21 @@ fn doctor_reports_a_healthy_install_as_healthy_and_exits_zero() {
     // The green path matters as much as the red one: a `doctor` that could only ever fail would be
     // as useless as one that could only ever pass.
     //
-    // **And healthy is not the same as nothing to say.** This fixture declares `amount` as a
-    // parameter of both `wallet_charge` and `ledger_commit`, and each body reads its own. Since
-    // reference extraction became reachable, each body therefore records a `references` edge to
-    // the name `amount`, and a bare name with two same-file candidates is one the engine refuses
-    // to place — so the ambiguity check reports a notice. That is the check working: it is a
-    // notice rather than a warning because ambiguity is a fact about the code and not a defect
-    // (D-0004), and the assertion below names which check produced the worst severity rather
-    // than accepting any severity.
+    // **And healthy is not the same as nothing to say.** This fixture declares `amount` three
+    // times: as a parameter of both `wallet_charge` and `ledger_commit`, each of which reads its
+    // own, and as a field on two unrelated types that `total` reads through parameters. The first
+    // two are placed — a bare name inside a function names what that function declares — and the
+    // third is not: neither field is inside the declaration that declares the other, so the
+    // ambiguity check reports a notice. That is the check working: it is a notice rather than a
+    // warning because ambiguity is a fact about the code and not a defect (D-0004), and the
+    // assertion below names which check produced the worst severity rather than accepting any
+    // severity.
+    //
+    // **The fixture grew the third `amount` for this test, and the reason is worth writing down.**
+    // It used to rely on the two parameters alone, which left the fixture with nothing to report
+    // once scope-aware placement landed: the engine resolved both and the healthy install became
+    // silent. Silently is not the point of this check, so the fixture now carries a name it
+    // genuinely cannot narrow rather than the test being relaxed to accept a pass.
     let repository = Repository::small("e2e-doctor-healthy");
     run(&repository, &["index", repository.root_str()]);
     let outcome = run(&repository, &["doctor"]);

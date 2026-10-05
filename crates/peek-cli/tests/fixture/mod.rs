@@ -107,6 +107,24 @@ pub struct Charge {
     pub amount: u64,
 }
 
+/// What a wallet holds.
+pub struct Wallet {
+    /// How much it holds.
+    pub amount: u64,
+}
+
+/// Sums two balances.
+///
+/// `amount` is declared **twice in this file**, on two unrelated types, and it is read
+/// through a parameter rather than through `self`. That is the shape a name lookup
+/// cannot narrow by scope: neither occurrence is inside the declaration that declares
+/// the other, so the engine has two equally supported candidates and says so. The two
+/// bodies above are the other shape — each reads the parameter its own function
+/// declares — and they are placed, which is why this function is here as well.
+pub fn total(charge: &Charge, wallet: &Wallet) -> u64 {
+    charge.amount + wallet.amount
+}
+
 /// What a charge becomes once it settles.
 pub struct Receipt {
     /// The charge this receipt is for.
