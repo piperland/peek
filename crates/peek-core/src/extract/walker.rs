@@ -994,18 +994,40 @@ impl<'a> Walker<'a> {
         ));
     }
 
+    /// Emit a `references` relation for one identifier occurrence.
+    ///
+    /// **The evidence is decided from the tree, because the tree is the last place the answer
+    /// exists.** A name bound by a `let`, a `for` or an untyped closure parameter is a local,
+    /// and the index emits no entity for a binding — so a relation naming one is a use of a
+    /// name that nothing can be the referent of. [`super::bindings`] is the classifier, and it
+    /// is asked only for references: a callee name, an import alias and a supertype are all
+    /// names a rung can place, and calling them local would destroy correct edges rather than
+    /// repair wrong ones.
     fn emit_reference(&mut self, source: EntityId, node: Node<'_>) {
         if let Some(name) = self.text(node)
             && !name.is_empty()
         {
             // `name` is moved into the relation, so the basis is built first.
             let basis = format!("reference to `{name}`");
+            let evidence = match super::bindings::local_binding(
+                self.spec,
+                node,
+                self.source.text().as_bytes(),
+            ) {
+                // The binder is in the class rather than only in the basis so that the answer
+                // is in the index: `explain` asks what a relation's evidence says, and a
+                // sentence in a field nobody reads is not evidence.
+                Some(binder) => Evidence::LocalBinding {
+                    binder: binder.to_owned(),
+                },
+                None => Evidence::NameOnly,
+            };
             self.relations.push(Relation::pending(
                 RelationKind::References,
                 source,
                 name,
                 self.span(node),
-                Evidence::NameOnly,
+                evidence,
                 basis,
             ));
         }

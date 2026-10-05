@@ -5,7 +5,12 @@
 //!
 //! [`modules`] holds the file-to-module convention, which is also a table, and is the reason a
 //! cross-crate `use` is a name the resolver can look up rather than a name it can only guess at.
+//!
+//! [`bindings`] holds the other half of that story: the node types that bind a name **the
+//! index holds no entity for**, so a relation naming one is a use of a local and no entity
+//! anywhere can be its referent.
 
+pub mod bindings;
 pub mod grammar;
 pub mod modules;
 pub mod registry;
