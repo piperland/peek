@@ -1164,10 +1164,15 @@ impl<'s> Resolver<'s> {
 
         // **Not a rung.** `local_binding` is a claim that there is no target, so there is nothing
         // for a rung to rank: R1-R5 would each answer a question about which entity the name
-        // denotes, and the answer is that this occurrence does not denote one. Placed ahead of
-        // every rung, and of the glob-import check below, because both of those are claims about
-        // a name and neither is a claim about *this* occurrence. Measured on the gate fixture: 7
-        // decided-and-wrong edges removed, 0 decided-and-right edges removed.
+        // denotes, and the answer is that this occurrence does not denote one. So the rule goes
+        // ahead of every rung, and ahead of the glob-import check below, because both of those are
+        // claims about a name and neither is a claim about *this* occurrence.
+        //
+        // The figure below is **the gate fixture's measurement, not a property of the rule**: on
+        // `tests/fixtures/gate/rust` it removed 7 decided-and-wrong edges and 0 decided-and-right
+        // ones, taking `resolution_correctness` from 75.00 (36/48) to 87.80 (36/41) over a
+        // denominator that shrank by the 7 wrong rows and by nothing else. One fixture, and the
+        // only one with a `binds_nothing` label at all.
         if refused_for_local_binding(&relation.resolution) {
             return Ok(Decision::Unresolved {
                 reason: UnresolvedReason::LocalBinding,
