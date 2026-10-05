@@ -406,7 +406,9 @@ impl LanguageSpec {
     /// caller must read as **unclassified** rather than as "the name is not local" — the
     /// distinction is the whole of the caution in [`BindingRule`].
     pub fn binding_rule(&self, node_type: &str) -> Option<&'static BindingRule> {
-        self.bindings.iter().find(|rule| rule.node_type == node_type)
+        self.bindings
+            .iter()
+            .find(|rule| rule.node_type == node_type)
     }
 
     /// The module layout for this language, or `None` when its file-to-module convention is
@@ -436,7 +438,9 @@ impl fmt::Display for LanguageSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::{BindingRule, CallRule, ImportRule, LanguageSpec, ModuleLayout, NameStrategy, SymbolRule};
+    use super::{
+        BindingRule, CallRule, ImportRule, LanguageSpec, ModuleLayout, NameStrategy, SymbolRule,
+    };
     use crate::model::EntityKind;
 
     const RULES: &[SymbolRule] = &[SymbolRule::new(
@@ -452,7 +456,11 @@ mod tests {
         None,
         &["visibility_modifier"],
     )];
-    const BINDINGS: &[BindingRule] = &[BindingRule::new("let_declaration", "pattern", Some("value"))];
+    const BINDINGS: &[BindingRule] = &[BindingRule::new(
+        "let_declaration",
+        "pattern",
+        Some("value"),
+    )];
 
     fn spec() -> LanguageSpec {
         LanguageSpec {

@@ -59,11 +59,7 @@ use super::spec::LanguageSpec;
 ///
 /// `source` is the whole file. Nothing is read from it beyond the bytes of the identifier
 /// nodes themselves, so a name inside a comment or a string literal cannot satisfy a match.
-pub fn local_binding(
-    spec: &LanguageSpec,
-    node: Node<'_>,
-    source: &[u8],
-) -> Option<&'static str> {
+pub fn local_binding(spec: &LanguageSpec, node: Node<'_>, source: &[u8]) -> Option<&'static str> {
     let name = std::str::from_utf8(source.get(node.byte_range())?).ok()?;
     if name.is_empty() {
         return None;
@@ -163,9 +159,12 @@ fn bound_around(
                 break;
             }
             if let Some((rule, binder)) = as_binder(spec, sibling)
-                && binder.child_by_field_name(rule.name_field).is_some_and(|names| {
-                    in_force(rule.not_in_force, &binder, &names, node) && binds(spec, &names, source, name)
-                })
+                && binder
+                    .child_by_field_name(rule.name_field)
+                    .is_some_and(|names| {
+                        in_force(rule.not_in_force, &binder, &names, node)
+                            && binds(spec, &names, source, name)
+                    })
             {
                 return Some(rule.node_type);
             }
@@ -378,7 +377,10 @@ mod tests {
         // and a damage count over labelled rows would call a repair.
         let source = "struct Sink { text: String } fn f() { let sink = Sink { text: String::new() }; sink.text.push_str(\"x\"); }";
         assert!(is_local("sink", source), "the receiver is a local");
-        assert!(!is_local("text", source), "the field is a member of the sink");
+        assert!(
+            !is_local("text", source),
+            "the field is a member of the sink"
+        );
     }
 
     #[test]
@@ -407,9 +409,15 @@ mod tests {
         // closure as entityless would unresolve every use of a typed closure parameter — the
         // same damage the field clause exists to prevent, reached by another route.
         let typed = "fn f() { let g = |x: u32| x + 1; let _ = g(1); }";
-        assert!(!is_local("x", typed), "a typed closure parameter is an entity");
+        assert!(
+            !is_local("x", typed),
+            "a typed closure parameter is an entity"
+        );
         let untyped = "fn f() { let g = |x| x + 1; let _ = g(1); }";
-        assert!(is_local("x", untyped), "an untyped closure parameter is not");
+        assert!(
+            is_local("x", untyped),
+            "an untyped closure parameter is not"
+        );
     }
 
     #[test]

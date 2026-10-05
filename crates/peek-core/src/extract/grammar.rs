@@ -219,11 +219,7 @@ impl GrammarFacts {
             if let Some(field) = rule.not_in_force
                 && !self.has_field(field)
             {
-                problems.push(self.missing_field(
-                    language,
-                    field,
-                    "binding not yet in force",
-                ));
+                problems.push(self.missing_field(language, field, "binding not yet in force"));
             }
         }
 
@@ -381,15 +377,14 @@ mod tests {
         // The quieter half of the same rot. `child_by_field_name("patern")` returns `None`,
         // every binder in the table then introduces nothing, and the classifier classifies
         // nothing at all — which no count of damage would show.
-        static MISSPELT_FIELD: &[BindingRule] = &[BindingRule::new("let_declaration", "patern", None)];
+        static MISSPELT_FIELD: &[BindingRule] =
+            &[BindingRule::new("let_declaration", "patern", None)];
         let facts = GrammarFacts::of(&tree_sitter_rust::LANGUAGE.into());
         let mut spec = rust();
         spec.bindings = MISSPELT_FIELD;
         let problems = facts.validate(&spec);
         assert!(
-            problems
-                .iter()
-                .any(|problem| problem.contains("patern")),
+            problems.iter().any(|problem| problem.contains("patern")),
             "a misspelt binding field must be reported, not accepted: {problems:?}"
         );
     }
