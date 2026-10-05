@@ -301,25 +301,17 @@ fn a_name_a_binder_claims_is_refused_before_the_ladder_runs() {
     let mut store = tree.index_without_resolving();
     let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
-    let refused = the_reference(
-        &relations_in(
-            &store,
-            &ResolutionState::Unresolved {
-                reason: UnresolvedReason::LocalBinding,
-            },
-        ),
-        "out",
-    );
+    let refused_state = ResolutionState::Unresolved {
+        reason: UnresolvedReason::LocalBinding,
+    };
+    let refused = the_reference(&relations_in(&store, &refused_state), "out");
     assert_eq!(
         refused.target, None,
         "a refused relation points at nothing: {}",
         state_of(refused)
     );
     assert_eq!(
-        refused.resolution,
-        ResolutionState::Unresolved {
-            reason: UnresolvedReason::LocalBinding,
-        },
+        refused.resolution, refused_state,
         "and it says so in the stored state, not only in this test: {}",
         state_of(refused)
     );
@@ -471,14 +463,15 @@ fn a_re_decision_reads_the_refusal_in_all_three_states_that_carry_the_class() {
     ];
     let mut displaced = Vec::new();
     for (index, (_, state, target)) in cases.iter().enumerate() {
+        let index = index as u32;
         displaced.push(Relation {
             span: crate::model::Span::new(
-                10 + (index as u32) * 4,
-                12 + (index as u32) * 4,
+                10 + index * 4,
+                12 + index * 4,
                 1,
-                1 + (index as u32) as u16,
+                1 + index,
                 1,
-                2 + (index as u32) as u16,
+                2 + index,
             )
             .expect("span"),
             target: target.clone(),
@@ -541,15 +534,10 @@ fn a_refusal_survives_the_pass_that_would_otherwise_undue_it() {
     let mut store = tree.index_without_resolving();
     resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
 
-    let refused = the_reference(
-        &relations_in(
-            &store,
-            &ResolutionState::Unresolved {
-                reason: UnresolvedReason::LocalBinding,
-            },
-        ),
-        "out",
-    );
+    let already_refused = ResolutionState::Unresolved {
+        reason: UnresolvedReason::LocalBinding,
+    };
+    let refused = the_reference(&relations_in(&store, &already_refused), "out");
     assert_eq!(
         refused.resolution.evidence_class(),
         None,
@@ -574,12 +562,7 @@ fn a_refusal_survives_the_pass_that_would_otherwise_undue_it() {
         report.summary()
     );
 
-    let after = relations_in(
-        &store,
-        &ResolutionState::Unresolved {
-            reason: UnresolvedReason::LocalBinding,
-        },
-    );
+    let after = relations_in(&store, &already_refused);
     let reference = the_reference(&after, "out");
     assert_eq!(
         reference.target, None,
