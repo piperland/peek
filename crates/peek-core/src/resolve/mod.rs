@@ -302,7 +302,9 @@
 //! read backwards endorses it rather than refusing it.
 //!
 //! The two clauses were priced separately, over **every relation the index holds** rather than over
-//! the wrong edges, and that is what settled it:
+//! the wrong edges, and that is what settled it. The figures below are the price **as measured
+//! before either clause was adopted**, which is the only state in which a clause has anything to
+//! repair and therefore the only state in which its damage count means anything:
 //!
 //! | clause | repairs | damage |
 //! |---|---:|---:|
@@ -311,16 +313,20 @@
 //!
 //! **Damage zero is the admissibility criterion**, and it is arithmetic rather than taste: a clause
 //! is only safe to adopt while the edges it would un-place are edges the fixture says are right. Both
-//! hold, and that is why the rule is written as two clauses over one question rather than as one
+//! held, and that is why the rule is written as two clauses over one question rather than as one
 //! clause that would have to be split later.
 //!
 //! Sixteen labelled relations are covered by the first clause and thirty-one by the second, and
-//! **fifteen are covered by the second and not the first** — including all four of the surviving
-//! wrong edges and seven more of the identical shape. That difference is the measurement: if the two
-//! clause populations were the same set, "the source's own scope wins" would have been the whole
-//! answer and the second clause would be redundant. It is not, and the test that says so is
-//! `gate::the_two_scope_clauses_are_not_one_rule`, over the whole labelled population and not over
-//! the four rows that motivated the question.
+//! **fifteen are covered by the second and not the first** — including all four of the wrong edges
+//! the price was taken over and seven more of the identical shape. That difference is the
+//! measurement: if the two clause populations were the same set, "the source's own scope wins" would
+//! have been the whole answer and the second clause would be redundant. It is not, and the test that
+//! says so is `gate::the_two_scope_clauses_are_not_one_rule`, over the whole labelled population
+//! and not over the four rows that motivated the question. **Those coverage figures are a property
+//! of the fixture's scope facts and not of where the engine places anything, so they read the same
+//! before and after the fix** — which is what lets a measurement of a defect outlive the fix. The
+//! price itself does not: with no wrong edge left, both clauses now refuse nothing, and their damage
+//! count of zero has become an absence rather than a measurement.
 //!
 //! **What the rule must not become.** Preferring the source's own scope *blindly* would replace
 //! `model.rs`'s answer to `label` and `count` — where the field shorthand reads the **parameter** —

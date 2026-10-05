@@ -1007,20 +1007,37 @@ fn no_scope_clause_damages_a_placement_the_fixture_gives_a_referent_for() {
     // `format_line`'s answer to `count` with `Entry.count`. Those are decided-and-right today, and
     // the clause is written so that they are not: a scope declaration wins only over a candidate
     // outside it, and a binding outside the scope is not a candidate at all rather than a weaker
-    // one.
+    // one. It cost a damage count of six to find that distinction out — the first version of the
+    // predicate asked whether a placement was a *member* of the scope chain rather than a
+    // declaration the scope makes, and read every right answer as wrong.
+    //
+    // **A standing guard rather than a live measurement, and the difference is stated here.** With
+    // no wrong edge left on the fixture neither clause refuses anything, so both prices are zero and
+    // this assertion is an absence. The half that is still live is
+    // `the_two_scope_clauses_are_not_one_rule`, which asks about *scope facts* rather than about
+    // placements and reads the same either way. A fixture that grows a wrong edge both clauses
+    // refuse would bring this one back.
     for (language, directory) in discovered() {
         let (corpus, _scratch, graph) = measured(language, &directory);
         let items: Vec<scope::Item<'_>> = scope::items(&corpus, &graph);
         let labelled: Vec<&scope::Item<'_>> = items.iter().filter(|item| item.claimed).collect();
         for clause in scope::Clause::BOTH {
-            let damage = scope::Price::of(&labelled, clause, &graph).damage;
+            let price = scope::Price::of(&labelled, clause, &graph);
+            println!(
+                "{}: `{}` refuses {} of {} labelled placements ({price})",
+                language.as_str(),
+                clause.as_str(),
+                price.repair + price.damage,
+                labelled.len()
+            );
             assert_eq!(
-                damage,
+                price.damage,
                 0,
-                "{}: `{}` refuses {damage} placements the fixture says are right. The clause is only \
+                "{}: `{}` refuses {} placements the fixture says are right. The clause is only \
                  admissible while that is zero",
                 language.as_str(),
-                clause.as_str()
+                clause.as_str(),
+                price.damage
             );
         }
     }
@@ -1031,9 +1048,10 @@ fn every_decided_and_wrong_row_is_refused_by_a_scope_clause() {
     // The completion signal, and the half that keeps the other two from being vacuously true.
     //
     // **Zero is the claim, and it is the claim that outlives the fix.** While the four edges were
-    // still wrong this named them; once the clauses are adopted it is empty, and a wrong edge that
-    // neither clause can see brings it back. A measure that read only the wrong edges would go quiet
-    // at exactly that point.
+    // still wrong this named every one of them — each was refused by exactly one of the two
+    // clauses — and once the clauses are adopted it is empty. A wrong edge that neither clause can
+    // see brings it back, and the assertion prints which one, which is the difference between "the
+    // gate is green" and "the gate has nothing left to say".
     for (language, directory) in discovered() {
         let (corpus, _scratch, graph) = measured(language, &directory);
         let unexplained = scope::unexplained(&corpus, &graph);
