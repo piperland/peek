@@ -1069,7 +1069,23 @@ pub struct Placement {
     /// only meaningful if it is the verdict for *that* edge, and matching two
     /// prose strings by whether one contains the other is how a reading gets
     /// attached to the wrong row.
+    ///
+    /// **One entry per labelled site, not per edge.** Deduplicated by key, so a source
+    /// that writes the same name three times contributes one line however many of its
+    /// rows are wrong. [`Self::wrong_edges`] is the count over edges; the two are
+    /// different populations and only one of them is comparable with
+    /// [`Self::decided`].
     pub wrong: Vec<(String, String)>,
+    /// Decided relations pointing somewhere else, counted as **edges**.
+    ///
+    /// Published beside [`Self::wrong`] because the two do not agree and a reader who
+    /// takes one for the other is wrong by a factor of two: on the Rust fixture
+    /// `decided - correct` is 12 while `wrong` lists 6 sites, and the matrix published
+    /// "6 decided and wrong" beside "48 decided". **Counted rather than asserted** —
+    /// `decided - correct == wrong_edges` is an identity, and an assertion of an identity
+    /// is a check that cannot fail, which is worse than no check because it is evidence.
+    /// The number is printed so the reader can do the subtraction.
+    pub wrong_edges: u64,
     /// Placement labels with no matching relation at all, each named.
     pub absent: Vec<String>,
     /// Of the fixture's labelled relations of a scored class, how many carry a
@@ -1276,6 +1292,9 @@ fn declared_name(qualified_name: &str) -> &str {
 pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
     let mut correct = 0u64;
     let mut decided = 0u64;
+    // Counted before the list is deduplicated, because deduplication is what makes the
+    // two figures disagree and the size of the disagreement is the finding.
+    let mut wrong_here_total = 0u64;
     let mut undecided = Vec::new();
     let mut wrong = Vec::new();
     let mut absent = Vec::new();
@@ -1306,6 +1325,7 @@ pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
         // report the engine right on the strength of one of two answers.
         let mut right = 0u64;
         let mut claimed = 0u64;
+        let mut wrong_here = 0u64;
         for row in &rows {
             if !row.is_decided() {
                 undecided.push(format!(
@@ -1318,6 +1338,7 @@ pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
             if placement_holds(bind.target.as_ref(), row.target.as_ref()) {
                 right += 1;
             } else {
+                wrong_here += 1;
                 wrong.push((
                     bind.key(),
                     format!(
@@ -1333,10 +1354,12 @@ pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
         }
         decided += claimed;
         correct += right;
+        wrong_here_total += wrong_here;
     }
 
     undecided.sort();
     undecided.dedup();
+    let wrong_edges = wrong_here_total;
     wrong.sort();
     wrong.dedup_by_key(|(key, _)| key.clone());
     absent.sort();
@@ -1346,6 +1369,7 @@ pub fn score_placement(corpus: &Corpus, graph: &Graph) -> Placement {
         decided,
         undecided,
         wrong,
+        wrong_edges,
         absent,
         covered,
         labeled,

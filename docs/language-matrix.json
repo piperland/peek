@@ -340,7 +340,8 @@
       "placement": {
         "decided": 48,
         "correct": 36,
-        "wrong": 6,
+        "wrong_sites": 6,
+        "wrong_edges": 12,
         "undecided": 48,
         "unlabelled_relations": 3,
         "reach": [

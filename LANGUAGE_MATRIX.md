@@ -106,9 +106,17 @@ that reason: a language cannot read well by answering less. `Decided and wrong` 
 confidently wrong edge, which is a claim, and `Undecided` is a gap, which is an
 absence a reader can see. They are never added together.
 
-| Language | Decided | Right | Decided and wrong | Undecided | Labelled but no relation |
-|---|---|---|---|---|---|
-| rust | 48 | 36 | 6 | 48 | 3 |
+**Two wrong-edge counts, over two different populations, and they do not agree.**
+`Wrong sites` counts labelled *sites*: one per `binds` line that has a wrong edge
+anywhere under it, however many rows that source wrote. `Wrong edges` counts the
+edges themselves, so it is the one that subtracts from `Decided`. On the Rust
+fixture a source writes `out` three times and `last` four, so the six sites are
+twelve edges and `Decided - Right` is 12 rather than 6. Reading one as the other is
+wrong by a factor of two.
+
+| Language | Decided | Right | Wrong edges | Wrong sites | Undecided | Labelled but no relation |
+|---|---|---|---|---|---|---|
+| rust | 48 | 36 | 12 | 6 | 48 | 3 |
 
 ### Every decided-and-wrong edge, by name
 

@@ -138,11 +138,7 @@ impl Row {
                 Some(Claim::Referent(key)) => key.render(),
                 Some(Claim::Nothing) => "no referent".to_owned(),
             },
-            if self.decided {
-                "decided"
-            } else {
-                "undecided"
-            },
+            if self.decided { "decided" } else { "undecided" },
             if self.correct { "right" } else { "wrong" },
             if self.refuses_under(rule) {
                 "refuse it"
@@ -241,7 +237,11 @@ fn parser() -> Parser {
 /// to hold the iterable and the body, and both assumptions were wrong. Printing the tree
 /// is cheaper than either.
 pub fn sexp(text: &str) -> String {
-    parser().parse(text, None).expect("the source parses").root_node().to_sexp()
+    parser()
+        .parse(text, None)
+        .expect("the source parses")
+        .root_node()
+        .to_sexp()
 }
 
 /// The node types the engine's own reference rule matches.

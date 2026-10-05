@@ -146,12 +146,19 @@ fn measure_language(language: Language, directory: &Path) -> Row {
 /// The scratch is kept alive for as long as the borrow, so a caller cannot be handed a
 /// graph whose tree has already been deleted. Split out of [`measure_language`] because
 /// the binding measurement wants the same index and no summary.
-fn measured(language: Language, directory: &Path) -> (expect::Corpus, measure::Scratch, measure::Graph) {
+fn measured(
+    language: Language,
+    directory: &Path,
+) -> (expect::Corpus, measure::Scratch, measure::Graph) {
     let corpus = expect::parse(language, directory).unwrap_or_else(|problems| {
         panic!(
             "the ground truth for {} does not parse:\n  {}",
             language,
-            problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n  ")
+            problems
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n  ")
         )
     });
     let scratch = measure::Scratch::new(&format!("gate-{}", language.as_str()));
@@ -207,11 +214,12 @@ fn print_measurement(measurement: &Measurement, incremental: &incremental::Incre
     }
     println!("  index: {}", measurement.index_report.summary());
     println!(
-        "  placement: {} of {} decided relations point at the entity the fixture names; \
-         {} decided and wrong, {} undecided, {} labelled with no relation, {} of {} labelled \
-         relations carry a placement claim",
+        "  placement: {} of {} decided relations point at the entity the fixture names, so {} \
+         edges are wrong; {} labelled sites are wrong, {} undecided, {} labelled with no \
+         relation, {} of {} labelled relations carry a placement claim",
         measurement.placement.correct,
         measurement.placement.decided,
+        measurement.placement.wrong_edges,
         measurement.placement.wrong.len(),
         measurement.placement.undecided.len(),
         measurement.placement.absent.len(),

@@ -357,7 +357,13 @@ pub fn to_json(rows: &[Row]) -> String {
                         Json::obj(vec![
                             ("decided", Json::Num(measurement.placement.decided)),
                             ("correct", Json::Num(measurement.placement.correct)),
-                            ("wrong", Json::Num(measurement.placement.wrong.len() as u64)),
+                            // `wrong_sites` and `wrong_edges` are different populations and are both
+                            // published: only the second subtracts from `decided`.
+                            (
+                                "wrong_sites",
+                                Json::Num(measurement.placement.wrong.len() as u64),
+                            ),
+                            ("wrong_edges", Json::Num(measurement.placement.wrong_edges)),
                             (
                                 "undecided",
                                 Json::Num(measurement.placement.undecided.len() as u64),
@@ -537,21 +543,29 @@ pub fn to_markdown(rows: &[Row], generated_note: &str) -> String {
          it can be raised by declining to decide more. These counts are published beside it for\n\
          that reason: a language cannot read well by answering less. `Decided and wrong` is a\n\
          confidently wrong edge, which is a claim, and `Undecided` is a gap, which is an\n\
-         absence a reader can see. They are never added together.\n\n",
+         absence a reader can see. They are never added together.\n\n\
+         **Two wrong-edge counts, over two different populations, and they do not agree.**\n\
+         `Wrong sites` counts labelled *sites*: one per `binds` line that has a wrong edge\n\
+         anywhere under it, however many rows that source wrote. `Wrong edges` counts the\n\
+         edges themselves, so it is the one that subtracts from `Decided`. On the Rust\n\
+         fixture a source writes `out` three times and `last` four, so the six sites are\n\
+         twelve edges and `Decided - Right` is 12 rather than 6. Reading one as the other is\n\
+         wrong by a factor of two.\n\n",
     );
     out.push_str(
-        "| Language | Decided | Right | Decided and wrong | Undecided | Labelled but no relation |\n\
-         |---|---|---|---|---|---|\n",
+        "| Language | Decided | Right | Wrong edges | Wrong sites | Undecided | Labelled but no relation |\n\
+         |---|---|---|---|---|---|---|\n",
     );
     for row in rows {
         let Some(measurement) = &row.measurement else {
             continue;
         };
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
             row.language.as_str(),
             measurement.placement.decided,
             measurement.placement.correct,
+            measurement.placement.wrong_edges,
             measurement.placement.wrong.len(),
             measurement.placement.undecided.len(),
             measurement.placement.absent.len(),
