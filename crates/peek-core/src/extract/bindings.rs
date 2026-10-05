@@ -318,6 +318,18 @@ mod tests {
             .collect()
     }
 
+    /// The same, for one name.
+    ///
+    /// **Filtering by name is what makes the field clause legible.** A source that names both
+    /// `sink` and `text` has four locals in it, two of them the receivers, and asserting the
+    /// whole list buries the two rows the clause is about inside the two it is not.
+    fn locals_named(name: &str, source: &str) -> Vec<(usize, String)> {
+        locals(source)
+            .into_iter()
+            .filter(|(_, candidate)| candidate == name)
+            .collect()
+    }
+
     /// The start byte of the `index`th occurrence of `needle` in `source`.
     ///
     /// Counting occurrences rather than writing offsets out is what keeps a test readable
@@ -472,7 +484,7 @@ mod tests {
         let source = "struct Sink { text: String } fn f() { let text = String::new(); let sink = \
                       Sink { text: String::new() }; sink.text.push_str(&text); }";
         assert_eq!(
-            locals(source),
+            locals_named("text", source),
             vec![
                 (occurrence(source, "text", 1), "text".to_owned()),
                 (occurrence(source, "text", 4), "text".to_owned()),
@@ -480,6 +492,18 @@ mod tests {
             "only the declaration and the argument read are local. Occurrences 2 and 3 are the \
              `field` of a `field_initializer` and of a `field_expression`: they name a member \
              of the sink, and no binder that binds `text` has anything to say about them. \
+             {source:?}"
+        );
+        // The counterweight, and the reason the assertion above cannot pass by having nothing
+        // to do: the receiver of that field read *is* a local, and is counted as one. A
+        // classifier that simply classified nothing would satisfy the first assertion too.
+        assert_eq!(
+            locals_named("sink", source),
+            vec![
+                (occurrence(source, "sink", 0), "sink".to_owned()),
+                (occurrence(source, "sink", 1), "sink".to_owned()),
+            ],
+            "the receiver is a local: its declaration and the use on the next statement. \
              {source:?}"
         );
     }
