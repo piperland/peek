@@ -3,12 +3,13 @@
 #
 # # A gate that has never failed is not evidence of anything.
 #
-# This script mutates one extraction rule in `src/extract/registry.rs`, re-runs the
-# gate, and asserts that the gate **fails** and that it fails on the dimension the
-# mutation should break. The mutation is reverted afterwards, and the tree is
-# checked afterwards, so a run leaves nothing behind.
+# This script mutates one rule — four in `src/extract/registry.rs`, one in
+# `src/resolve/mod.rs` — re-runs the gate, and asserts that the gate **fails**
+# and that it fails on the dimension the mutation should break. The mutation is
+# reverted afterwards, and the tree is checked afterwards, so a run leaves
+# nothing behind.
 #
-# Three mutations, chosen because each is a plausible mistake rather than a
+# Five mutations, chosen because each is a plausible mistake rather than a
 # nonsense one, and each should break a *different* dimension:
 #
 #   1. `macro_invocation` dropped from the call rules.
@@ -37,21 +38,34 @@
 #      gate notices when the `References` class stops producing. A gate that cannot
 #      fail on a dimension is not measuring it.
 #
-#   5. `field_identifier` dropped from the reference rule's node types.
-#      Every other mutation breaks extraction as well as resolution, so none of them
-#      can tell the new column from the ones already in the table. This one removes
-#      `entry.count` and `entry.label` — the two field reads — and with them the two
-#      decided-and-wrong `count` edges the `same_file` rung places on
-#      `format_line.count`. `resolution_correctness` therefore **rises**, and that is
-#      the point: it is the mutation that demonstrates the hazard the column's design
-#      is built against. An engine that decided less and got the rest right would read
-#      better here, which is exactly why the wrong-edge count and the undecided count
-#      are published beside the fraction rather than folded into it.
+#   5. The resolver's "a binding of an unrelated declaration is not a candidate"
+#      clause dropped from R4's same-file branch.
+#      Every other mutation breaks extraction, so none of them can tell this column
+#      from the ones already in the table: the gate would notice a rule that stopped
+#      producing rows, which every dimension already notices. This one removes no row
+#      at all. It only stops the rung refusing `format_line.count` for the `count` read
+#      written in `render` and in `describe`, and both of those edges come back wrong,
+#      so `resolution_correctness` **falls** and the gate fails.
 #
-#      It is also why this column is not a second `references`. `references` falls to
-#      near zero under this mutation and `resolution_correctness` rises: the two
-#      dimensions move in opposite directions on the same edit, which is the clearest
-#      evidence available that they measure different things.
+#      **It used to be an extractor mutation, and it cannot be one any more.** The
+#      version before scope-aware placement dropped `field_identifier` from the
+#      reference rule's node types, which removed `entry.count` and `entry.label` —
+#      and with them the two decided-and-wrong `count` edges. `resolution_correctness`
+#      therefore *rose* under it, which was the point: it was the mutation that
+#      demonstrated that this column cannot tell a fix from a withdrawal, because an
+#      engine that decided less and got the rest right reads better here. That is why
+#      the wrong-edge count and the undecided count are published beside the fraction
+#      rather than folded into it.
+#
+#      The demonstration is no longer available on this fixture, and the reason is worth
+#      stating rather than working around: `resolution_correctness` is now 100.00, so
+#      deleting rows can only delete correct ones and the fraction is pinned at 1. The
+#      column is saturated, which means **no mutation of any kind can move it upward**,
+#      and the mutation above replaces the demonstration with a check that the column
+#      still notices a placement rule being broken — which is the other half of what the
+#      column is for. The hazard the old mutation demonstrated is still real and still
+#      undefended by the fraction alone; what changed is that this fixture can no longer
+#      exhibit it.
 #
 # Usage:
 #   ./scripts/language-gate-mutation-check.sh
@@ -64,6 +78,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 REGISTRY="crates/peek-core/src/extract/registry.rs"
+RESOLVER="crates/peek-core/src/resolve/mod.rs"
 
 if [ -f "$HOME/.cargo/env" ]; then
   # shellcheck disable=SC1091
@@ -74,7 +89,9 @@ export PATH="$HOME/.cargo/bin:$PATH"
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
 fail() { printf '\n\033[1;31mMUTATION CHECK FAILED: %s\033[0m\n' "$1" >&2; exit 1; }
 
-[ -f "$REGISTRY" ] || fail "$REGISTRY not found"
+for required in "$REGISTRY" "$RESOLVER"; do
+  [ -f "$required" ] || fail "$required not found"
+done
 
 # Read one dimension out of the gate's own output, as the fraction it printed.
 #
@@ -97,15 +114,19 @@ measure() {
     | head -1
 }
 
-# `mutate <search> <replacement> <dimension>` — apply an edit, and require the
-# gate to fail on `dimension` while the others keep working.
+# `mutate <file> <search> <replacement> <dimension> <before>` — apply an edit, and
+# require the gate to fail on `dimension` while the others keep working.
+#
+# The file is an argument rather than a constant because the fifth mutation no longer
+# lives in the registry; see its own note below.
 mutate() {
-  local search="$1" replacement="$2" dimension="$3" before="$4"
+  local file="$1" search="$2" replacement="$3" dimension="$4" before="$5"
 
   step "mutation for $dimension"
-  cp "$REGISTRY" "$REGISTRY.gate-mutation.bak"
+  [ -f "$file" ] || fail "$file not found"
+  cp "$file" "$file.gate-mutation.bak"
 
-  python3 - "$REGISTRY" "$search" "$replacement" <<'PY'
+  python3 - "$file" "$search" "$replacement" <<'PY'
 import sys
 path, search, replacement = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(path, encoding="utf-8").read()
@@ -132,8 +153,8 @@ PY
   # measures the mutation while reading the clean source. That happened here: three
   # runs in a row reported `calls` at 38/40 against a source that declares a macro
   # call rule, and the cause was a stale test binary rather than the engine.
-  restore_registry
-  touch "$REGISTRY"
+  restore_file "$file"
+  touch "$file"
 
   if [ -z "$verdict" ]; then
     fail "the gate produced no test summary under the mutation for $dimension; the build is \
@@ -149,13 +170,14 @@ broken rather than the measurement having moved"
   printf '  %s: %s -> %s, and the gate failed\n' "$dimension" "$before" "$after"
 }
 
-restore_registry() {
-  if [ -f "$REGISTRY.gate-mutation.bak" ]; then
-    mv "$REGISTRY.gate-mutation.bak" "$REGISTRY"
-    touch "$REGISTRY"
+restore_file() {
+  if [ -f "$1.gate-mutation.bak" ]; then
+    mv "$1.gate-mutation.bak" "$1"
+    touch "$1"
   fi
   return 0
 }
+restore_registry() { restore_file "$REGISTRY"; }
 trap restore_registry EXIT
 
 step "baseline"
@@ -175,44 +197,46 @@ done
 printf '  calls %s, symbol_precision %s, imports %s, references %s, resolution_correctness %s\n' \
   "$BASE_CALLS" "$BASE_PRECISION" "$BASE_IMPORTS" "$BASE_REFERENCES" "$BASE_PLACEMENT"
 
-mutate 'CallRule::new("macro_invocation", "macro"),' '' calls "$BASE_CALLS"
-mutate 'type_scope_nodes: &["impl_item", "trait_item"],' \
+mutate "$REGISTRY" 'CallRule::new("macro_invocation", "macro"),' '' calls "$BASE_CALLS"
+mutate "$REGISTRY" 'type_scope_nodes: &["impl_item", "trait_item"],' \
   'type_scope_nodes: &["trait_item"],' symbol_precision "$BASE_PRECISION"
-mutate '        "use_declaration",
+mutate "$REGISTRY" '        "use_declaration",
         Some("argument"),' '        "mod_item",
         Some("argument"),' imports "$BASE_IMPORTS"
-mutate '        node_types: &[
+mutate "$REGISTRY" '        node_types: &[
             "identifier",
             "type_identifier",
             "field_identifier",
             "scoped_identifier",
         ],' '        node_types: &[],' references "$BASE_REFERENCES"
-mutate '            "type_identifier",
-            "field_identifier",
-            "scoped_identifier",' '            "type_identifier",
-            "scoped_identifier",' resolution_correctness "$BASE_PLACEMENT"
+mutate "$RESOLVER" \
+  '                    && is_declaration(entity.kind())
+                    && !is_binding(entity.kind())' \
+  '                    && is_declaration(entity.kind())' \
+  resolution_correctness "$BASE_PLACEMENT"
 
 restore_registry
 trap - EXIT
 
 step "the tree is clean again, and so is the build"
-if ! git diff --quiet -- "$REGISTRY"; then
-  fail "the registry was left modified; the mutations were not reverted"
+if ! git diff --quiet -- "$REGISTRY" "$RESOLVER"; then
+  fail "a mutated file was left modified; the mutations were not reverted"
 fi
 # Rebuild from the restored source and confirm the measurement is the one the
 # unmutated engine produces. Without this the script can report "the gate failed
 # correctly" while leaving a mutated binary behind for the next run.
 AFTER_ALL="$(measure calls)"
 if [ "$AFTER_ALL" != "$BASE_CALLS" ]; then
-  fail "after restoring the registry, calls is $AFTER_ALL rather than the baseline $BASE_CALLS; \
-a mutated build survived the restore"
+  fail "after restoring the mutated file, calls is $AFTER_ALL rather than the baseline \
+$BASE_CALLS; a mutated build survived the restore"
 fi
 printf '  calls back at %s, matching the baseline\n' "$AFTER_ALL"
 
 printf '\n\033[1;32mMUTATION CHECK OK\033[0m\n'
-printf 'Each gate assertion failed when the extraction rule behind it was removed.\n'
-printf 'Note that resolution_correctness ROSE under its mutation. That is the column\n'
-printf 'working, not failing: the wrong edges it counts left the decided population\n'
-printf 'along with the right ones, and the wrong/undecided counts beside it are what\n'
-printf 'would show it. A single fraction over decided relations cannot express that,\n'
-printf 'which is why the three are published separately.\n'
+printf 'Each gate assertion failed when the rule behind it was removed.\n'
+printf 'resolution_correctness FELL under its mutation, which is the column noticing a\n'
+printf 'placement rule being broken rather than a class of rows being withdrawn. It\n'
+printf 'reads 100.00 on this fixture, so the fraction is saturated and the wrong-edge\n'
+printf 'and undecided counts beside it are what a withdrawal would have to show: a\n'
+printf 'fraction over decided relations cannot express deciding less, which is why the\n'
+printf 'three are published separately.\n'
