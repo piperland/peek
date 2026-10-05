@@ -1,22 +1,23 @@
 peek context pack
-budget: 390 tokens requested, 186 spent, 204 remaining
+budget: 390 tokens requested, 209 spent, 181 remaining
 counted as: ceil(utf8 bytes / 3)
 status: reduced
 dropped:
-  3 unit(s) did not fit the budget
-  5 edge(s) did not fit beside its unit
+  4 unit(s) did not fit the budget
+  3 edge(s) did not fit beside its unit
 
-function wallet_charge — src/ledger.rs:19
+function wallet_charge — src/ledger.rs:37
   signature: (amount: u64) -> Receipt
   doc: Settle a charge against the ledger.
 
 This is the one declaration in the fixture whose qualified name is unique, which is what makes
 it addressable by name.
   included because: it is what you asked for.
-  -> references amount  [ambiguous (3 candidates)]  src/ledger.rs:21
-      between: src/ledger.rs::Charge.amount, src/ledger.rs::ledger_commit.amount, src/ledger.rs::wallet_charge.amount
-  -> calls src/ledger.rs::ledger_commit  [resolved (same_file)]  src/ledger.rs:21
-candidates: 4 examined, 0 not reached
+  -> calls src/ledger.rs::ledger_commit  [resolved (same_file)]  src/ledger.rs:39
+  -> contains src/ledger.rs::wallet_charge.amount  [resolved (containment)]  src/ledger.rs:37
+  -> references src/ledger.rs::Receipt  [resolved (same_file)]  src/ledger.rs:37
+  -> references src/ledger.rs::Receipt  [resolved (same_file)]  src/ledger.rs:38
+candidates: 5 examined, 0 not reached
 note: the fill stopped at the first declaration that did not fit rather than skipping to a smaller one, so this pack is a prefix of the full ranking; every declaration behind that one is named in `omitted` with what it would have cost
 note: the answer is reduced, not truncated: a declaration is included whole or not at all, and the fill stopped at the first that did not fit rather than skipping to a smaller one. This is therefore a prefix of the full ranking
 could not:
