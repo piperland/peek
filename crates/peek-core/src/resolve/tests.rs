@@ -405,12 +405,17 @@ fn the_local_binding_refusal_never_becomes_a_decision() {
     // one placed by an import is `Resolved`, so a rule that let either through is caught whichever
     // rung produced it.
     let rows: Vec<Relation> = decided.collect();
-    for relation in references_from(&rows, "summarise", "out") {
-        panic!(
-            "`out` was decided rather than refused, so a rung answered it: {}",
-            state_of(relation)
-        );
-    }
+    let placed = rows
+        .iter()
+        .filter(|relation| relation.kind == RelationKind::References)
+        .filter(|relation| relation.source.qualified_name() == "summarise")
+        .filter(|relation| relation.target_name == "out")
+        .map(|relation| state_of(relation))
+        .collect::<Vec<_>>();
+    assert!(
+        placed.is_empty(),
+        "`out` was decided rather than refused, so a rung answered it: {placed:?}"
+    );
 }
 
 #[test]
@@ -552,17 +557,24 @@ fn a_re_decision_reads_the_refusal_in_all_three_states_that_carry_the_class() {
 }
 
 #[test]
-fn a_refusal_survives_the_pass_that_would_otherwise_undue_it() {
+fn a_refusal_handed_back_to_the_ladder_stays_a_refusal() {
     // The cost of the wire format, tested from the side that matters.
     //
     // `ResolutionState::Unresolved` carries no evidence, so the class that justified the refusal is
-    // gone from the stored row by the time the next pass reads it. A pass that re-decided from the
-    // class alone would find nothing and hand the relation to R5, which places `out` on
-    // `render.out` — the exact wrong edge the refusal exists to remove, restored by the act of
-    // removing it. This is the case that makes the loss audible rather than silent, and it is why
-    // the reason is read back.
+    // gone from the stored row by the time the next pass reads it. Handed the row, the ladder finds
+    // nothing and R5 places `out` on `render.out` — the exact wrong edge the refusal exists to
+    // remove, restored by the act of removing it. So the reason is read back, and this is the test
+    // that says the refusal survives being re-decided.
     //
-    // **What it cannot do is restore the binder.** `explain` reads `unresolved (local_binding)` and
+    // **Displaced rows are the only route that reaches it, and the test says so rather than
+    // implying otherwise.** A scoped pass opens two doors — the outgoing edges of the paths it was
+    // given, and the incoming edges of the entities they declare — and a refused row has no target,
+    // so `Store::incoming` cannot match it and it is not re-decided at all. That is a property of
+    // an unplaced row rather than of this rule, and it is why the test below hands the row over
+    // explicitly rather than pretending a refresh would. A re-extraction of `src/lib.rs` is the
+    // other route, and it re-emits the relation as `Pending` with the class on it.
+    //
+    // **What this cannot do is restore the binder.** `explain` reads `unresolved (local_binding)` and
     // the `let_declaration` that wrote the name is not in the row any more. That is a real loss,
     // taken deliberately: a payload on `Unresolved` would be a second wire shape for one field that
     // every index already holds in the other. So this test asserts the refusal holds and says
@@ -578,7 +590,7 @@ fn a_refusal_survives_the_pass_that_would_otherwise_undue_it() {
     let before = references_from(&held, "summarise", "out");
     assert!(
         before.iter().all(|row| row.target.is_none()),
-        "every refusal starts unplaced, or the second pass proves nothing: {:?}",
+        "every refusal starts unplaced, or re-deciding one proves nothing: {:?}",
         before.iter().map(|row| state_of(row)).collect::<Vec<_>>()
     );
     assert!(
@@ -591,21 +603,19 @@ fn a_refusal_survives_the_pass_that_would_otherwise_undue_it() {
             .map(|row| row.resolution.evidence_class())
             .collect::<Vec<_>>()
     );
+    let handed_back = before[0].clone();
 
-    // The same scoped pass over the *incoming* edges of the file that declares `render.out`. This is
-    // the door a real refresh opens: `report.rs` changed, so every edge pointing into it is
-    // re-decided — including this one, whose source file did not change and whose evidence was
-    // therefore never re-extracted.
-    let report = resolve_paths(
-        &mut store,
-        &[RepoPath::new("src/report.rs").expect("valid path")],
-        &[],
-        ResolutionOptions::default(),
-    )
-    .expect("a scoped pass over the declaring file");
-    assert!(
-        report.reconsidered > 0,
-        "the pass must have reached the edge pointing into the changed file: {}",
+    let report = resolve_paths(&mut store, &[], &[handed_back], ResolutionOptions::default())
+        .expect("a scoped pass over the displaced row");
+    assert_eq!(
+        report.examined, 1,
+        "the row must have reached the ladder: {}",
+        report.summary()
+    );
+    assert_eq!(
+        report.unresolved_by_reason.get("local_binding"),
+        Some(&1),
+        "and it must have been refused again for the same reason, not placed by R5: {}",
         report.summary()
     );
 
@@ -618,14 +628,6 @@ fn a_refusal_survives_the_pass_that_would_otherwise_undue_it() {
     assert!(
         placed.is_empty(),
         "the second pass placed `out` on an entity it had already refused: {placed:?}"
-    );
-    assert!(
-        report
-            .unresolved_by_reason
-            .get("local_binding")
-            .is_some_and(|count| *count > 0),
-        "and it refused it again for the same reason rather than falling through: {}",
-        report.summary()
     );
 }
 
