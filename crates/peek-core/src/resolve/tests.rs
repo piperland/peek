@@ -274,19 +274,28 @@ fn relations_in(store: &Store, state: &ResolutionState) -> Vec<Relation> {
         .unwrap_or_else(|error| panic!("read the {state:?} relations: {error}"))
 }
 
-/// The reference to `name` in the index, wherever it ended up.
-fn the_reference<'a>(relations: &'a [Relation], name: &str) -> &'a Relation {
-    let mut named: Vec<&Relation> = relations
+/// The references `summarise` writes to `name`, whichever state they ended up in.
+///
+/// Filtered on the source and the kind as well as the name, because a fixture that names `out`
+/// in two declarations produces more relations than the one under test: `render`'s **parameter**
+/// declaration is a `Contains` edge from `render` to `render.out`, carrying the same name and
+/// nothing to do with the `let` in `summarise`. Filtering by name alone would pick that up, and a
+/// test asserting "no decided relation names `out`" would then fail on the containment edge the
+/// extractor settled at extraction — a correct edge, decided by the strongest rule in the model.
+fn references_from<'a>(relations: &'a [Relation], subject: &str, name: &str) -> Vec<&'a Relation> {
+    let found: Vec<&Relation> = relations
         .iter()
+        .filter(|relation| relation.kind == RelationKind::References)
+        .filter(|relation| relation.source.qualified_name() == subject)
         .filter(|relation| relation.target_name == name)
         .collect();
-    match named.len() {
-        1 => named.remove(0),
-        other => panic!(
-            "expected exactly one relation naming `{name}`, found {other} in {}",
-            relations.len()
-        ),
-    }
+    assert!(
+        !found.is_empty(),
+        "no reference to `{name}` was extracted from `{subject}`, so every count below would be \
+         over an empty population: {} relations read",
+        relations.len()
+    );
+    found
 }
 
 #[test]
@@ -305,7 +314,7 @@ fn a_name_a_binder_claims_is_refused_before_the_ladder_runs() {
         reason: UnresolvedReason::LocalBinding,
     };
     let refusals = relations_in(&store, &refused_state);
-    let refused = the_reference(&refusals, "out");
+    let refused = &references_from(&refusals, "summarise", "out")[0];
     assert_eq!(
         refused.target, None,
         "a refused relation points at nothing: {}",
@@ -318,9 +327,11 @@ fn a_name_a_binder_claims_is_refused_before_the_ladder_runs() {
     );
 
     // The counterweight, which is what makes the assertion above mean something: R5's answer for
-    // this exact name exists and is reachable, so a rule that fired after the ladder would look
-    // the same on this row and differ on none.
-    let declared = relations_in(
+    // this exact name exists and is reachable, so a rule that fired after the ladder would look the
+    // same on this row and differ on none. Read through the *reference* to `render.out` itself,
+    // which `summarise` names as an argument — a relation the fixture needs and which must survive,
+    // so this is also the check that the refusal did not spread past the occurrences it is about.
+    let placed = relations_in(
         &store,
         &ResolutionState::Resolved {
             by: Evidence::NameOnly,
@@ -336,15 +347,16 @@ fn a_name_a_binder_claims_is_refused_before_the_ladder_runs() {
     ))
     .any(|relation| relation.target_name == "out" && relation.target.is_some());
     assert!(
-        declared,
+        placed,
         "no relation to `out` is placed on an entity, so this test would pass over an index in \
          which the name was unplaceable and the rule had nothing to refuse"
     );
     assert_eq!(
         report.unresolved_by_reason.get("local_binding"),
-        Some(&1),
+        Some(&4),
         "and the refusal is counted under its own reason rather than folded into no_candidate, \
-         because the two are different findings: {}",
+         because the two are different findings — the one occurrence that writes the binding plus \
+         the three uses inside its scope: {}",
         report.summary()
     );
 }
@@ -387,11 +399,16 @@ fn the_local_binding_refusal_never_becomes_a_decision() {
             candidates: Vec::new(),
         },
     ));
-    for relation in decided {
-        assert_ne!(
-            relation.target_name, "out",
+    // Every decided state, and every *class* of it — the chain above queries the store by state and
+    // the store keys on the state alone, so the evidence named in the query is a placeholder. That
+    // is what makes one pass over all three meaningful: a relation resolved by R5 is `Inferred`, and
+    // one placed by an import is `Resolved`, so a rule that let either through is caught whichever
+    // rung produced it.
+    let rows: Vec<Relation> = decided.collect();
+    for relation in references_from(&rows, "summarise", "out") {
+        panic!(
             "`out` was decided rather than refused, so a rung answered it: {}",
-            state_of(&relation)
+            state_of(relation)
         );
     }
 }
@@ -412,74 +429,77 @@ fn a_re_decision_reads_the_refusal_in_all_three_states_that_carry_the_class() {
     // index from another build, or a future change, could hold.
     let tree = local_binding_tree("read-in-every-state");
     let mut store = tree.index_without_resolving();
+
+    // Read **before** the first pass, because a pass leaves nothing `Pending` and this test needs a
+    // row the extractor really wrote — its source, its kind and its span are the store's natural
+    // key, and a hand-built row would be a relation the graph could never contain.
+    let pending_state = ResolutionState::Pending {
+        evidence: Evidence::NameOnly,
+        basis: String::new(),
+    };
+    let extracted = relations_in(&store, &pending_state);
+    let original = references_from(&extracted, "summarise", "out")[0].clone();
+    assert_eq!(
+        original.resolution.evidence_class(),
+        Some("local_binding"),
+        "the fixture must produce a row carrying the class, or the test is about nothing: {}",
+        state_of(&original)
+    );
+
     let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
     assert_eq!(
         first.unresolved_by_reason.get("local_binding"),
-        Some(&1),
+        Some(&4),
         "the fixture must produce the refusal the test is about: {}",
         first.summary()
     );
 
-    let binder = "let_declaration";
     let local = Evidence::LocalBinding {
-        binder: binder.to_owned(),
+        binder: "let_declaration".to_owned(),
     };
-    let pending = relations_in(
-        &store,
-        &ResolutionState::Pending {
-            evidence: Evidence::NameOnly,
-            basis: String::new(),
-        },
-    )
-    .into_iter()
-    .find(|relation| relation.target_name == "out")
-    .expect("the fixture declares a reference to `out`");
     let target = id("src/report.rs", EntityKind::Parameter, "render.out");
 
     // Each state, handed to `resolve_paths` as a displaced edge so the scoped pass has it in scope
-    // without a file having changed. The three relations differ in their spans, because the store's
-    // natural key includes the span and three rows with one key are one row.
-    let cases = [
-        (
-            "pending",
-            ResolutionState::Pending {
+    // without a file having changed. **The spans are shifted**, because the store's natural key
+    // includes the span: three rows sharing one key are one row, and the pass would de-duplicate
+    // them before the ladder saw two of the three.
+    let shifted = |offset: u32| {
+        crate::model::Span::new(
+            original.span.start_byte + offset,
+            original.span.end_byte + offset,
+            original.span.start_line,
+            original.span.start_column + offset,
+            original.span.end_line,
+            original.span.end_column + offset,
+        )
+        .expect("span")
+    };
+    let displaced = vec![
+        Relation {
+            span: shifted(100),
+            target: None,
+            resolution: ResolutionState::Pending {
                 evidence: local.clone(),
                 basis: String::new(),
             },
-            None,
-        ),
-        (
-            "resolved",
-            ResolutionState::Resolved { by: local.clone() },
-            Some(target.clone()),
-        ),
-        (
-            "inferred",
-            ResolutionState::Inferred {
+            ..original.clone()
+        },
+        Relation {
+            span: shifted(200),
+            target: Some(target.clone()),
+            resolution: ResolutionState::Resolved { by: local.clone() },
+            ..original.clone()
+        },
+        Relation {
+            span: shifted(300),
+            target: Some(target.clone()),
+            resolution: ResolutionState::Inferred {
                 by: local,
                 basis: String::new(),
             },
-            Some(target),
-        ),
+            ..original.clone()
+        },
     ];
-    let mut displaced = Vec::new();
-    for (index, (_, state, target)) in cases.iter().enumerate() {
-        let index = index as u32;
-        displaced.push(Relation {
-            span: crate::model::Span::new(
-                10 + index * 4,
-                12 + index * 4,
-                1,
-                1 + index,
-                1,
-                2 + index,
-            )
-            .expect("span"),
-            target: target.clone(),
-            resolution: state.clone(),
-            ..pending.clone()
-        });
-    }
 
     let report = resolve_paths(
         &mut store,
@@ -500,17 +520,33 @@ fn a_re_decision_reads_the_refusal_in_all_three_states_that_carry_the_class() {
         report.summary()
     );
 
-    // Read back through the store, so this is what the graph holds and not what `decide` returned.
-    for relation in relations_in(
-        &store,
-        &ResolutionState::Unresolved {
-            reason: UnresolvedReason::LocalBinding,
-        },
-    ) {
+    // Read back through the store, so this is what the graph holds and not what `decide` returned. The
+    // two rows that arrived carrying a target are the discriminating ones: a `Pending`-only read
+    // leaves them in place, and this is where that shows up rather than in the report counter.
+    let refused_state = ResolutionState::Unresolved {
+        reason: UnresolvedReason::LocalBinding,
+    };
+    let after = relations_in(&store, &refused_state);
+    for shift in [100u32, 200, 300] {
+        let row = after
+            .iter()
+            .find(|relation| relation.span.start_byte == original.span.start_byte + shift)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the row at offset {shift} is not in the store as a refusal; the {} relations \
+                     there are {:?}",
+                    refused_state,
+                    after
+                        .iter()
+                        .map(|relation| relation.span.start_byte)
+                        .collect::<Vec<_>>()
+                )
+            });
         assert_eq!(
-            relation.target, None,
-            "a row carrying `{}` in state {:?} was placed by a rung on the second pass",
-            relation.target_name, relation.resolution
+            row.target, None,
+            "a row shifted by {shift} arrived carrying a target and kept it, so the class was read \
+             from the wrong state and the ladder answered it: {}",
+            state_of(row)
         );
     }
 }
@@ -539,12 +575,21 @@ fn a_refusal_survives_the_pass_that_would_otherwise_undue_it() {
         reason: UnresolvedReason::LocalBinding,
     };
     let held = relations_in(&store, &already_refused);
-    let refused = the_reference(&held, "out");
-    assert_eq!(
-        refused.resolution.evidence_class(),
-        None,
-        "the refusal carries no evidence, which is the whole of the cost: {}",
-        state_of(refused)
+    let before = references_from(&held, "summarise", "out");
+    assert!(
+        before.iter().all(|row| row.target.is_none()),
+        "every refusal starts unplaced, or the second pass proves nothing: {:?}",
+        before.iter().map(|row| state_of(row)).collect::<Vec<_>>()
+    );
+    assert!(
+        before
+            .iter()
+            .all(|row| row.resolution.evidence_class().is_none()),
+        "and the refusal carries no evidence, which is the whole of the cost: {:?}",
+        before
+            .iter()
+            .map(|row| row.resolution.evidence_class())
+            .collect::<Vec<_>>()
     );
 
     // The same scoped pass over the *incoming* edges of the file that declares `render.out`. This is
@@ -565,11 +610,14 @@ fn a_refusal_survives_the_pass_that_would_otherwise_undue_it() {
     );
 
     let after = relations_in(&store, &already_refused);
-    let reference = the_reference(&after, "out");
-    assert_eq!(
-        reference.target, None,
-        "the second pass placed `out` on an entity the second time: {}",
-        state_of(reference)
+    let placed = references_from(&after, "summarise", "out")
+        .into_iter()
+        .filter(|row| row.target.is_some())
+        .map(|row| state_of(row))
+        .collect::<Vec<_>>();
+    assert!(
+        placed.is_empty(),
+        "the second pass placed `out` on an entity it had already refused: {placed:?}"
     );
     assert!(
         report
