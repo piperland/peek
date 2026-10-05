@@ -92,8 +92,14 @@ pub enum Claim {
 pub struct Occurrence {
     /// P: the occurrence is inside a `block`, which is what "inside a function body" means.
     pub in_body: bool,
-    /// Q: an entityless binder in scope introduced this name, and the node type it was.
+    /// Q: the node type of the binder that makes this occurrence local — the one it
+    /// **introduces**, or the one whose scope it **sits inside**. `None` when no such
+    /// binder is in reach.
     pub entityless: Option<String>,
+    /// Whether that binder is the one this occurrence is writing. The two cases are the
+    /// same claim about the graph and different claims about the source, and the report
+    /// prints them apart because the second is the one that is easy to miss.
+    pub introduces: bool,
 }
 
 /// One `references` relation, with the source's reading of it and the engine's answer.
@@ -103,6 +109,12 @@ pub struct Row {
     pub decided: bool,
     pub correct: bool,
     pub occurrence: Occurrence,
+    /// The occurrence's first byte, and the source text at it.
+    ///
+    /// Printed because a relation whose natural key ignores its span appears several times
+    /// with an identical render, and "four rows refuse this rule" is not a reading — "these
+    /// four bytes do" is.
+    pub at: String,
 }
 
 impl Row {
@@ -118,8 +130,9 @@ impl Row {
     /// the engine did, and what the rule would do about it.
     pub fn describe(&self, rule: Rule) -> String {
         format!(
-            "{} | the fixture claims {} | {} | {} | this rule would {}",
+            "{} at {} | the fixture claims {} | {} | {} | this rule would {}",
             self.relation,
+            self.at,
             match &self.claim {
                 None => "nothing at all".to_owned(),
                 Some(Claim::Referent(key)) => key.render(),
@@ -163,14 +176,24 @@ impl Rule {
 }
 
 /// What one rule would cost and what it would buy, as counts.
+///
+/// **Four numbers, and the fourth is the one that stops a rule looking free.** An earlier
+/// reading counted a refused row with no placement claim as a repair, because "not correct"
+/// and "correct" are the only two answers a `correct` flag can give. That is false: a row
+/// the fixture never claimed has no known correctness at all, and calling it a repair
+/// reports a saving that has not been measured. It is counted as unknown, and the decision
+/// is read from the damage alone.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Price {
-    /// Decided-and-right edges it would refuse. **The damage.**
+    /// Refused, decided, and the fixture says it must point at an entity — and it does not.
+    /// **The damage.**
     pub damage: u64,
-    /// Decided-and-wrong edges it would refuse. **The repair.**
+    /// Refused, decided, and the fixture says no entity is the referent. **The repair.**
     pub repair: u64,
-    /// Already-undecided edges it would refuse. A no-op.
+    /// Refused, and already undecided. A no-op.
     pub no_op: u64,
+    /// Refused, decided, and no placement claim. **Whether it was right is not known.**
+    pub unknown: u64,
 }
 
 impl Price {
@@ -179,6 +202,8 @@ impl Price {
         for row in rows.iter().filter(|row| row.refuses_under(rule)) {
             if !row.decided {
                 price.no_op += 1;
+            } else if row.claim.is_none() {
+                price.unknown += 1;
             } else if row.correct {
                 price.damage += 1;
             } else {
@@ -186,6 +211,13 @@ impl Price {
             }
         }
         price
+    }
+
+    fn render(self) -> String {
+        format!(
+            "{} repair, {} DAMAGE, {} already undecided, {} decided with no placement claim",
+            self.repair, self.damage, self.no_op, self.unknown
+        )
     }
 }
 
@@ -200,6 +232,16 @@ fn parser() -> Parser {
         .set_language(&LANGUAGE.into())
         .expect("the rust grammar loads");
     parser
+}
+
+/// The parse of one source, as the grammar's own shape.
+///
+/// **A diagnostic, not a claim.** Guessing what a grammar calls a field cost two rounds
+/// here: `for_expression`'s `value` was first assumed to hold the iterable alone and then
+/// to hold the iterable and the body, and both assumptions were wrong. Printing the tree
+/// is cheaper than either.
+pub fn sexp(text: &str) -> String {
+    parser().parse(text, None).expect("the source parses").root_node().to_sexp()
 }
 
 /// The node types the engine's own reference rule matches.
@@ -226,13 +268,38 @@ fn occurrences(text: &str) -> BTreeMap<u32, Occurrence> {
 }
 
 fn collect(node: Node<'_>, source: &[u8], found: &mut BTreeMap<u32, Occurrence>) {
+    // A name that is the **field** of something is a field, whatever it is read through.
+    //
+    // This clause is the direct answer to the objection that a name inside a body may still
+    // be a field of something, and it was added because the measurement found the case
+    // rather than because the argument suggested it: `render` reads `sink.text` and
+    // `self.text.push_str(..)`, the local is `sink`, and the name `text` resolves correctly
+    // to `Sink.text` today. Without this clause a rule about which names are local refuses
+    // those two edges and unresolves them — a wrong edge replaced by a gap, which no
+    // published column would show and the gate would score as neither.
+    //
+    // So a field name is not classified by the binder of the receiver. The receiver is a
+    // local; the field is a member of the thing the local holds, and naming it is the one
+    // thing about it that reaches a declaration.
+    //
+    // Recorded with no binder rather than skipped, because the join in `measure` is over
+    // every reference relation the index holds and a missing entry would fail the
+    // coverage check rather than price the clause.
     if reference_node_types().contains(&node.kind()) {
         let name = String::from_utf8_lossy(&source[node.byte_range()]).into_owned();
+        let introduces = introduces_itself(node, source, &name);
         found.insert(
             node.start_byte() as u32,
             Occurrence {
                 in_body: has_ancestor_of_kind(node, "block"),
-                entityless: entityless_binder_in_scope(node, source, &name),
+                entityless: (!is_a_field_name(node))
+                    .then(|| {
+                        introduces
+                            .clone()
+                            .or_else(|| entityless_binder_in_scope(node, source, &name))
+                    })
+                    .flatten(),
+                introduces: introduces.is_some(),
             },
         );
     }
@@ -240,6 +307,41 @@ fn collect(node: Node<'_>, source: &[u8], found: &mut BTreeMap<u32, Occurrence>)
     for child in node.named_children(&mut cursor) {
         collect(child, source, found);
     }
+}
+
+/// Whether this occurrence **is** a binder's own pattern, rather than sitting inside one.
+///
+/// # Why the second clause is not the same rule as the first
+///
+/// "Bound by a binder with no entity" finds `out` in `out.push_str(..)`. It does not find
+/// `out` in `let mut out = ..` — and that occurrence is not a weaker case, it is the
+/// declaration itself. The index holds no entity for a `let` binding, so nothing can be
+/// its referent either, and it resolves today to the very parameter `render.out` the other
+/// occurrence is refused for. Ten of the fixture's `binds_nothing` rows are of this shape:
+/// one per local binding declared.
+///
+/// **It is stated as a separate clause rather than folded into the first, because it is
+/// separately falsifiable.** `let size = size + 1` is the near miss — the value occurrence
+/// is textually after the pattern and must not be caught by it — and folding the two
+/// clauses together is how that near miss gets introduced.
+///
+/// **Not measured by this fixture:** a destructuring pattern, where
+/// `let Entry { count, .. } = e` makes `count` a local the index also has no entity for.
+/// The clause reads the identifiers inside the pattern, so it should hold, and "should" is
+/// not a measurement. It is named here rather than counted.
+fn introduces_itself(node: Node<'_>, source: &[u8], name: &str) -> Option<String> {
+    let mut current = Some(node);
+    while let Some(candidate) = current {
+        if ENTITYLESS_BINDERS.contains(&candidate.kind())
+            && let Some(pattern) = binding_pattern(candidate)
+            && inside_field(&candidate, node, "pattern")
+            && binds(&pattern, source, name)
+        {
+            return Some(candidate.kind().to_owned());
+        }
+        current = candidate.parent();
+    }
+    None
 }
 
 fn has_ancestor_of_kind(node: Node<'_>, kind: &str) -> bool {
@@ -251,6 +353,23 @@ fn has_ancestor_of_kind(node: Node<'_>, kind: &str) -> bool {
         current = parent.parent();
     }
     false
+}
+
+/// Whether this occurrence is written in the **field** slot of a field access or a field
+/// initialiser.
+///
+/// Two slots, not one: `sink.text` is a `field_expression`'s `field`, and `Sink {
+/// text: String::new() }` is a `field_initializer`'s `field`. The second is not a read, but
+/// it names the same member and refusing it on the grounds that the enclosing local has no
+/// entity would be refusing the local's own declaration.
+fn is_a_field_name(node: Node<'_>) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    matches!(parent.kind(), "field_expression" | "field_initializer")
+        && parent
+            .child_by_field_name("field")
+            .is_some_and(|field| field.id() == node.id())
 }
 
 /// The nearest entityless binder in scope that introduces `name`, if there is one.
@@ -286,18 +405,42 @@ fn entityless_binder_in_scope(node: Node<'_>, source: &[u8], name: &str) -> Opti
                 if statement.start_byte() as u32 >= node.start_byte() as u32 {
                     break;
                 }
-                if ENTITYLESS_BINDERS.contains(&statement.kind())
-                    && let Some(pattern) = binding_pattern(statement)
-                    && in_force(statement, node, pattern)
-                    && binds(&pattern, source, name)
-                {
-                    return Some(statement.kind().to_owned());
+                let Some(binder) = as_binder(statement) else {
+                    continue;
+                };
+                let Some(pattern) = binding_pattern(binder) else {
+                    continue;
+                };
+                if in_force(binder, node, pattern) && binds(&pattern, source, name) {
+                    return Some(binder.kind().to_owned());
                 }
             }
         }
         current = candidate.parent();
     }
     None
+}
+
+/// The binder a statement is, or the binder it wraps.
+///
+/// **A `for` loop written as a statement is an `expression_statement` around a
+/// `for_expression`.** Looking for the binder among the block's direct children therefore
+/// never finds one, and the only symptom is that the rule classifies nothing — the same
+/// quiet no-op as a misspelt node type, and the reason
+/// `every_relation_the_fixture_says_names_nothing_is_bound_by_an_entityless_binder` exists
+/// rather than a damage count of zero being taken at face value.
+///
+/// One level is all the unwrapping that does: a binder nested deeper than this is not a
+/// shape the fixture has, and a rule that grew a recursive search here would be guessing
+/// about grammars nobody has measured.
+fn as_binder(statement: Node<'_>) -> Option<Node<'_>> {
+    if ENTITYLESS_BINDERS.contains(&statement.kind()) {
+        return Some(statement);
+    }
+    let mut cursor = statement.walk();
+    statement
+        .named_children(&mut cursor)
+        .find(|child| ENTITYLESS_BINDERS.contains(&child.kind()))
 }
 
 /// Whether a binder is in force at `node`.
@@ -409,6 +552,7 @@ fn claims_of(corpus: &Corpus) -> Claims {
 pub fn measure(corpus: &Corpus, graph: &Graph) -> Vec<Row> {
     let claims = claims_of(corpus);
     let mut trees: BTreeMap<String, BTreeMap<u32, Occurrence>> = BTreeMap::new();
+    let mut sources: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut rows = Vec::new();
 
     for relation in graph.relations.iter().filter(|row| row.kind == CLASS) {
@@ -419,6 +563,13 @@ pub fn measure(corpus: &Corpus, graph: &Graph) -> Vec<Row> {
                 let text = std::fs::read_to_string(&file)
                     .unwrap_or_else(|error| panic!("cannot read {}: {error}", file.display()));
                 occurrences(&text)
+            });
+        let source = sources
+            .entry(relation.source.path.clone())
+            .or_insert_with(|| {
+                let file = corpus.directory.join(&relation.source.path);
+                std::fs::read(&file)
+                    .unwrap_or_else(|error| panic!("cannot read {}: {error}", file.display()))
             });
         let Some(occurrence) = by_byte.get(&relation.start_byte) else {
             panic!(
@@ -439,6 +590,7 @@ pub fn measure(corpus: &Corpus, graph: &Graph) -> Vec<Row> {
         let claim = claims.get(&key).cloned();
         rows.push(Row {
             relation: relation.render(),
+            at: snippet(source, relation.start_byte),
             decided: relation.is_decided(),
             // A `binds_nothing` label is satisfied by no decided relation at all, so a
             // decided row under one is wrong — the same reading `score_placement` uses.
@@ -451,6 +603,18 @@ pub fn measure(corpus: &Corpus, graph: &Graph) -> Vec<Row> {
         });
     }
     rows
+}
+
+/// The source at and around one byte, as a reader can check it against the file.
+///
+/// Thirty characters either side, on one line, with newlines flattened — enough to see
+/// whether the occurrence is `sink.text` or `text.push_str(..)` and not enough to bury the
+/// count.
+fn snippet(source: &[u8], at: u32) -> String {
+    let start = at.saturating_sub(30) as usize;
+    let end = ((at as usize) + 30).min(source.len());
+    let text = String::from_utf8_lossy(&source[start..end]).replace('\n', " ");
+    format!("byte {at}: ...{text}...")
 }
 
 /// How many rows a rule refuses, over the whole population.
@@ -472,15 +636,22 @@ pub fn named_referents(rows: &[Row]) -> Vec<(String, Rule)> {
         .collect()
 }
 
-/// Every labelled site the fixture says names **nothing**, with the binder it is bound by.
+/// Every labelled site the fixture says names **nothing**, with the binder that makes it
+/// local and whether that binder is the one the occurrence writes.
 ///
-/// The tuple rather than a sentence, because the assertion that uses it is "this name has
-/// no entityless binder", and matching a phrase to find that out is how a reading gets
+/// The tuple rather than a sentence, because the assertion that uses it is "no entityless
+/// binder reaches this name", and matching a phrase to find that out is how a reading gets
 /// attached to the wrong row.
-pub fn named_locals(rows: &[Row]) -> Vec<(String, Option<String>)> {
+pub fn named_locals(rows: &[Row]) -> Vec<(String, Option<String>, bool)> {
     rows.iter()
         .filter(|row| matches!(row.claim, Some(Claim::Nothing)))
-        .map(|row| (row.relation.clone(), row.occurrence.entityless.clone()))
+        .map(|row| {
+            (
+                row.relation.clone(),
+                row.occurrence.entityless.clone(),
+                row.occurrence.introduces,
+            )
+        })
         .collect()
 }
 
@@ -488,10 +659,7 @@ pub fn named_locals(rows: &[Row]) -> Vec<(String, Option<String>)> {
 /// printed rather than asserted, because a reader who wants to check the arithmetic needs
 /// the arithmetic.
 pub fn report(rows: &[Row]) {
-    let labelled: Vec<&Row> = rows
-        .iter()
-        .filter(|row| row.claim.is_some())
-        .collect();
+    let labelled: Vec<&Row> = rows.iter().filter(|row| row.claim.is_some()).collect();
     let whole: Vec<&Row> = rows.iter().collect();
 
     println!("\n--- what treating a local as local costs, priced ---");
@@ -501,22 +669,23 @@ pub fn report(rows: &[Row]) {
         labelled.len()
     );
     for rule in Rule::BOTH {
-        let labelled_price = Price::of(&labelled, rule);
-        let whole_price = Price::of(&whole, rule);
         println!("  {}", rule.as_str());
-        println!(
-            "    labelled: {} repair, {} DAMAGE, {} already undecided",
-            labelled_price.repair, labelled_price.damage, labelled_price.no_op
-        );
-        println!(
-            "    every relation: {} repair, {} DAMAGE, {} already undecided",
-            whole_price.repair, whole_price.damage, whole_price.no_op
-        );
+        println!("    labelled:   {}", Price::of(&labelled, rule).render());
+        println!("    every row:  {}", Price::of(&whole, rule).render());
         for row in labelled
             .iter()
             .filter(|row| row.refuses_under(rule) && row.decided)
         {
             println!("      {}", row.describe(rule));
+        }
+        for row in whole
+            .iter()
+            .filter(|row| row.refuses_under(rule) && row.decided && row.claim.is_none())
+        {
+            println!(
+                "      {} (no placement claim: correctness unknown)",
+                row.describe(rule)
+            );
         }
     }
 }

@@ -624,59 +624,124 @@ fn a_binding_is_classified_entityless_at_least_once() {
 }
 
 #[test]
-fn a_binding_rule_damages_nothing_it_claims_a_referent_for() {
-    // The discriminating assertion. P is refuted here, by arithmetic: it refuses every use
-    // of a name in a body, and a use in a body is most of what the fixture says has a
-    // referent — a field read, a parameter, an imported symbol. Q is the rule with no
-    // damage, and the count that says so is printed rather than summarised.
+fn the_binding_rule_damages_no_relation_the_fixture_gives_a_referent_for() {
+    // The half of the decision that holds. Q refuses no decided-and-right edge, in the
+    // labelled population or in the whole index, so it is the rule that can be adopted.
     for (language, directory) in discovered() {
         let (corpus, _scratch, graph) = measured(language, &directory);
         let rows = binding::measure(&corpus, &graph);
         binding::report(&rows);
-
-        for rule in binding::Rule::BOTH {
-            let damage = binding::named_referents(&rows)
-                .into_iter()
-                .filter(|(_, refused_by)| *refused_by == rule)
-                .map(|(relation, _)| relation)
-                .collect::<Vec<_>>();
-            assert!(
-                damage.is_empty(),
-                "{}: `{}` refuses {} labelled relations the fixture says do have a referent. A \
-                 rule is admissible only while that is zero, so this is the count that decides \
-                 it:\n  {}",
-                language.as_str(),
-                rule.as_str(),
-                damage.len(),
-                damage.join("\n  ")
-            );
-        }
+        let damage = binding::named_referents(&rows)
+            .into_iter()
+            .filter(|(_, refused_by)| *refused_by == binding::Rule::Entityless)
+            .map(|(relation, _)| relation)
+            .collect::<Vec<_>>();
+        assert!(
+            damage.is_empty(),
+            "{}: `{}` refuses {} labelled relations the fixture says do have a referent. The \
+             rule is only admissible while that is zero:\n  {}",
+            language.as_str(),
+            binding::Rule::Entityless.as_str(),
+            damage.len(),
+            damage.join("\n  ")
+        );
     }
 }
 
 #[test]
-fn every_relation_the_fixture_says_names_nothing_is_bound_by_an_entityless_binder() {
-    // The other half, and the one that keeps Q from being vacuously true. If a
-    // `binds_nothing` site were not bound by a binder with no entity, Q would refuse nothing
-    // there either and the decided-and-wrong edges would survive it.
+fn the_positional_rule_damages_something_and_that_is_why_it_was_rejected() {
+    // The half of the decision that rejects, recorded as a check rather than as a comment.
+    //
+    // **A rejected rule needs its rejection pinned, or the next reader re-derives it.** P —
+    // "a name inside a function body is local" — has the larger population by
+    // construction, because a local binding is also inside a body, and that larger
+    // population is most of what the fixture says *does* have a referent: a field read, a
+    // parameter, an imported symbol. Adopting it would unresolve those, and
+    // `resolution_correctness` would go **up** while the graph lost edges.
+    //
+    // Asserting that P does damage, rather than that it does not, is what makes this a
+    // test: it fails if the fixture stops containing the case that refutes P.
     for (language, directory) in discovered() {
         let (corpus, _scratch, graph) = measured(language, &directory);
         let rows = binding::measure(&corpus, &graph);
-        let unbound = binding::named_locals(&rows)
+        let damage = binding::named_referents(&rows)
             .into_iter()
-            .filter(|(_, binder)| binder.is_none())
+            .filter(|(_, refused_by)| *refused_by == binding::Rule::Positional)
             .map(|(relation, _)| relation)
+            .collect::<Vec<_>>();
+        println!(
+            "{}: `{}` refuses {} decided-and-right relations, which is the cost that rejects it",
+            language.as_str(),
+            binding::Rule::Positional.as_str(),
+            damage.len()
+        );
+        assert!(
+            !damage.is_empty(),
+            "{}: `{}` refuses nothing the fixture gives a referent for. Either the rule has \
+             become admissible — in which case it is the rule to adopt and this test is lying \
+             about why it was rejected — or the fixture no longer contains the field reads, \
+             the parameters and the imported symbols that are the whole reason.",
+            language.as_str(),
+            binding::Rule::Positional.as_str()
+        );
+    }
+}
+
+#[test]
+fn every_relation_the_fixture_says_names_nothing_reaches_an_entityless_binder() {
+    // The other half, and the one that keeps Q from being vacuously true. If a
+    // `binds_nothing` site reached no entityless binder, Q would refuse nothing there
+    // either and the decided-and-wrong edges would survive it.
+    //
+    // **Ten of these rows are the occurrence that *writes* the binding** rather than one
+    // inside its scope — one per `let` or `for` the fixture declares. They are counted and
+    // named apart, because a rule that only looks at occurrences inside a binding's scope
+    // leaves every one of them decided and wrong, and a damage count of zero over the rest
+    // is exactly what that incompleteness looks like.
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let rows = binding::measure(&corpus, &graph);
+        let locals = binding::named_locals(&rows);
+        let unbound = locals
+            .iter()
+            .filter(|(_, binder, _)| binder.is_none())
+            .map(|(relation, _, _)| relation.clone())
             .collect::<Vec<_>>();
         assert!(
             unbound.is_empty(),
             "{}: {} labelled relations say no entity is the referent, but no binder with no \
-             entity introduces the name, so `{}` would not refuse them and the repair it is \
+             entity reaches the name, so `{}` would not refuse them and the repair it is \
              supposed to buy would not happen:\n  {}",
             language.as_str(),
             unbound.len(),
             binding::Rule::Entityless.as_str(),
             unbound.join("\n  ")
         );
+        let introducing = locals
+            .iter()
+            .filter(|(_, _, introduces)| *introduces)
+            .count();
+        println!(
+            "  {}: {} relations say no entity is the referent, of which {} are the occurrence \
+             that writes the binding rather than one inside its scope",
+            language.as_str(),
+            locals.len(),
+            introducing
+        );
+    }
+}
+
+#[test]
+fn print_the_parse_when_asked() {
+    // The diagnostic, off unless PEEK_GATE_TREE is set. Two rounds were lost to guessing
+    // what tree-sitter-rust calls a field, and this is cheaper than either.
+    if std::env::var("PEEK_GATE_TREE").is_err() {
+        return;
+    }
+    for (_, directory) in discovered() {
+        let text = std::fs::read_to_string(directory.join("src").join("service.rs"))
+            .expect("the fixture reads");
+        println!("{}", binding::sexp(&text));
     }
 }
 
