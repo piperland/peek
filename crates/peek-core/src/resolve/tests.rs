@@ -830,8 +830,20 @@ fn a_declaration_in_an_enclosing_scope_answers_for_everything_inside_it() {
     let rows = relations_of(&store, RelationKind::References);
     println!("METHOD-NAMED-AFTER-THE-FIELD");
     for relation in rows.iter().filter(|r| r.target_name == "count") {
-        println!("  {} -> {}", relation.source, relation.resolution.describe());
+        println!(
+            "  {} -> {} on {:?}",
+            relation.source, relation.resolution.describe(), relation.target
+        );
     }
+    println!(
+        "  the entities in the file: {:?}",
+        store
+            .entities_in_file(&"src/lib.rs".parse().expect("a path"), 64)
+            .expect("entities")
+            .iter()
+            .map(|e| e.summary())
+            .collect::<Vec<_>>()
+    );
     println!(
         "  candidates in the store for it: {:?}",
         store
