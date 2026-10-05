@@ -863,9 +863,13 @@ fn the_class_reaches_every_relation_the_fixture_says_binds_nothing() {
     // `binds_nothing` site reached no binder, the damage count above would be zero for
     // entirely the wrong reason — the same quiet no-op a misspelt node type produces.
     //
-    // **This test is also the standing statement that the repair has not happened yet.** Every
-    // row it prints is an edge the engine has decided and got wrong, and the class on it is
-    // the extractor's half of the fix; nothing removes them until `Resolver::decide` reads it.
+    // **The second assertion is the completion signal, and it now asserts the repair.** It used
+    // to require at least one of these rows to still be decided, which is what it meant while the
+    // class was carried by the extractor and read by nothing: every row it printed was an edge the
+    // engine had decided and got wrong. `Resolver::decide` now refuses them at its head, so the
+    // standing statement is the opposite one — none of them may be decided again. Both directions
+    // are live: a class that stopped reaching these rows fails the first assertion, and a resolver
+    // that stopped reading it fails the second.
     for (language, directory) in discovered() {
         let (corpus, _scratch, graph) = measured(language, &directory);
         let rows = binding::measure(&corpus, &graph);
@@ -896,17 +900,13 @@ fn the_class_reaches_every_relation_the_fixture_says_binds_nothing() {
             binding::LOCAL_BINDING
         );
         assert!(
-            !outstanding.is_empty(),
-            "{}: no labelled relation carrying `{}` is still decided. Either the resolver has \
-             already refused them — in which case the extractor half of R-021 is done and this \
-             test is describing a past state — or the class is no longer reaching the rows \
-             that need it.",
+            outstanding.is_empty(),
+            "{}: {} relations the fixture says bind nothing are decided anyway, so the head rule \
+             is not reading the class they carry:\n  {}",
             language.as_str(),
-            binding::LOCAL_BINDING
+            outstanding.len(),
+            outstanding.join("\n  ")
         );
-        for row in &outstanding {
-            println!("    {row}");
-        }
     }
 }
 
