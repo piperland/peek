@@ -286,6 +286,12 @@
 //!   the function that declares it ([`is_binding`]). `report.rs` declares a parameter
 //!   `format_line.count`, and a use of `count` written in `render` or in `describe` cannot mean
 //!   it — which is the sense in which **same file is not the same scope**.
+//! * **A call invoked through a binding has no static target** ([`Resolver::invocable_around`]).
+//!   A reference *refers to* a binding and a call *invokes* one: `body()` where `body` is a
+//!   parameter of type `impl Fn()` invokes the value the parameter holds, and the same name in a
+//!   reference position is the parameter itself. So this is the one clause that reads the
+//!   relation's class, and it was not in the first version — two call edges answered with their
+//!   own parameter are what put it there.
 //!
 //! ## The naive version of this is wrong, and it was measured before it was written
 //!
@@ -1428,6 +1434,32 @@ impl<'s> Resolver<'s> {
         Ok(found)
     }
 
+    /// The in-scope declarations this relation may actually be answered with.
+    ///
+    /// **The third clause of the scope rule, and the only one that reads the relation's
+    /// class.** A reference *refers to* a binding and a call *invokes* one, and those
+    /// are different questions: `last = body()` where `body` is a parameter of type
+    /// `impl Fn()` invokes the **value** the parameter holds, which is not a declaration
+    /// the index can name, while the same name in `body.count` refers to the parameter
+    /// itself and the two classes answer differently from one occurrence. So an in-scope
+    /// binding is a candidate for a reference and not for a call, and a call that has
+    /// only a binding to point at is left unestablished rather than given a target that
+    /// says "this function invokes its own parameter".
+    ///
+    /// **Bounded to the in-scope set on purpose.** Outside the scope a binding is not a
+    /// candidate at all, so the distinction is only ever asked about the one binding
+    /// the occurrence can actually see; the out-of-scope case is already settled by
+    /// [`is_binding`].
+    fn invocable_around(&self, relation: &Relation, in_scope: Vec<EntityId>) -> Vec<EntityId> {
+        match relation.kind {
+            RelationKind::Calls => in_scope
+                .into_iter()
+                .filter(|id| !is_binding(id.kind()))
+                .collect(),
+            _ => in_scope,
+        }
+    }
+
     /// R1: the name is bound by an import in the referring file.
     ///
     /// **Declines when the use's own scope already declares the name**, and that is the
@@ -2195,9 +2227,9 @@ impl<'s> Resolver<'s> {
     /// to be found by a reader who assumes otherwise.
     fn via_same_file(&mut self, relation: &Relation) -> Result<Option<Decision>, StoreError> {
         let name = relation.target_name.as_str();
-        let in_scope = self.declared_around(relation, name)?;
+        let visible = self.invocable_around(relation, self.declared_around(relation, name)?);
         let mut found: Vec<Found> = Vec::new();
-        if in_scope.is_empty() {
+        if visible.is_empty() {
             for entity in self.entities_in_file(relation.source.path())?.iter() {
                 if entity.name == name
                     && is_declaration(entity.kind())
@@ -2211,7 +2243,7 @@ impl<'s> Resolver<'s> {
                 }
             }
         } else {
-            for id in in_scope {
+            for id in visible {
                 found.push(Found {
                     id,
                     by: Evidence::SameFile,
@@ -2276,14 +2308,14 @@ impl<'s> Resolver<'s> {
         // function, and only the first is something a use written here can mean. Ranking
         // rather than dropping would leave two candidates and an `Ambiguous` where one
         // entity is the answer, which is the difference between a gap and an edge.
-        let in_scope = self.declared_around(relation, name)?;
+        let visible = self.invocable_around(relation, self.declared_around(relation, name)?);
         let mut found: Vec<Found> = Vec::new();
         let (entities, cut_short) = self.entities_named(name)?;
         for entity in entities {
             if !is_declaration(entity.kind()) {
                 continue;
             }
-            if is_binding(entity.kind()) && !in_scope.contains(&entity.id) {
+            if is_binding(entity.kind()) && !visible.contains(&entity.id) {
                 continue;
             }
             found.push(Found {
