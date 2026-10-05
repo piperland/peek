@@ -797,6 +797,117 @@ fn every_relation_the_fixture_says_names_nothing_reaches_an_entityless_binder() 
     }
 }
 
+// ---------------------------------------------------------------------------
+// The extractor emits the class the measurement priced
+// ---------------------------------------------------------------------------
+//
+// Three tests, in the order a reader should want them: the class fires at all, it agrees
+// with the independent tree walk on every row, and it is on no row the fixture gives a
+// referent for. The second is the one that cannot be satisfied by a classifier that does
+// nothing, because it is a comparison over the whole population rather than a count of one
+// kind of row.
+
+#[test]
+fn the_extractor_writes_the_local_binding_class_and_damages_nothing() {
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let rows = binding::measure(&corpus, &graph);
+        binding::report(&rows);
+
+        // The class has to reach real relations, or "it damaged nothing" is an absence.
+        assert!(
+            binding::engine_refusals(&rows) > 0,
+            "{}: the extractor wrote no `{}` on any of its {} `{CLASS}` relations, so the \
+             binding table matched nothing and every count below would be over an empty \
+             population",
+            language.as_str(),
+            binding::LOCAL_BINDING,
+            rows.len()
+        );
+
+        // The engine's classifier and the measurement are two implementations of one reading,
+        // written from the same grammar facts. Their agreement is corroboration rather than
+        // proof, and the disagreement list is the part of it that can be acted on.
+        let disagreeing = binding::disagreements(&rows);
+        assert!(
+            disagreeing.is_empty(),
+            "{}: the extractor and the measurement disagree on {} of {} `{CLASS}` relations. \
+             One of the two is wrong about a row nobody looked at by hand:\n  {}",
+            language.as_str(),
+            disagreeing.len(),
+            rows.len(),
+            disagreeing.join("\n  ")
+        );
+
+        // The damage, read off the engine's own output rather than off the measurement. A
+        // field read, a parameter or an imported symbol refused here would be a correct edge
+        // replaced by a gap — the move R-021 rejected rule P for.
+        let damaged = binding::named_referents_refused_by_engine(&rows);
+        assert!(
+            damaged.is_empty(),
+            "{}: the extractor wrote `{}` on {} labelled relations the fixture says do have a \
+             referent:\n  {}",
+            language.as_str(),
+            binding::LOCAL_BINDING,
+            damaged.len(),
+            damaged.join("\n  ")
+        );
+    }
+}
+
+#[test]
+fn the_class_reaches_every_relation_the_fixture_says_binds_nothing() {
+    // The other half, and the one that stops the class being vacuously safe. If a
+    // `binds_nothing` site reached no binder, the damage count above would be zero for
+    // entirely the wrong reason — the same quiet no-op a misspelt node type produces.
+    //
+    // **This test is also the standing statement that the repair has not happened yet.** Every
+    // row it prints is an edge the engine has decided and got wrong, and the class on it is
+    // the extractor's half of the fix; nothing removes them until `Resolver::decide` reads it.
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let rows = binding::measure(&corpus, &graph);
+        let nothing = rows
+            .iter()
+            .filter(|row| matches!(row.claim, Some(binding::Claim::Nothing)))
+            .count();
+        let reached = rows
+            .iter()
+            .filter(|row| {
+                matches!(row.claim, Some(binding::Claim::Nothing)) && row.engine_refuses()
+            })
+            .count();
+        let outstanding = binding::nothing_but_decided(&rows);
+        println!(
+            "  {}: {reached} of {nothing} relations labelled `binds_nothing` carry `{}`, and \
+             {outstanding} of those are still decided and wrong",
+            language.as_str(),
+            binding::LOCAL_BINDING,
+            outstanding.len()
+        );
+        assert_eq!(
+            reached,
+            nothing,
+            "{}: {nothing} labelled relations say no entity is the referent and only {reached} \
+             of them carry `{}`, so the others are decided on an entity that does not exist",
+            language.as_str(),
+            binding::LOCAL_BINDING
+        );
+        assert!(
+            !outstanding.is_empty(),
+            "{}: no labelled relation carrying `{}` is still decided. Either the resolver has \
+             already refused them — in which case the extractor half of R-021 is done and this \
+             test is describing a past state — or the class is no longer reaching the rows \
+             that need it.",
+            language.as_str(),
+            binding::LOCAL_BINDING
+        );
+        for row in &outstanding {
+            println!("    {row}");
+        }
+    }
+}
+
 #[test]
 fn print_the_parse_when_asked() {
     // The diagnostic, off unless PEEK_GATE_TREE is set. Two rounds were lost to guessing

@@ -78,6 +78,13 @@ pub const CLASS: &str = "references";
 /// cannot read as a clean measurement.
 const ENTITYLESS_BINDERS: &[&str] = &["let_declaration", "for_expression", "closure_expression"];
 
+/// The evidence class the extractor writes for a name a binder has already claimed.
+///
+/// Spelled out here rather than read from [`peek_core::model::Evidence`] so that a rename of
+/// the variant does not silently make this measurement agree with whatever the engine now
+/// emits: the point of the comparison below is that the two are independent.
+pub const LOCAL_BINDING: &str = "local_binding";
+
 /// What the fixture says about one labelled relation's referent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Claim {
@@ -115,9 +122,28 @@ pub struct Row {
     /// with an identical render, and "four rows refuse this rule" is not a reading — "these
     /// four bytes do" is.
     pub at: String,
+    /// The evidence class **the extractor itself** wrote onto the relation for this byte.
+    ///
+    /// Read from the index where the class survives, and from a fresh extraction of the same
+    /// source where resolution has replaced it: a decided relation no longer carries the
+    /// evidence the extractor gathered, so the class is read from the extractor's own output
+    /// and joined on file and byte. `""` when the extractor emitted nothing there.
+    pub emitted: &'static str,
+    /// Where the engine put this relation, as the row renders it, or `<nothing>`.
+    pub placed_on: String,
 }
 
 impl Row {
+    /// Whether the engine's own classifier refused this row.
+    ///
+    /// **The engine's answer and the measurement's answer are kept apart.** This one is what
+    /// the graph will carry; [`Self::refuses_under`] is what this file computes by reading the
+    /// tree itself. A rule that is right and is never wired in is not a rule, and the only
+    /// way to tell those apart is to ask both.
+    pub fn engine_refuses(&self) -> bool {
+        self.emitted == LOCAL_BINDING
+    }
+
     /// Whether this rule would refuse the row.
     pub fn refuses_under(&self, rule: Rule) -> bool {
         match rule {
@@ -551,6 +577,7 @@ fn claims_of(corpus: &Corpus) -> Claims {
 /// Every `references` relation in the index, joined to the source and to the fixture.
 pub fn measure(corpus: &Corpus, graph: &Graph) -> Vec<Row> {
     let claims = claims_of(corpus);
+    let emitted = extracted_classes(corpus);
     let mut trees: BTreeMap<String, BTreeMap<u32, Occurrence>> = BTreeMap::new();
     let mut sources: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut rows = Vec::new();
@@ -600,9 +627,99 @@ pub fn measure(corpus: &Corpus, graph: &Graph) -> Vec<Row> {
             },
             claim,
             occurrence: occurrence.clone(),
+            emitted: emitted
+                .get(&(relation.source.path.clone(), relation.start_byte))
+                .copied()
+                .unwrap_or(""),
+            placed_on: relation
+                .target
+                .as_ref()
+                .map(|target| target.render())
+                .unwrap_or_else(|| "<nothing>".to_owned()),
         });
     }
     rows
+}
+
+/// The evidence class the **extractor** writes on every `references` relation, by file and byte.
+///
+/// # Why the extractor is run again rather than read out of the index
+///
+/// A decided relation carries the evidence its *rung* was made by — `same_file`,
+/// `unique_name` — and the evidence the extractor gathered is replaced by it. So the class
+/// under test is not in the graph a resolved index holds, and the only way to read what the
+/// engine will emit is to run the extractor over the same source and join on the byte.
+///
+/// This is also why the extraction is a *second* answer rather than the only one: the tree
+/// walk above is the measurement, this is the engine, and a disagreement between them is a
+/// finding rather than a rounding difference.
+fn extracted_classes(corpus: &Corpus) -> BTreeMap<(String, u32), &'static str> {
+    let Some(spec) = LanguageSpec::for_language(corpus.language) else {
+        return BTreeMap::new();
+    };
+    let mut classes = BTreeMap::new();
+    for path in source_files(&corpus.directory, corpus.language) {
+        let Ok(text) = std::fs::read_to_string(&corpus.directory.join(&path)) else {
+            continue;
+        };
+        let Some(repo_path) = peek_core::model::RepoPath::new(&path) else {
+            continue;
+        };
+        let extracted = peek_core::extract::extract_with(spec, repo_path, &text);
+        for relation in extracted
+            .relations
+            .iter()
+            .filter(|relation| relation.kind == CLASS)
+        {
+            classes.insert(
+                (path.clone(), relation.span.start_byte),
+                relation.resolution.evidence_class().unwrap_or_default(),
+            );
+        }
+    }
+    classes
+}
+
+/// Every source file of `language` under a fixture directory, as a repository-relative path
+/// with `/` separators.
+///
+/// Discovered rather than listed, so a fixture that grows a file needs no edit here. The
+/// extension test is what the index itself uses, so this walks the same files the graph was
+/// built from: parsing `gate.expect` with the Rust grammar would answer a question nobody
+/// asked.
+fn source_files(root: &std::path::Path, language: Language) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut queue = vec![root.to_path_buf()];
+    while let Some(directory) = queue.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy() == "target")
+                {
+                    continue;
+                }
+                queue.push(path);
+            } else {
+                let extension = path
+                    .extension()
+                    .map(|extension| extension.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if Language::from_extension(&extension) != Some(language) {
+                    continue;
+                }
+                if let Ok(relative) = path.strip_prefix(root) {
+                    found.push(relative.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    found.sort();
+    found
 }
 
 /// The source at and around one byte, as a reader can check it against the file.
@@ -620,6 +737,77 @@ fn snippet(source: &[u8], at: u32) -> String {
 /// How many rows a rule refuses, over the whole population.
 pub fn refusals(rows: &[Row], rule: Rule) -> usize {
     rows.iter().filter(|row| row.refuses_under(rule)).count()
+}
+
+/// How many rows the **engine** refuses, over the whole population.
+pub fn engine_refusals(rows: &[Row]) -> usize {
+    rows.iter().filter(|row| row.engine_refuses()).count()
+}
+
+/// Every row where the engine's classifier and this measurement disagree.
+///
+/// **The check that makes the class evidence rather than an intention.** One implementation
+/// reads the tree here; the other lives in the extractor and is exercised by the walk that
+/// builds the index. They were written from the same reading of the grammar, so their
+/// agreement is corroboration and not proof — but a disagreement on any of the whole
+/// population is a defect in one of them, and it is named rather than counted.
+pub fn disagreements(rows: &[Row]) -> Vec<String> {
+    rows.iter()
+        .filter(|row| row.engine_refuses() != row.occurrence.entityless.is_some())
+        .map(|row| {
+            format!(
+                "{} | the extractor says {} | the measurement says {} | {}",
+                row.relation,
+                if row.engine_refuses() {
+                    LOCAL_BINDING
+                } else {
+                    "not local"
+                },
+                row.occurrence
+                    .entityless
+                    .clone()
+                    .unwrap_or_else(|| "not local".to_owned()),
+                row.at
+            )
+        })
+        .collect()
+}
+
+/// Every labelled site the fixture says names **a referent**, which the engine's own classifier
+/// refuses.
+///
+/// This is the damage count read off the engine rather than off the measurement, and it is the
+/// number that says whether the class is safe to hand to a resolver: a rule that unresolves the
+/// fixture's field reads and parameters is not admissible however cheap it looks.
+pub fn named_referents_refused_by_engine(rows: &[Row]) -> Vec<String> {
+    rows.iter()
+        .filter(|row| matches!(row.claim, Some(Claim::Referent(_))) && row.engine_refuses())
+        .map(|row| format!("{} | {}", row.relation, row.at))
+        .collect()
+}
+
+/// Every labelled site the fixture says names **nothing**, which the engine's classifier refuses,
+/// with whether the engine already decided it.
+///
+/// The repair, counted on the engine's own output: a row that is still `decided` here is an
+/// edge the resolver has got wrong and has not yet been told about, and every one of them is
+/// the same defect as the six-edge table in R-021.
+pub fn nothing_but_decided(rows: &[Row]) -> Vec<String> {
+    rows.iter()
+        .filter(|row| {
+            matches!(row.claim, Some(Claim::Nothing))
+                && row.engine_refuses()
+                && row.decided
+                && !row.correct
+        })
+        .map(|row| {
+            format!(
+                "{} | the class says no entity is the referent and the {} rung still placed it \
+                 on {}",
+                row.relation, row.emitted, row.placed_on
+            )
+        })
+        .collect()
 }
 
 /// Every labelled site the fixture says names **a referent**, and which rules would refuse
@@ -667,6 +855,33 @@ pub fn report(rows: &[Row]) {
         "  {} `{CLASS}` relations in the index, {} of them carrying a placement claim",
         rows.len(),
         labelled.len()
+    );
+    // The engine's own answer, over the same population. Printed beside the measurement's
+    // because the two are produced by different code from the same reading, and a reader who
+    // wants to know whether the class is wired in should not have to run a test to find out.
+    println!(
+        "  the extractor writes `{}` on {} of them; the measurement calls {} of them local",
+        LOCAL_BINDING,
+        engine_refusals(rows),
+        refusals(rows, Rule::Entityless)
+    );
+    println!(
+        "  of those, {} name a referent the fixture gives (damage) and {} are labelled `\
+         binds_nothing` (the repair)",
+        named_referents_refused_by_engine(rows).len(),
+        rows.iter()
+            .filter(|row| matches!(row.claim, Some(Claim::Nothing)) && row.engine_refuses())
+            .count()
+    );
+    println!(
+        "  {} of those are still decided — the wrong edges a resolver rule has to remove",
+        nothing_but_decided(rows).len()
+    );
+    let disagreeing = disagreements(rows);
+    println!(
+        "  the extractor and this measurement disagree on {} of the {}",
+        disagreeing.len(),
+        rows.len()
     );
     for rule in Rule::BOTH {
         println!("  {}", rule.as_str());
