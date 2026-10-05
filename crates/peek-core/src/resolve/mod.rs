@@ -2227,7 +2227,8 @@ impl<'s> Resolver<'s> {
     /// to be found by a reader who assumes otherwise.
     fn via_same_file(&mut self, relation: &Relation) -> Result<Option<Decision>, StoreError> {
         let name = relation.target_name.as_str();
-        let visible = self.invocable_around(relation, self.declared_around(relation, name)?);
+        let declared = self.declared_around(relation, name)?;
+        let visible = self.invocable_around(relation, declared);
         let mut found: Vec<Found> = Vec::new();
         if visible.is_empty() {
             for entity in self.entities_in_file(relation.source.path())?.iter() {
@@ -2308,7 +2309,8 @@ impl<'s> Resolver<'s> {
         // function, and only the first is something a use written here can mean. Ranking
         // rather than dropping would leave two candidates and an `Ambiguous` where one
         // entity is the answer, which is the difference between a gap and an edge.
-        let visible = self.invocable_around(relation, self.declared_around(relation, name)?);
+        let declared = self.declared_around(relation, name)?;
+        let visible = self.invocable_around(relation, declared);
         let mut found: Vec<Found> = Vec::new();
         let (entities, cut_short) = self.entities_named(name)?;
         for entity in entities {
