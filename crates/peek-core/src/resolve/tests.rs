@@ -304,7 +304,8 @@ fn a_name_a_binder_claims_is_refused_before_the_ladder_runs() {
     let refused_state = ResolutionState::Unresolved {
         reason: UnresolvedReason::LocalBinding,
     };
-    let refused = the_reference(&relations_in(&store, &refused_state), "out");
+    let refusals = relations_in(&store, &refused_state);
+    let refused = the_reference(&refusals, "out");
     assert_eq!(
         refused.target, None,
         "a refused relation points at nothing: {}",
@@ -537,7 +538,8 @@ fn a_refusal_survives_the_pass_that_would_otherwise_undue_it() {
     let already_refused = ResolutionState::Unresolved {
         reason: UnresolvedReason::LocalBinding,
     };
-    let refused = the_reference(&relations_in(&store, &already_refused), "out");
+    let held = relations_in(&store, &already_refused);
+    let refused = the_reference(&held, "out");
     assert_eq!(
         refused.resolution.evidence_class(),
         None,
