@@ -833,9 +833,16 @@ fn a_declaration_in_an_enclosing_scope_answers_for_everything_inside_it() {
     let read = references_from(&all, "Charge.count", "count");
     assert_eq!(
         read[0].target,
-        Some(id("src/lib.rs", EntityKind::Field, "Charge.count")),
-        "`self.count` inside a method of the same name is the field, and a declaration does not \
-         use its own name: {}",
+        None,
+        "a declaration does not use its own name, so the method is not the answer to a field it \
+         reads: {}",
+        state_of(read[0])
+    );
+    assert!(
+        read[0].resolution.is_ambiguous(),
+        "and what is left is an ambiguity rather than a self-edge: the field is the answer and \
+         nothing here can say so, because a `References` edge carries no receiver to follow. \
+         Naming the field needs receiver evidence, which is an extractor change. {}",
         state_of(read[0])
     );
 }
