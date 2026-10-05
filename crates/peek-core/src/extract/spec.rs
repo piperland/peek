@@ -222,6 +222,82 @@ pub struct ReferenceRule {
     /// about whole subtrees, and it cannot say which occurrence inside the subtree
     /// introduced the name.
     pub node_types: &'static [&'static str],
+    /// **Field names that hold a member rather than a local.**
+    ///
+    /// `sink.text` is a `field_expression` whose `field` slot holds `text`, and `Sink {
+    /// text: String::new() }` is a `field_initializer` whose `field` slot holds it too. In
+    /// both the name is read *through* the local: it names something belonging to whatever
+    /// the local holds, which is the one thing about it that reaches a declaration. So a
+    /// name in one of these slots is **not** classified by any binder that binds the
+    /// receiver — see [`LanguageSpec::bindings`].
+    ///
+    /// Without this the rule below destroys real edges: `render` reads `sink.text` and
+    /// `self.text.push_str(..)`, the local is `sink`, and `text` resolves to `Sink.text`
+    /// today. A correct edge replaced by a gap is a defect no published column shows.
+    ///
+    /// A **field name**, not a node type, because the question is which slot of the parent
+    /// the occurrence sits in, and asking the parent is exact: `field_name_for_named_child`
+    /// answers it without naming any node type in the shared walker.
+    pub member_fields: &'static [&'static str],
+}
+
+/// A node type that **binds a name the index holds no entity for**.
+///
+/// # Why this is a table and not a walk
+///
+/// A local binding is not a declaration. The extractor emits no `Entity` for `let mut out
+/// = ..`, for `for attempt in 0..limit`, or for a closure's untyped `|x|`, because the
+/// names they introduce are `identifier` nodes and `identifier` is not in any spec's
+/// `symbols`. Nothing in the graph can therefore name such a binding — and a relation that
+/// names one and is placed on an entity that merely *shares* the name is a false claim.
+///
+/// Recognising a binding needs the grammar, so it is the same kind of declarative table as
+/// `scope_nodes` and `module_nodes`: a per-language list, validated against the real
+/// grammar, rather than a `mod` keyword or a `let` keyword in the shared walker.
+///
+/// # What a node type here does *not* claim
+///
+/// It does not claim the language has no other binders. `if let`, `while let`, a match arm
+/// pattern and a `use ... as` alias all bind names too, and this table names the ones it
+/// has been measured on. A node type absent from it is **unclassified**, not unlocal: the
+/// classifier says nothing rather than saying the name is not local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BindingRule {
+    /// The exact node type string, e.g. `let_declaration`.
+    pub node_type: &'static str,
+    /// The field holding the pattern — or parameter list — that carries the names this node
+    /// binds, e.g. `pattern` for `let_declaration` and `parameters` for
+    /// `closure_expression`.
+    ///
+    /// The names are read out of the subtree under this field rather than out of one child,
+    /// so a destructuring pattern contributes every name it introduces: `let Entry {
+    /// count, .. } = e` binds `count`.
+    pub name_field: &'static str,
+    /// The field, when the grammar has one, whose subtree is evaluated **before** the binding
+    /// is in force: a `let` initialiser, a `for` iterable, a closure return type.
+    ///
+    /// `None` means the whole node after the name field has the binding in force.
+    ///
+    /// This is the near-miss guard, and it is per node type because the grammars spell the
+    /// two halves differently. `let size = size + 1` reads the `size` that existed before
+    /// the statement, so an occurrence inside the initialiser is not bound by it — and
+    /// folding that rule into a single "after the pattern" test is exactly how the near miss
+    /// gets introduced. In Rust the three are `value`, `value` and `return_type`.
+    pub not_in_force: Option<&'static str>,
+}
+
+impl BindingRule {
+    pub const fn new(
+        node_type: &'static str,
+        name_field: &'static str,
+        not_in_force: Option<&'static str>,
+    ) -> Self {
+        Self {
+            node_type,
+            name_field,
+            not_in_force,
+        }
+    }
 }
 
 /// Everything Peek needs to know to extract one language.
@@ -265,6 +341,12 @@ pub struct LanguageSpec {
     /// therefore treat every `impl` block in a codebase as a module declaration, and a `mod`
     /// keyword appearing in the shared walker is exactly the thing this table exists to prevent.
     pub module_nodes: &'static [&'static str],
+    /// Node types that bind a name **the index holds no entity for**.
+    ///
+    /// A name bound by one of these is a local, and the graph has nothing to place a
+    /// relation naming it. See [`BindingRule`] for why this is per language, what it does not
+    /// claim, and what the two fields are for.
+    pub bindings: &'static [BindingRule],
     /// How this language's files map onto modules and packages, or `None` when that is not yet
     /// known.
     pub modules: Option<ModuleLayout>,
@@ -318,6 +400,15 @@ impl LanguageSpec {
         self.module_nodes.contains(&node_type)
     }
 
+    /// The binding rule for a node type, if this language declares one.
+    ///
+    /// `None` means "this node type is not a binder this language has declared", which the
+    /// caller must read as **unclassified** rather than as "the name is not local" — the
+    /// distinction is the whole of the caution in [`BindingRule`].
+    pub fn binding_rule(&self, node_type: &str) -> Option<&'static BindingRule> {
+        self.bindings.iter().find(|rule| rule.node_type == node_type)
+    }
+
     /// The module layout for this language, or `None` when its file-to-module convention is
     /// not known. Callers must treat that as "no module structure for this language", never as
     /// "this file has no modules".
@@ -345,7 +436,7 @@ impl fmt::Display for LanguageSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::{CallRule, ImportRule, LanguageSpec, ModuleLayout, NameStrategy, SymbolRule};
+    use super::{BindingRule, CallRule, ImportRule, LanguageSpec, ModuleLayout, NameStrategy, SymbolRule};
     use crate::model::EntityKind;
 
     const RULES: &[SymbolRule] = &[SymbolRule::new(
@@ -361,6 +452,7 @@ mod tests {
         None,
         &["visibility_modifier"],
     )];
+    const BINDINGS: &[BindingRule] = &[BindingRule::new("let_declaration", "pattern", Some("value"))];
 
     fn spec() -> LanguageSpec {
         LanguageSpec {
@@ -373,6 +465,7 @@ mod tests {
             scope_nodes: &["function_item"],
             type_scope_nodes: &["function_item"],
             module_nodes: &["mod_item"],
+            bindings: BINDINGS,
             modules: Some(ModuleLayout {
                 source_roots: &["src"],
                 package_roots: &["lib", "main"],
@@ -460,6 +553,24 @@ mod tests {
         assert!(
             !spec.is_type_scope_node("call_expression"),
             "a call is not a type scope"
+        );
+    }
+
+    #[test]
+    fn a_binding_rule_carries_where_its_names_are_written_and_where_they_are_not_in_force() {
+        // Both fields are grammar data rather than an implementation detail, which is why they
+        // live in the spec: `let size = size + 1` reads the `size` that already existed, and a
+        // classifier that only knew `pattern` would call that occurrence local.
+        let spec = spec();
+        let rule = spec
+            .binding_rule("let_declaration")
+            .expect("the table declares a let binder");
+        assert_eq!(rule.name_field, "pattern");
+        assert_eq!(rule.not_in_force, Some("value"));
+        assert!(
+            spec.binding_rule("function_item").is_none(),
+            "a function declaration binds a name the index DOES hold an entity for, so it is \
+             not in this table"
         );
     }
 

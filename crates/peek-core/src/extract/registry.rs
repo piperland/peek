@@ -6,7 +6,7 @@
 //! [`Language::tier`](crate::model::Language::tier) will not advertise it.
 
 use super::spec::{
-    CallRule, ImportRule, InheritanceStyle, LanguageSpec, ModuleLayout, NameStrategy,
+    BindingRule, CallRule, ImportRule, InheritanceStyle, LanguageSpec, ModuleLayout, NameStrategy,
     ReferenceRule, SymbolRule,
 };
 use crate::model::{EntityKind, Language};
@@ -170,6 +170,12 @@ static RUST: LanguageSpec = LanguageSpec {
             "field_identifier",
             "scoped_identifier",
         ],
+        // `sink.text` is a `field_expression`'s `field` slot and `Sink { text: .. }` is a
+        // `field_initializer`'s. Both name a member of whatever the local holds, so a name in
+        // that slot is not classified by the binder that binds the receiver. Without this the
+        // binding rule below would unresolve `render | text` -> `Sink.text` — a correct edge
+        // replaced by a gap, which no published column would show.
+        member_fields: &["field"],
     }),
     scope_nodes: &[
         "impl_item",
@@ -188,6 +194,28 @@ static RUST: LanguageSpec = LanguageSpec {
     // absent even though it is also an `EntityKind::Module` in the table above: an `impl` block
     // is a scope, not a namespace anybody can `use`.
     module_nodes: &["mod_item"],
+    // The three binders whose names this index holds no entity for, spelled the way
+    // `tree-sitter-rust` 0.24 spells them — every string here is checked against the real
+    // grammar by `every_registered_spec_validates_against_its_real_grammar`, and a wrong one
+    // fails the build rather than silently classifying nothing.
+    //
+    // * `let_declaration` — `pattern` carries the name, and `value` is the initialiser that is
+    //   evaluated before the binding exists.
+    // * `for_expression` — `pattern` carries the loop variable; `value` is the iterable, which
+    //   is likewise evaluated first, and `body` is the block the variable *is* in scope in.
+    // * `closure_expression` — `parameters` is a `closure_parameters` node; its children are
+    //   typed `parameter` nodes or bare patterns, and only the latter bind a name this index
+    //   has no entity for. The classifier asks the spec which of the two it is rather than
+    //   assuming, and `return_type` names no value in the closure's own scope.
+    //
+    // What is deliberately **absent**: a `use ... as` alias (the resolver's R1 rung places
+    // those, from the import binding), a match-arm pattern, and `if let`. A binder that is
+    // not in this table is unclassified, not unlocal — see `BindingRule`.
+    bindings: &[
+        BindingRule::new("let_declaration", "pattern", Some("value")),
+        BindingRule::new("for_expression", "pattern", Some("value")),
+        BindingRule::new("closure_expression", "parameters", Some("return_type")),
+    ],
     modules: Some(RUST_MODULE_LAYOUT),
     grammar: || tree_sitter_rust::LANGUAGE.into(),
 };
@@ -274,5 +302,32 @@ mod tests {
         languages.sort_unstable();
         languages.dedup();
         assert_eq!(languages.len(), count, "a language is registered twice");
+    }
+
+    #[test]
+    fn rust_declares_the_binders_a_local_binding_is_written_with() {
+        // The table the classifier asks, asserted by name rather than by count. A count would
+        // pass for a table holding the same node type twice and nothing else, and the failure
+        // that matters is a *wrong* node type — which the grammar validator catches and this
+        // test cannot, because it reads the same strings.
+        let kinds: Vec<&str> = RUST.bindings.iter().map(|rule| rule.node_type).collect();
+        assert_eq!(
+            kinds,
+            vec!["let_declaration", "for_expression", "closure_expression"],
+            "the binders a local name can be introduced by"
+        );
+        for rule in RUST.bindings {
+            assert!(
+                !rule.name_field.is_empty(),
+                "{} declares no field to read its names from, so it classifies nothing",
+                rule.node_type
+            );
+        }
+        assert!(
+            RUST.references
+                .as_ref()
+                .is_some_and(|rule| rule.member_fields.contains(&"field")),
+            "a field read is a member of what the local holds, not the local"
+        );
     }
 }

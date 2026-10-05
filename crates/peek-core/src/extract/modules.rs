@@ -1115,6 +1115,7 @@ mod tests {
             scope_nodes: &[],
             type_scope_nodes: &[],
             module_nodes: &[],
+            bindings: &[],
             modules: None,
             grammar: || tree_sitter_rust::LANGUAGE.into(),
         };

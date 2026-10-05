@@ -205,6 +205,28 @@ impl GrammarFacts {
             }
         }
 
+        // A binder is a node type *and* two fields, and all three are grammar data. A wrong
+        // field name returns `None` from `child_by_field_name` and the classifier then treats
+        // the binder as introducing nothing — a silent no-op, which is the failure mode this
+        // file exists to make loud.
+        for rule in spec.bindings {
+            if !self.has_node_type(rule.node_type) {
+                problems.push(self.missing_node(language, rule.node_type, "binding"));
+            }
+            if !self.has_field(rule.name_field) {
+                problems.push(self.missing_field(language, rule.name_field, "binding names"));
+            }
+            if let Some(field) = rule.not_in_force
+                && !self.has_field(field)
+            {
+                problems.push(self.missing_field(
+                    language,
+                    field,
+                    "binding not yet in force",
+                ));
+            }
+        }
+
         // `spec.modules` is deliberately not validated here. A `ModuleLayout` holds directory
         // names and a path separator, not grammar node types, and there is no grammar to check
         // them against — it is checked by the module tests, which assert the *resulting* names
@@ -215,6 +237,11 @@ impl GrammarFacts {
             for node_type in references.node_types {
                 if !self.has_node_type(node_type) {
                     problems.push(self.missing_node(language, node_type, "reference"));
+                }
+            }
+            for field in references.member_fields {
+                if !self.has_field(field) {
+                    problems.push(self.missing_field(language, field, "reference member"));
                 }
             }
         }
@@ -303,6 +330,12 @@ impl GrammarFacts {
 #[cfg(test)]
 mod tests {
     use super::GrammarFacts;
+    use crate::extract::spec::{BindingRule, LanguageSpec};
+    use crate::model::Language;
+
+    fn rust() -> LanguageSpec {
+        *LanguageSpec::for_language(Language::Rust).expect("rust has a spec")
+    }
 
     #[test]
     fn reads_real_node_types_from_a_real_grammar() {
@@ -321,5 +354,40 @@ mod tests {
         assert!(facts.has_field("type"));
         assert!(facts.has_field("function"));
         assert!(!facts.has_field("no_such_field"));
+    }
+
+    #[test]
+    fn a_binding_node_type_the_grammar_does_not_have_fails_the_build() {
+        // The mechanism that keeps the table from rotting, proved by asking the validator
+        // about a misspelling rather than by trusting that it would notice one. A classifier
+        // keyed on a node type the grammar has never heard of fires **never**, and a rule
+        // that fires never looks exactly like a rule that does no harm.
+        let facts = GrammarFacts::of(&tree_sitter_rust::LANGUAGE.into());
+        let mut spec = rust();
+        spec.bindings = &[BindingRule::new("let_declaraton", "pattern", Some("value"))];
+        let problems = facts.validate(&spec);
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("let_declaraton")),
+            "a misspelt binding node type must be reported, not accepted: {problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_binding_field_the_grammar_does_not_have_fails_the_build() {
+        // The quieter half of the same rot. `child_by_field_name("patern")` returns `None`,
+        // every binder in the table then introduces nothing, and the classifier classifies
+        // nothing at all — which no count of damage would show.
+        let facts = GrammarFacts::of(&tree_sitter_rust::LANGUAGE.into());
+        let mut spec = rust();
+        spec.bindings = &[BindingRule::new("let_declaration", "patern", None)];
+        let problems = facts.validate(&spec);
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("patern")),
+            "a misspelt binding field must be reported, not accepted: {problems:?}"
+        );
     }
 }
