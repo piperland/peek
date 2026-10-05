@@ -239,6 +239,364 @@ fn the_one<'a>(relations: &'a [Relation], target_name: &str) -> &'a Relation {
 }
 
 // ---------------------------------------------------------------------------
+// A local binding: the class that names a rule rather than a rung
+// ---------------------------------------------------------------------------
+//
+// Four tests, and they are four rather than one because the rule has four separate ways to be
+// wrong. That it fires at all; that it fires *instead of* the ladder rather than after it; that
+// the three states carrying the class are all read; and that a relation refused once is refused
+// again, which is the half the wire format costs and the half that has to be got right anyway.
+
+/// A repository whose `out` is a `let` in one file and a parameter in another.
+///
+/// The second declaration is the whole fixture. A rule that only refused when nothing shares the
+/// name would pass every test below, so `render.out` is here to be the wrong answer: exactly one
+/// entity carries `out` in the repository, which is the condition under which R5 would place the
+/// reference and the condition under which its answer would be wrong.
+fn local_binding_tree(label: &str) -> TempTree {
+    let tree = TempTree::new(label);
+    tree.write(
+        "src/report.rs",
+        "pub fn render(out: &mut String) -> usize {\n    out.len()\n}\n",
+    );
+    tree.write(
+        "src/lib.rs",
+        "mod report;\n\npub fn summarise(tag: &str) -> String {\n    let mut out = String::new();\n    \
+         out.push_str(tag);\n    report::render(&mut out);\n    out\n}\n",
+    );
+    tree
+}
+
+/// Every relation in one state, wherever the store holds it.
+fn relations_in(store: &Store, state: &ResolutionState) -> Vec<Relation> {
+    store
+        .relations_in_state(state, 512)
+        .unwrap_or_else(|error| panic!("read the {state:?} relations: {error}"))
+}
+
+/// The reference to `name` in the index, wherever it ended up.
+fn the_reference<'a>(relations: &'a [Relation], name: &str) -> &'a Relation {
+    let mut named: Vec<&Relation> = relations
+        .iter()
+        .filter(|relation| relation.target_name == name)
+        .collect();
+    match named.len() {
+        1 => named.remove(0),
+        other => panic!(
+            "expected exactly one relation naming `{name}`, found {other} in {}",
+            relations.len()
+        ),
+    }
+}
+
+#[test]
+fn a_name_a_binder_claims_is_refused_before_the_ladder_runs() {
+    // The rule, on a relation that reaches it `Pending`.
+    //
+    // `out` in `summarise` is bound by a `let`, the extractor records `local_binding`, and the
+    // index holds one entity carrying that name — `report.rs`'s `render.out` parameter, which is
+    // not what the occurrence means. R5 would place it there and be wrong; the head rule places
+    // it nowhere and says why.
+    let tree = local_binding_tree("refused-at-the-head");
+    let mut store = tree.index_without_resolving();
+    let report = resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let refused = the_reference(
+        &relations_in(
+            &store,
+            &ResolutionState::Unresolved {
+                reason: UnresolvedReason::LocalBinding,
+            },
+        ),
+        "out",
+    );
+    assert_eq!(
+        refused.target, None,
+        "a refused relation points at nothing: {}",
+        state_of(refused)
+    );
+    assert_eq!(
+        refused.resolution,
+        ResolutionState::Unresolved {
+            reason: UnresolvedReason::LocalBinding,
+        },
+        "and it says so in the stored state, not only in this test: {}",
+        state_of(refused)
+    );
+
+    // The counterweight, which is what makes the assertion above mean something: R5's answer for
+    // this exact name exists and is reachable, so a rule that fired after the ladder would look
+    // the same on this row and differ on none.
+    let declared = relations_in(
+        &store,
+        &ResolutionState::Resolved {
+            by: Evidence::NameOnly,
+        },
+    )
+    .into_iter()
+    .chain(relations_in(
+        &store,
+        &ResolutionState::Inferred {
+            by: Evidence::NameOnly,
+            basis: String::new(),
+        },
+    ))
+    .any(|relation| relation.target_name == "out" && relation.target.is_some());
+    assert!(
+        declared,
+        "no relation to `out` is placed on an entity, so this test would pass over an index in \
+         which the name was unplaceable and the rule had nothing to refuse"
+    );
+    assert_eq!(
+        report.unresolved_by_reason.get("local_binding"),
+        Some(&1),
+        "and the refusal is counted under its own reason rather than folded into no_candidate, \
+         because the two are different findings: {}",
+        report.summary()
+    );
+}
+
+#[test]
+fn the_local_binding_refusal_never_becomes_a_decision() {
+    // **It is not a rung.** A rung is tried after the stronger ones and before the weaker ones, and
+    // the ladder's whole claim is "the first rung that returns any candidate decides" — which for
+    // this class would be a claim that there *is* a candidate. So the test is not that the rule
+    // outranks the others but that it prevents them from being asked at all: R1, R3, R4 and R5 all
+    // have a route to this row and none of them may answer it.
+    //
+    // The fixture gives each of them one. The reference is in a file that imports nothing (R1 has no
+    // binding), it is a bare name and not a qualified path (R3 has no scope), `out` is declared in
+    // the *other* file (R4's same-file lookup finds nothing) and it is unique in the repository (R5
+    // would answer, and wrongly). A rule placed after any of those would be caught by the `out` row
+    // landing on `render.out`; a rule placed before all of them is caught by this test failing to
+    // find it in `Resolved` or `Inferred` at all.
+    let tree = local_binding_tree("never-a-decision");
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let decided = relations_in(
+        &store,
+        &ResolutionState::Resolved {
+            by: Evidence::NameOnly,
+        },
+    )
+    .into_iter()
+    .chain(relations_in(
+        &store,
+        &ResolutionState::Inferred {
+            by: Evidence::NameOnly,
+            basis: String::new(),
+        },
+    ))
+    .chain(relations_in(
+        &store,
+        &ResolutionState::Ambiguous {
+            candidates: Vec::new(),
+        },
+    ));
+    for relation in decided {
+        assert_ne!(
+            relation.target_name, "out",
+            "`out` was decided rather than refused, so a rung answered it: {}",
+            state_of(&relation)
+        );
+    }
+}
+
+#[test]
+fn a_re_decision_reads_the_refusal_in_all_three_states_that_carry_the_class() {
+    // The clause most likely to be got wrong, and the one a `Pending`-only read gets wrong without
+    // any test noticing: the second pass over an already-decided row finds `None`, the ladder runs,
+    // and the relation comes back placed. R5 is the rung that does it, and it does it *correctly as
+    // far as it knows* — which is the point. There is one entity named `out` and the reference is
+    // `Pending` on the first pass only by luck of ordering.
+    //
+    // So all three states carrying `Evidence::LocalBinding` are exercised, and each is fed to a
+    // *scoped* pass rather than a full one, because that is the pass that re-decides rows which
+    // already hold an answer (`reconsider_decided`). `Resolved` and `Inferred` are not states this
+    // engine produces for this class — the head rule refuses before either could be reached — so
+    // they are written by hand, which is the honest way to test a defensive arm: the row is one an
+    // index from another build, or a future change, could hold.
+    let tree = local_binding_tree("read-in-every-state");
+    let mut store = tree.index_without_resolving();
+    let first = resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
+    assert_eq!(
+        first.unresolved_by_reason.get("local_binding"),
+        Some(&1),
+        "the fixture must produce the refusal the test is about: {}",
+        first.summary()
+    );
+
+    let binder = "let_declaration";
+    let local = Evidence::LocalBinding {
+        binder: binder.to_owned(),
+    };
+    let pending = relations_in(
+        &store,
+        &ResolutionState::Pending {
+            evidence: Evidence::NameOnly,
+            basis: String::new(),
+        },
+    )
+    .into_iter()
+    .find(|relation| relation.target_name == "out")
+    .expect("the fixture declares a reference to `out`");
+    let target = id("src/report.rs", EntityKind::Parameter, "render.out");
+
+    // Each state, handed to `resolve_paths` as a displaced edge so the scoped pass has it in scope
+    // without a file having changed. The three relations differ in their spans, because the store's
+    // natural key includes the span and three rows with one key are one row.
+    let cases = [
+        (
+            "pending",
+            ResolutionState::Pending {
+                evidence: local.clone(),
+                basis: String::new(),
+            },
+            None,
+        ),
+        (
+            "resolved",
+            ResolutionState::Resolved { by: local.clone() },
+            Some(target.clone()),
+        ),
+        (
+            "inferred",
+            ResolutionState::Inferred {
+                by: local,
+                basis: String::new(),
+            },
+            Some(target),
+        ),
+    ];
+    let mut displaced = Vec::new();
+    for (index, (_, state, target)) in cases.iter().enumerate() {
+        displaced.push(Relation {
+            span: crate::model::Span::new(
+                10 + (index as u32) * 4,
+                12 + (index as u32) * 4,
+                1,
+                1 + (index as u32) as u16,
+                1,
+                2 + (index as u32) as u16,
+            )
+            .expect("span"),
+            target: target.clone(),
+            resolution: state.clone(),
+            ..pending.clone()
+        });
+    }
+
+    let report = resolve_paths(
+        &mut store,
+        &[],
+        &displaced,
+        ResolutionOptions::default(),
+    )
+    .expect("a scoped pass over the displaced rows");
+    assert_eq!(
+        report.examined, 3,
+        "all three rows must have reached the ladder: {}",
+        report.summary()
+    );
+    assert_eq!(
+        report.unresolved_by_reason.get("local_binding"),
+        Some(&3),
+        "and all three must have been refused rather than placed: {}",
+        report.summary()
+    );
+
+    // Read back through the store, so this is what the graph holds and not what `decide` returned.
+    for relation in relations_in(
+        &store,
+        &ResolutionState::Unresolved {
+            reason: UnresolvedReason::LocalBinding,
+        },
+    ) {
+        assert_eq!(
+            relation.target, None,
+            "a row carrying `{}` in state {:?} was placed by a rung on the second pass",
+            relation.target_name, relation.resolution
+        );
+    }
+}
+
+#[test]
+fn a_refusal_survives_the_pass_that_would_otherwise_undue_it() {
+    // The cost of the wire format, tested from the side that matters.
+    //
+    // `ResolutionState::Unresolved` carries no evidence, so the class that justified the refusal is
+    // gone from the stored row by the time the next pass reads it. A pass that re-decided from the
+    // class alone would find nothing and hand the relation to R5, which places `out` on
+    // `render.out` — the exact wrong edge the refusal exists to remove, restored by the act of
+    // removing it. This is the case that makes the loss audible rather than silent, and it is why
+    // the reason is read back.
+    //
+    // **What it cannot do is restore the binder.** `explain` reads `unresolved (local_binding)` and
+    // the `let_declaration` that wrote the name is not in the row any more. That is a real loss,
+    // taken deliberately: a payload on `Unresolved` would be a second wire shape for one field that
+    // every index already holds in the other. So this test asserts the refusal holds and says
+    // nothing about the binder being recoverable, because it is not.
+    let tree = local_binding_tree("refusal-survives");
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("first pass");
+
+    let refused = the_reference(
+        &relations_in(
+            &store,
+            &ResolutionState::Unresolved {
+                reason: UnresolvedReason::LocalBinding,
+            },
+        ),
+        "out",
+    );
+    assert_eq!(
+        refused.resolution.evidence_class(),
+        None,
+        "the refusal carries no evidence, which is the whole of the cost: {}",
+        state_of(refused)
+    );
+
+    // The same scoped pass over the *incoming* edges of the file that declares `render.out`. This is
+    // the door a real refresh opens: `report.rs` changed, so every edge pointing into it is
+    // re-decided — including this one, whose source file did not change and whose evidence was
+    // therefore never re-extracted.
+    let report = resolve_paths(
+        &mut store,
+        &[RepoPath::new("src/report.rs").expect("valid path")],
+        &[],
+        ResolutionOptions::default(),
+    )
+    .expect("a scoped pass over the declaring file");
+    assert!(
+        report.reconsidered > 0,
+        "the pass must have reached the edge pointing into the changed file: {}",
+        report.summary()
+    );
+
+    let after = relations_in(
+        &store,
+        &ResolutionState::Unresolved {
+            reason: UnresolvedReason::LocalBinding,
+        },
+    );
+    let reference = the_reference(&after, "out");
+    assert_eq!(
+        reference.target, None,
+        "the second pass placed `out` on an entity the second time: {}",
+        state_of(reference)
+    );
+    assert!(
+        report
+            .unresolved_by_reason
+            .get("local_binding")
+            .is_some_and(|count| *count > 0),
+        "and it refused it again for the same reason rather than falling through: {}",
+        report.summary()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The evidence order
 // ---------------------------------------------------------------------------
 

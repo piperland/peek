@@ -65,9 +65,9 @@
 //! | 50 | `same_file` | the target is declared in the same file as the reference | **R4** |
 //! | 40 | `unique_name` | exactly one entity in the repository carries the name | **R5** |
 //! | 10 | `name_only` | a bare name with nothing else known about it | evidence the extractor records, never an answer |
-//! | — | `local_binding` | the name is bound by a binder the index holds no entity for | **not implemented here**: a
-//!   relation carrying it must end `unresolved`, and the rule that says so belongs at the head
-//!   of [`Resolver::decide`] — see [`rung_name`]
+//! | — | `local_binding` | the name is bound by a binder the index holds no entity for | **not a rung**: a relation
+//!   carrying it ends `unresolved` at the head of [`Resolver::decide`], before R1 — see
+//!   [`rung_name`] and [`refused_for_local_binding`]
 //!
 //! The order *is* the rung order. Rungs are tried strongest first and the **first rung that
 //! returns any candidate decides**; a rung that returns none falls through to the next. A rung
@@ -106,6 +106,34 @@
 //!
 //! `Ambiguous` and `Unresolved` carry no evidence, so a relation that ended in either is re-decided
 //! from its bare name. That is a limit of the state and it is stated here rather than papered over.
+//!
+//! ## The one limit the resolver chose, and what it cost
+//!
+//! **A refusal for `local_binding` is the case where that limit has teeth**, and it is written down
+//! here rather than discovered on a later pass. [`ResolutionState::Unresolved`] carries no evidence,
+//! so the moment the head rule fires the class that justified it is gone from the stored row. A
+//! second pass reading only the class would find nothing and walk the ladder, and R5 would place
+//! `out` on `report.rs`'s `render.out` parameter — the confidently-wrong edge the refusal exists to
+//! remove, put back by the act of removing it.
+//!
+//! **The alternative was to give [`ResolutionState::Unresolved`] a payload, and it was rejected for
+//! the wire format rather than for the model.** [`UnresolvedReason`] is a unit variant for every
+//! variant on purpose: the wire form is a bare string in a field three surfaces read, and every
+//! index already on disk holds the older wrapped shape — so a refusal carrying its own evidence
+//! would be a second shape for one field, bought with a binder node type on the 41 relations of 192
+//! the gate measures. The cost of the cheaper answer is stated as a cost:
+//!
+//! * **`peek explain` keeps the reason and loses the binder.** The row reads
+//!   `unresolved (local_binding)`: the class survives, the `binder` that wrote it does not, and a
+//!   reader who wants *which* `let` re-extracts the file. It is not a silent loss — the reason is
+//!   its own variant, counted in [`ResolutionReport::unresolved_by_reason`] and printed by
+//!   [`ResolutionReport::summary`], where `no_candidate` would have hidden the difference between
+//!   "this name is not in the repository" and "this occurrence does not mean an entity".
+//!
+//! [`refused_for_local_binding`] is the other half of the trade: the stored reason is read back, so a
+//! second pass refuses the same relation for the same reason instead of placing it. That is what
+//! stops the loss from being *silent*. It does not restore the binder, and nothing here claims it
+//! does.
 //!
 //! # What each rung does, and what it refuses to do
 //!
@@ -488,11 +516,11 @@ pub fn rule_name(evidence: &Evidence) -> &'static str {
 /// what the engine believes.
 ///
 /// **`local_binding` is the one class that names a rule rather than belonging to one.** It is a
-/// claim that the relation has **no** target, so it cannot rank candidates: the rule it names
-/// is a refusal at the head of [`Resolver::decide`], and until that rule is written it is
-/// carried by the extractor, read by nothing, and moves no number. That is stated here rather
-/// than left to be found, because a class in the evidence vocabulary that no rung implements
-/// is exactly the kind of hole this table exists to make visible.
+/// claim that the relation has **no** target, so it cannot rank candidates and the rule it names
+/// is a refusal at the head of [`Resolver::decide`] rather than a rung that answers. The name
+/// this function returns is therefore the class string rather than a rung's, and a reader who
+/// takes it for a rung will look for a place in the order where `local_binding` can fire and find
+/// none — which is the correct answer. See [`refused_for_local_binding`].
 #[must_use]
 pub fn rung_name(evidence: &Evidence) -> &'static str {
     match evidence {
@@ -920,6 +948,64 @@ fn scope_evidence(state: &ResolutionState) -> Option<String> {
     }
 }
 
+/// The binder node type a relation carries as a local binding, in whichever state it is in.
+///
+/// **Three states, and the second and third are not hypothetical.** `Ambiguous` and `Unresolved`
+/// carry no evidence, so a relation refused by [`local_binding`] leaves this reading with `None` on
+/// the second pass — which is the whole of the cost written down in this module's documentation
+/// and is why [`Resolver::decide`] reads the refusal itself rather than only the class. The
+/// `Resolved` and `Inferred` arms are read even though nothing in this engine produces them,
+/// because the class is the field that carries the claim and a reader who found a `Resolved` row
+/// carrying it must get the same answer as one who found it `Pending`.
+fn local_binding(state: &ResolutionState) -> Option<String> {
+    match state {
+        ResolutionState::Pending {
+            evidence: Evidence::LocalBinding { binder },
+            ..
+        }
+        | ResolutionState::Resolved {
+            by: Evidence::LocalBinding { binder },
+        }
+        | ResolutionState::Inferred {
+            by: Evidence::LocalBinding { binder },
+            ..
+        } => Some(binder.clone()),
+        _ => None,
+    }
+}
+
+/// Whether a relation is refused because a binder claims the name, in any state it can be in.
+///
+/// **The fourth arm is the cost, and it is the reason this is a separate function rather than a
+/// fourth case in [`local_binding`].** [`ResolutionState::Unresolved`] carries no evidence, so once
+/// the head rule fires the class is gone from the stored row and `peek explain` can name the reason
+/// but not the binder. A re-decision that then reads only the class finds nothing and walks the
+/// ladder — and R5 will happily place `out` on `report.rs`'s `render.out`, which is the exact
+/// confidently-wrong edge the rule exists to remove.
+///
+/// The repair is to let the refusal refuse again, and the reason that is sound rather than a
+/// shortcut: the claim is about a byte in the **source** file, and a re-decision re-reads the
+/// **index**, not that file. Every relation that comes back through [`resolve_paths`] holding this
+/// reason came from a file that was not re-extracted — a scoped pass re-reads the outgoing edges
+/// of the paths it was given (which the extractor has just re-emitted as `Pending`, carrying the
+/// class) and the incoming edges of the entities those paths declare (whose sources were not
+/// touched). So the claim is exactly as true on the second pass as on the first, and a fresh
+/// `Pending` row from a re-extracted file is refused by the class arm anyway.
+///
+/// What it does not do is make the claim checkable. The binder is gone from the row and this
+/// function cannot put it back; that is a real loss and it is why the reason exists as a variant
+/// of its own rather than as [`UnresolvedReason::NoCandidate`], which would have hidden the
+/// distinction between "the name is not in the repository" and "the name is not what this
+/// occurrence means".
+fn refused_for_local_binding(state: &ResolutionState) -> bool {
+    match state {
+        ResolutionState::Unresolved {
+            reason: UnresolvedReason::LocalBinding,
+        } => true,
+        other => local_binding(other).is_some(),
+    }
+}
+
 /// The module an import placed a relation through, in whichever decided state it is in.
 ///
 /// **The module is the whole of what survives, and that is enough to place it again.** A relation
@@ -1070,6 +1156,18 @@ impl<'s> Resolver<'s> {
         // relations that already hold a decision — see `receiver_evidence`.
         let receiver = receiver_evidence(&relation.resolution);
         let scope = scope_evidence(&relation.resolution);
+
+        // **Not a rung.** `local_binding` is a claim that there is no target, so there is nothing
+        // for a rung to rank: R1-R5 would each answer a question about which entity the name
+        // denotes, and the answer is that this occurrence does not denote one. Placed ahead of
+        // every rung, and of the glob-import check below, because both of those are claims about
+        // a name and neither is a claim about *this* occurrence. Measured on the gate fixture: 7
+        // decided-and-wrong edges removed, 0 decided-and-right edges removed.
+        if refused_for_local_binding(&relation.resolution) {
+            return Ok(Decision::Unresolved {
+                reason: UnresolvedReason::LocalBinding,
+            });
+        }
 
         // A glob import binds no single name, so no rule can ever prove a target for it. Saying
         // so beats falling through to a name lookup on the character `*`, which is roughly what

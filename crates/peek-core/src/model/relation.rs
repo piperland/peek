@@ -270,9 +270,10 @@ pub enum Evidence {
     ///
     /// Every other class is a claim *about a target*, and this one is a claim that there is
     /// none — so it is the only class that must never appear on a `Resolved` or `Inferred`
-    /// relation. `Resolver::decide` has to refuse the relation when it sees it (D-0036's
-    /// "decline, do not guess", read in the other direction); until that rule lands, this class
-    /// is carried on every relation it applies to and moves no number.
+    /// relation. [`crate::resolve`] refuses the relation when it sees it, at the head of
+    /// `Resolver::decide` and before R1, with
+    /// [`UnresolvedReason::LocalBinding`] as the reason; a relation carrying this class is
+    /// never ranked, because there is nothing to rank.
     LocalBinding {
         /// The node type of the binder, e.g. `let_declaration`.
         binder: String,
@@ -352,6 +353,21 @@ pub enum UnresolvedReason {
     ParseError,
     /// The language has no extractor rules that can prove this relation.
     Unsupported,
+    /// **The name at this occurrence is bound by a binder in the source's own scope, and the index
+    /// holds no entity for it** — so no entity anywhere in the repository is its referent.
+    ///
+    /// Neither of the two reasons above would be true here, and both have been. `NoCandidate`
+    /// says the name matched nothing in the repository, and the name matches things: an entity
+    /// named `out` exists in `report.rs` and is not what this occurrence means. `Unsupported` says
+    /// the language has no rule that can prove the relation, and this relation was proved — proved
+    /// to have no target, which is a different and stronger finding than either. The claim is
+    /// carried by [`Evidence::LocalBinding`], whose `binder` names the node type that made it.
+    ///
+    /// **No payload, and that costs something.** Every variant here is a unit variant because the
+    /// wire form is a bare string, so the reason survives the refusal and the binder does not:
+    /// `peek explain` reads `unresolved (local_binding)` and can no longer say *which* binder. The
+    /// trade is written down at `resolve::local_binding` rather than left to be discovered.
+    LocalBinding,
 }
 
 /// The two shapes an [`UnresolvedReason`] is found in on the way in.
@@ -400,6 +416,7 @@ impl UnresolvedReason {
             UnresolvedReason::Dynamic => "dynamic",
             UnresolvedReason::ParseError => "parse_error",
             UnresolvedReason::Unsupported => "unsupported",
+            UnresolvedReason::LocalBinding => "local_binding",
         }
     }
 
@@ -417,6 +434,7 @@ impl UnresolvedReason {
             "dynamic" => Some(UnresolvedReason::Dynamic),
             "parse_error" => Some(UnresolvedReason::ParseError),
             "unsupported" => Some(UnresolvedReason::Unsupported),
+            "local_binding" => Some(UnresolvedReason::LocalBinding),
             _ => None,
         }
     }
@@ -975,6 +993,7 @@ mod tests {
             UnresolvedReason::Dynamic,
             UnresolvedReason::ParseError,
             UnresolvedReason::Unsupported,
+            UnresolvedReason::LocalBinding,
         ];
         for reason in every {
             let spelled = reason.as_str();
