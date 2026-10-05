@@ -74,7 +74,7 @@ rendering `1.00`.
 | typescript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | javascript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | python | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| rust | 100.00 (5/5) | 100.00 (5/5) | 100.00 (14/14) | 100.00 (3/3) | 75.00 (36/48) | 100.00 (2288/2288) | 100.00 (30/30) | 100.00 (7/7) |
+| rust | 100.00 (5/5) | 100.00 (5/5) | 100.00 (14/14) | 100.00 (3/3) | 87.80 (36/41) | 100.00 (2288/2288) | 100.00 (30/30) | 100.00 (7/7) |
 | go | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | java | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | csharp | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
@@ -116,7 +116,7 @@ wrong by a factor of two.
 
 | Language | Decided | Right | Wrong edges | Wrong sites | Undecided | Labelled but no relation |
 |---|---|---|---|---|---|---|
-| rust | 48 | 36 | 12 | 6 | 48 | 3 |
+| rust | 41 | 36 | 5 | 4 | 50 | 3 |
 
 ### Every decided-and-wrong edge, by name
 
@@ -126,8 +126,6 @@ landed on, and what the fixture says should have happened.
 
 **rust**
 
-- references from src/lib.rs | summarise names `out` and the unique_name rung placed it on src/report.rs | parameter | render.out | #0; the label says no entity is the referent
-  - reachability of `references|src/lib.rs|function|summarise|out`: extractor: the name denotes no declaration, so no rung could have placed it (1 in the index declare the name: src/report.rs | parameter | render.out | #0)
 - references from src/report.rs | format_line_inner names `entry` and the import_binding rung placed it on src/model.rs | function | entry | #0; the label says `src/report.rs | parameter | format_line_inner.entry`
   - reachability of `references|src/report.rs|function|format_line_inner|entry`: resolver: the source's own scope declares the name, and a weaker rung answered (6 in the index declare the name: src/model.rs | function | entry | #0, src/report.rs | parameter | format_line_inner.entry | #0, src/service.rs | parameter | describe.entry | #0, src/traits.rs | parameter | Meters.save.entry | #0, src/traits.rs | parameter | Saveable.save.entry | #0, src/traits.rs | parameter | Ticks.save.entry | #0)
 - references from src/report.rs | render names `count` and the same_file rung placed it on src/report.rs | parameter | format_line.count | #0; the label says `src/model.rs | field | Entry.count`
@@ -136,8 +134,6 @@ landed on, and what the fixture says should have happened.
   - reachability of `references|src/service.rs|function|describe|count`: resolver: the correct entity is a candidate by name (4 in the index declare the name: src/model.rs | field | Entry.count | #0, src/model.rs | parameter | entry.count | #0, src/report.rs | parameter | format_line.count | #0, src/service.rs | parameter | format_line.count | #0)
 - references from src/service.rs | describe names `entry` and the import_binding rung placed it on src/model.rs | function | entry | #0; the label says `src/service.rs | parameter | describe.entry`
   - reachability of `references|src/service.rs|function|describe|entry`: resolver: the source's own scope declares the name, and a weaker rung answered (6 in the index declare the name: src/model.rs | function | entry | #0, src/report.rs | parameter | format_line_inner.entry | #0, src/service.rs | parameter | describe.entry | #0, src/traits.rs | parameter | Meters.save.entry | #0, src/traits.rs | parameter | Saveable.save.entry | #0, src/traits.rs | parameter | Ticks.save.entry | #0)
-- references from src/service.rs | Runner.run names `last` and the same_file rung placed it on src/service.rs | parameter | retry.last | #0; the label says no entity is the referent
-  - reachability of `references|src/service.rs|method|Runner.run|last`: extractor: the name denotes no declaration, so no rung could have placed it (1 in the index declare the name: src/service.rs | parameter | retry.last | #0)
 
 
 ## Relation states per class
@@ -149,7 +145,7 @@ correct outcome for a name with two candidates and an incorrect one for `mod::f(
 |---|---|---|---|---|---|---|---|
 | rust | `contains` | 61 | 61 | 0 | 0 | 0 | 0 |
 | rust | `imports` | 15 | 10 | 3 | 0 | 2 | 0 |
-| rust | `references` | 192 | 77 | 17 | 21 | 77 | 0 |
+| rust | `references` | 192 | 66 | 14 | 19 | 93 | 0 |
 | rust | `calls` | 39 | 9 | 1 | 4 | 25 | 0 |
 | rust | `inherits` | 1 | 1 | 0 | 0 | 0 | 0 |
 | rust | `implements` | 4 | 4 | 0 | 0 | 0 | 0 |

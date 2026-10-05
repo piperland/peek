@@ -157,8 +157,8 @@
         },
         "resolution_correctness": {
           "numerator": 36,
-          "denominator": 48,
-          "percent": "75.00"
+          "denominator": 41,
+          "percent": "87.80"
         },
         "imports": {
           "numerator": 10,
@@ -318,10 +318,10 @@
           "resolved": 1
         },
         "references": {
-          "ambiguous": 21,
-          "inferred": 17,
-          "resolved": 77,
-          "unresolved": 77
+          "ambiguous": 19,
+          "inferred": 14,
+          "resolved": 66,
+          "unresolved": 93
         }
       },
       "index_report": {
@@ -338,16 +338,16 @@
         "tests_found": 0
       },
       "placement": {
-        "decided": 48,
+        "decided": 41,
         "correct": 36,
-        "wrong_sites": 6,
-        "wrong_edges": 12,
+        "wrong_sites": 4,
+        "wrong_edges": 5,
         "invariant": {
-          "decided_minus_correct": 12,
+          "decided_minus_correct": 5,
           "equals_wrong_edges": true,
           "sites_at_most_edges": true
         },
-        "undecided": 48,
+        "undecided": 50,
         "unlabelled_relations": 3,
         "reach": [
           {
