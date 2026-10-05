@@ -969,6 +969,7 @@ fn the_two_scope_clauses_are_not_one_rule() {
         let (corpus, _scratch, graph) = measured(language, &directory);
         let own = scope::covers(&corpus, &graph, scope::Clause::OwnScope);
         let foreign = scope::covers(&corpus, &graph, scope::Clause::ForeignBinding);
+        let only_foreign: Vec<&String> = foreign.difference(&own).collect();
 
         assert!(
             !own.is_empty(),
@@ -977,15 +978,19 @@ fn the_two_scope_clauses_are_not_one_rule() {
             language.as_str()
         );
         assert!(
-            !foreign.difference(&own).is_empty(),
+            !only_foreign.is_empty(),
             "{}: every label the second clause covers is also covered by the first, so \"the source's \
              own scope wins\" would be the whole rule and the second is redundant. The labels it is \
              the only clause about are:\n  {}",
             language.as_str(),
-            if foreign.difference(&own).is_empty() {
+            if only_foreign.is_empty() {
                 "none".to_owned()
             } else {
-                foreign.difference(&own).copied().collect::<Vec<_>>().join("\n  ")
+                only_foreign
+                    .iter()
+                    .map(|key| key.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n  ")
             }
         );
     }

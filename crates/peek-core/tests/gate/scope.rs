@@ -317,7 +317,10 @@ pub fn report(corpus: &Corpus, graph: &Graph) {
             "    labelled:   {}",
             Price::of(&labelled, clause, graph).render()
         );
-        println!("    every row:  {}", Price::of(&all, clause, graph).render());
+        println!(
+            "    every row:  {}",
+            Price::of(&all.iter().collect::<Vec<_>>(), clause, graph).render()
+        );
         for item in labelled
             .iter()
             .filter(|item| clause.refuses(graph, &item.bind, item.row))

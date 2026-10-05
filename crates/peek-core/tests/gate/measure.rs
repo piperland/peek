@@ -1462,12 +1462,16 @@ pub fn measure_reach(corpus: &Corpus, graph: &Graph) -> Vec<Reach> {
                     .target
                     .as_ref()
                     .is_some_and(|target| scope_declarations.contains(&target.render())),
-                placed_in_source_scope: placed_key
-                    .as_ref()
-                    .is_some_and(|rendered| scope_declarations.contains(rendered)),
-                placed_in_source_file: placed
-                    .as_ref()
-                    .is_some_and(|row| row.path == bind.path),
+                placed_in_source_scope: Some(
+                    placed_key
+                        .as_ref()
+                        .is_some_and(|rendered| scope_declarations.contains(rendered)),
+                ),
+                placed_in_source_file: Some(
+                    placed
+                        .as_ref()
+                        .is_some_and(|row| row.path == bind.path),
+                ),
                 placed_is_foreign_binding: placed.as_ref().map(|row| {
                     row.is_binding() && !scope.contains(&row.key().render())
                 }),
