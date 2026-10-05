@@ -43,6 +43,7 @@ mod expect;
 mod incremental;
 mod matrix;
 mod measure;
+mod scope;
 mod score;
 
 use std::collections::BTreeMap;
@@ -250,6 +251,15 @@ fn print_measurement(measurement: &Measurement, incremental: &incremental::Incre
             } else {
                 reach.carriers.join(", ")
             }
+        );
+        println!(
+            "    the use's own scope declares: {} (the label names one of them: {})",
+            if reach.scope_declarations.is_empty() {
+                "nothing".to_owned()
+            } else {
+                reach.scope_declarations.join(", ")
+            },
+            reach.label_in_source_scope
         );
     }
     for gap in measurement.placement.absent.iter().take(6) {
@@ -906,6 +916,130 @@ fn the_class_reaches_every_relation_the_fixture_says_binds_nothing() {
             language.as_str(),
             outstanding.len(),
             outstanding.join("\n  ")
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Which placement rule the surviving wrong edges support
+// ---------------------------------------------------------------------------
+//
+// Three tests, in the order a reader should want them: the price is printed, the two
+// clauses are shown to be two, and the pair is shown to be admissible and complete.
+// The first is a precondition — a measurement that matches nothing prints zeroes and
+// a zero read as "this rule is free" is exactly the absence this file exists to
+// catch.
+
+#[test]
+fn the_placement_clauses_are_priced_over_the_whole_relation_population() {
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        scope::report(&corpus, &graph);
+
+        let rows: Vec<&measure::RelationRow> = graph
+            .relations
+            .iter()
+            .filter(|row| !matches!(row.kind, "contains" | "defines" | "owns"))
+            .collect();
+        assert!(
+            !rows.is_empty(),
+            "{}: the index holds no relation a placement clause could price, so every count below \
+             is over an empty population",
+            language.as_str()
+        );
+    }
+}
+
+#[test]
+fn the_two_scope_clauses_are_not_one_rule() {
+    // The discriminating question, asked over the whole labelled population rather than over the
+    // four rows that motivated it.
+    //
+    // **The claim is about coverage, not about damage, so it survives the fix.** "The source's own
+    // scope wins" is the whole of the naive rule. If it were also the whole of the answer, every
+    // label whose name competes with a binding of an unrelated declaration would also have that
+    // name declared in the use's own scope, and the two clause populations would be the same set.
+    // They are not: a field read has no declaration of its own at the use site, so the first clause
+    // has nothing to say about it and the second clause is the only thing that does.
+    //
+    // Asserted as a difference rather than as a count of four, so the test says what it means: if a
+    // future fixture made the two populations equal, this would fail with a message naming the rule
+    // it would then have to be, rather than silently agreeing with it.
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let own = scope::covers(&corpus, &graph, scope::Clause::OwnScope);
+        let foreign = scope::covers(&corpus, &graph, scope::Clause::ForeignBinding);
+
+        assert!(
+            !own.is_empty(),
+            "{}: no labelled relation has the name declared in the use's own scope, so the first \
+             clause matched nothing and its damage count of zero says nothing",
+            language.as_str()
+        );
+        assert!(
+            !foreign.difference(&own).is_empty(),
+            "{}: every label the second clause covers is also covered by the first, so \"the source's \
+             own scope wins\" would be the whole rule and the second is redundant. The labels it is \
+             the only clause about are:\n  {}",
+            language.as_str(),
+            if foreign.difference(&own).is_empty() {
+                "none".to_owned()
+            } else {
+                foreign.difference(&own).copied().collect::<Vec<_>>().join("\n  ")
+            }
+        );
+    }
+}
+
+#[test]
+fn no_scope_clause_damages_a_placement_the_fixture_gives_a_referent_for() {
+    // The admissibility criterion, and it is arithmetic rather than taste: a clause is admissible
+    // only when the edges it would un-place are edges the fixture says are right.
+    //
+    // **This is the check that would catch the trap in the question.** A rule that preferred the
+    // source's own scope blindly would replace `model.rs entry`'s answer to `label` and `count` —
+    // the field shorthand reads the *parameter* — with the field of the same name, and
+    // `format_line`'s answer to `count` with `Entry.count`. Those are decided-and-right today, and
+    // the clause is written so that they are not: a scope declaration wins only over a candidate
+    // outside it, and a binding outside the scope is not a candidate at all rather than a weaker
+    // one.
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let items: Vec<scope::Item<'_>> = scope::items(&corpus, &graph);
+        let labelled: Vec<&scope::Item<'_>> =
+            items.iter().filter(|item| item.claimed).collect();
+        for clause in scope::Clause::BOTH {
+            let damage = scope::Price::of(&labelled, clause, &graph).damage;
+            assert_eq!(
+                damage,
+                0,
+                "{}: `{}` refuses {damage} placements the fixture says are right. The clause is only \
+                 admissible while that is zero",
+                language.as_str(),
+                clause.as_str()
+            );
+        }
+    }
+}
+
+#[test]
+fn every_decided_and_wrong_row_is_refused_by_a_scope_clause() {
+    // The completion signal, and the half that keeps the other two from being vacuously true.
+    //
+    // **Zero is the claim, and it is the claim that outlives the fix.** While the four edges were
+    // still wrong this named them; once the clauses are adopted it is empty, and a wrong edge that
+    // neither clause can see brings it back. A measure that read only the wrong edges would go quiet
+    // at exactly that point.
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let unexplained = scope::unexplained(&corpus, &graph);
+        assert!(
+            unexplained.is_empty(),
+            "{}: {} decided-and-wrong rows are placed by a rung and explained by neither scope \
+             clause, so whatever caused them is not one of the two rules this measurement prices:\n  {}",
+            language.as_str(),
+            unexplained.len(),
+            unexplained.join("\n  ")
         );
     }
 }

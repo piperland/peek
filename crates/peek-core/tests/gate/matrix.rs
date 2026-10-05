@@ -222,7 +222,20 @@ impl Row {
 }
 
 /// Build the JSON document.
-pub fn to_json(rows: &[Row]) -> String {
+pub /// A three-valued answer, rendered so the third value survives into the file.
+///
+/// **`null` is not `false`.** "The placement is outside the scope" and "there is no placement to be
+/// outside it" are different facts, and an undecided edge has no placement at all. Collapsing them
+/// would publish `false` for every row the engine declined, which is a claim about the engine and a
+/// wrong one.
+fn three_state(value: Option<bool>) -> Json {
+    match value {
+        None => Json::Null,
+        Some(value) => Json::Bool(value),
+    }
+}
+
+fn to_json(rows: &[Row]) -> String {
     let languages = rows
         .iter()
         .map(|row| {
@@ -432,6 +445,38 @@ pub fn to_json(rows: &[Row]) -> String {
                                                 (
                                                     "declared_in_the_source_scope",
                                                     Json::Bool(reach.shadowed_in_source),
+                                                ),
+                                                // The three columns that say *where* the
+                                                // scope is, because a yes or a no cannot
+                                                // distinguish "the rung reached another
+                                                // file" from "the rung reached a sibling
+                                                // declaration in this one", and those two
+                                                // need different rules.
+                                                (
+                                                    "label_in_source_scope",
+                                                    Json::Bool(reach.label_in_source_scope),
+                                                ),
+                                                (
+                                                    "placed_in_source_scope",
+                                                    three_state(reach.placed_in_source_scope),
+                                                ),
+                                                (
+                                                    "placed_in_source_file",
+                                                    three_state(reach.placed_in_source_file),
+                                                ),
+                                                (
+                                                    "placed_is_a_foreign_binding",
+                                                    three_state(reach.placed_is_foreign_binding),
+                                                ),
+                                                (
+                                                    "the_source_scope_declares",
+                                                    Json::Arr(
+                                                        reach
+                                                            .scope_declarations
+                                                            .iter()
+                                                            .map(|key| Json::str(key.clone()))
+                                                            .collect(),
+                                                    ),
                                                 ),
                                                 (
                                                     "correct_entity_is_a_candidate",

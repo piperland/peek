@@ -447,6 +447,169 @@ impl Graph {
     pub fn holds(&self, key: &Key) -> bool {
         self.by_key.contains_key(&key.render())
     }
+
+    /// The entity one rendered identity names, if this graph holds it.
+    pub fn row_at(&self, rendered: &str) -> Option<&EntityRow> {
+        self.by_key.get(rendered).and_then(|found| found.first())
+            .map(|index| &self.rows[*index])
+    }
+
+    /// Every entity that directly encloses `key` through a structural edge.
+    ///
+    /// **Containment, and never the qualified name.** `A.b.c` is declared inside
+    /// `A.b`, so a qualified name says what a declaration is called while
+    /// containment says what is inside it — and the two are not the same question.
+    /// A file's own layout module is contained by the `File` row and an `impl`
+    /// block by its parent scope, so only the edge tells the two apart.
+    pub fn containers_of(&self, key: &Key) -> Vec<Key> {
+        self.relations
+            .iter()
+            .filter(|relation| matches!(relation.kind, "contains" | "defines" | "owns"))
+            .filter(|relation| {
+                relation.target.as_ref().is_some_and(|target| {
+                    target.path == key.path
+                        && target.kind == key.kind
+                        && target.qualified_name == key.qualified_name
+                })
+            })
+            .map(|relation| {
+                Key::new(
+                    &relation.source.path,
+                    &relation.source.kind,
+                    &relation.source.qualified_name,
+                )
+            })
+            .collect()
+    }
+
+    /// `key` and every declaration that lexically encloses it, as rendered keys.
+    ///
+    /// The lexical scope of an occurrence, read off the graph rather than guessed
+    /// from a name. Bounded by the `seen` set rather than by a depth counter: the
+    /// relation is a tree, and a set is what makes the walk total even if a future
+    /// extractor emits a cycle.
+    pub fn enclosing_scope(&self, key: &Key) -> BTreeSet<String> {
+        let mut scope = BTreeSet::new();
+        let mut frontier = vec![key.render()];
+        while let Some(current) = frontier.pop() {
+            if !scope.insert(current.clone()) {
+                continue;
+            }
+            let parsed = parse_key(&current);
+            frontier.extend(self.containers_of(&parsed).map(|key| key.render()));
+        }
+        scope
+    }
+
+    /// Every declaration the scope encloses that declares `name`.
+    ///
+    /// **Direct children only, and that is the whole of what a scope means.** A
+    /// parameter of a sibling function is not in scope inside another function,
+    /// which is exactly the distinction `format_line.count` and `render | count`
+    /// turn on. Layout rows are excluded because a file's own module row is the
+    /// harness's shape rather than a declaration: counting it would make the
+    /// module's own name look declared everywhere in the file.
+    pub fn declared_inside(&self, scope: &BTreeSet<String>, name: &str) -> Vec<Key> {
+        let mut found: Vec<Key> = Vec::new();
+        for owner in scope {
+            let owner = parse_key(owner);
+            for contained in self.contained_by(&owner) {
+                let Some(row) = self.row_at(&contained.render()) else {
+                    continue;
+                };
+                if row.declares(name) && !found.contains(&contained) {
+                    found.push(contained);
+                }
+            }
+        }
+        found
+    }
+
+    /// Every entity directly enclosed by `owner` through a structural edge.
+    pub fn contained_by(&self, owner: &Key) -> Vec<Key> {
+        self.relations
+            .iter()
+            .filter(|relation| matches!(relation.kind, "contains" | "defines" | "owns"))
+            .filter(|relation| {
+                relation.source.path == owner.path
+                    && relation.source.kind == owner.kind
+                    && relation.source.qualified_name == owner.qualified_name
+            })
+            .filter_map(|relation| relation.target.as_ref())
+            .map(|target| Key::new(&target.path, &target.kind, &target.qualified_name))
+            .collect()
+    }
+
+    /// Every relation row one placement label claims.
+    ///
+    /// Class, path, source kind, subject and name — the same five fields a `call`
+    /// line names, so a placement claim reads straight across from the `reference`
+    /// or `call` line describing the same site. One label can match several rows
+    /// when a source uses a name twice, and [`Self::placement_of`] says what this
+    /// one does with that.
+    pub fn rows_for(&self, bind: &Bind) -> Vec<&RelationRow> {
+        self.relations
+            .iter()
+            .filter(|relation| {
+                relation.kind == bind.class
+                    && relation.source.path == bind.path
+                    && relation.source.kind == bind.kind
+                    && relation.source.qualified_name == bind.subject
+                    && relation.target_name == bind.name
+            })
+            .collect()
+    }
+
+    /// The entity a placement label's decided rows point at.
+    ///
+    /// **One entity, and the rows are sorted so "the first" is not an accident.**
+    /// A label whose rows disagree is counted as several wrong edges by
+    /// `score_placement`, and this answers the narrower question the verdict needs:
+    /// where the engine put the relation at all. `None` when every matching row is
+    /// undecided, which is a different fact from a placement on nothing.
+    pub fn placement_of(&self, bind: &Bind) -> Option<&EntityRow> {
+        self.rows_for(bind)
+            .into_iter()
+            .filter(|relation| relation.is_decided())
+            .filter_map(|relation| relation.target.as_ref())
+            .min_by(|left, right| left.render().cmp(&right.render()))
+    }
+}
+
+/// Split a rendered identity back into the key it renders.
+///
+/// The round trip is the point: [`Graph::enclosing_scope`] hands rendered strings
+/// to callers and callers hand them back, and a second spelling of the same
+/// identity that does not survive it would make the join a comparison of
+/// punctuation rather than of declarations.
+fn parse_key(rendered: &str) -> Key {
+    let mut parts = rendered.split(" | ");
+    Key::new(
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    )
+}
+
+impl EntityRow {
+    /// Whether this entity's own name is `name`, and it is a declaration rather
+    /// than the harness's own layout.
+    fn declares(&self, name: &str) -> bool {
+        self.qualified_name.rsplit('.').next() == Some(name)
+            && !is_a_structure_kind(&self.kind)
+    }
+
+    /// Whether the name is a binding, which exists only inside what binds it.
+    ///
+    /// **The three kinds that are lexical rather than repository-wide.** A
+    /// parameter, a local and a type parameter are all introduced by a declaration
+    /// and mean nothing outside it, so an occurrence somewhere else cannot mean
+    /// them. Everything else — a field, a method, a constant, a free function — is
+    /// written in a scope wide enough that the same-file and repository-wide
+    /// rungs can still offer it, and the measurement does not claim otherwise.
+    pub fn is_binding(&self) -> bool {
+        matches!(self.kind.as_str(), "parameter" | "variable" | "type_parameter")
+    }
 }
 
 /// Entity kinds the graph uses for repository structure rather than for a
@@ -1164,6 +1327,35 @@ pub struct Reach {
     /// the difference is the whole finding — `describe`'s parameter is in the same
     /// file as the import that beat it, so a same-file rung had it in hand.
     pub shadowed_in_source: bool,
+    /// The declarations the relation's own lexical scope makes under this name.
+    ///
+    /// **The whole scope, not a yes or a no.** `shadowed_in_source` answers whether
+    /// the scope says anything at all, which is the question a rung that placed the
+    /// edge elsewhere needs. This answers *what it says*, which is the question a
+    /// rung that placed the edge correctly needs: a rule that preferred the scope
+    /// blindly would replace a right answer with a wrong one wherever the scope
+    /// declares a name the occurrence does not mean.
+    pub scope_declarations: Vec<String>,
+    /// Whether the entity the label names is one of `scope_declarations`.
+    pub label_in_source_scope: bool,
+    /// Whether the entity the engine placed the edge on is one of them.
+    ///
+    /// `None` when the edge is undecided, because "outside the scope" is a claim
+    /// about a placement and an undecided edge has none.
+    pub placed_in_source_scope: Option<bool>,
+    /// Whether the entity the engine placed the edge on is in the relation's **file**.
+    ///
+    /// **The fact that separates the two surviving defects.** For an edge placed
+    /// wrongly over the scope this is `false` — the import rung reached another
+    /// file — and "the source's own scope wins" is the right reading. For an edge
+    /// placed wrongly on a sibling declaration this is `true`: the target *is* in
+    /// the source's own file, so the same rule reads the situation backwards and
+    /// would pick the very declaration that is wrong. One rule cannot serve both,
+    /// and this column is where the measurement shows it.
+    pub placed_in_source_file: Option<bool>,
+    /// Whether the entity the engine placed the edge on is a binding of a
+    /// declaration the occurrence is not written inside.
+    pub placed_is_foreign_binding: Option<bool>,
 }
 
 impl Reach {
@@ -1200,6 +1392,20 @@ impl Reach {
             ),
             // The source's own scope declares the name, so a weaker rung answered
             // over the declaration that was in front of it.
+            Some(_) if self.shadowed_in_source && self.placed_in_source_scope == Some(false) => {
+                "resolver: the source's own scope declares the name, and a rung placed the edge \
+                 outside it"
+                    .to_owned()
+            }
+            // The placement is a parameter of a function the use is not written
+            // inside, and "same file" was read as "same scope".
+            Some(_) if self.placed_is_foreign_binding == Some(true) => {
+                "resolver: the edge is on a binding of another declaration in the same file, which \
+                 the use cannot see"
+                    .to_owned()
+            }
+            // The source's own scope declares the name, so a weaker rung answered
+            // over the declaration that was in front of it.
             Some(_) if self.shadowed_in_source => {
                 "resolver: the source's own scope declares the name, and a weaker rung answered"
                     .to_owned()
@@ -1232,6 +1438,15 @@ pub fn measure_reach(corpus: &Corpus, graph: &Graph) -> Vec<Reach> {
                     .iter()
                     .any(|row| row.key() == *target)
             });
+            let source = Key::new(&bind.path, &bind.kind, &bind.subject);
+            let scope = graph.enclosing_scope(&source);
+            let scope_declarations: Vec<String> = graph
+                .declared_inside(&scope, &bind.name)
+                .into_iter()
+                .map(|key| key.render())
+                .collect();
+            let placed = graph.placement_of(bind);
+            let placed_key = placed.as_ref().map(|row| row.key().render());
             Reach {
                 key: bind.key(),
                 carriers,
@@ -1242,37 +1457,24 @@ pub fn measure_reach(corpus: &Corpus, graph: &Graph) -> Vec<Reach> {
                     .as_ref()
                     .is_some_and(|target| graph.holds(target)),
                 correct_in_carriers,
-                shadowed_in_source: declares_in_scope(graph, bind),
+                shadowed_in_source: !scope_declarations.is_empty(),
+                label_in_source_scope: bind
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| scope_declarations.contains(&target.render())),
+                placed_in_source_scope: placed_key
+                    .as_ref()
+                    .is_some_and(|rendered| scope_declarations.contains(rendered)),
+                placed_in_source_file: placed
+                    .as_ref()
+                    .is_some_and(|row| row.path == bind.path),
+                placed_is_foreign_binding: placed.as_ref().map(|row| {
+                    row.is_binding() && !scope.contains(&row.key().render())
+                }),
+                scope_declarations,
             }
         })
         .collect()
-}
-
-/// Whether the symbol a relation is written in declares that name itself.
-///
-/// Through the `contains` chain, because containment is the only thing in the
-/// graph that distinguishes `describe.entry` from `model.rs entry`: both are a
-/// `parameter`/`function` pair with the same bare name, and only one of them is
-/// inside the symbol whose body the relation is written in.
-fn declares_in_scope(graph: &Graph, bind: &Bind) -> bool {
-    let source = Key::new(&bind.path, &bind.kind, &bind.subject);
-    graph
-        .relations
-        .iter()
-        .filter(|relation| {
-            matches!(relation.kind, "contains" | "defines")
-                && relation.source.key() == source
-                && relation
-                    .target
-                    .as_ref()
-                    .is_some_and(|target| declared_name(&target.qualified_name) == bind.name)
-        })
-        .any(|relation| {
-            relation
-                .target
-                .as_ref()
-                .is_some_and(|target| target.kind != "file" && target.kind != "module")
-        })
 }
 
 /// The bare name a qualified name ends in, which is what an occurrence of it in
