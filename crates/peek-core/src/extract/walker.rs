@@ -574,7 +574,9 @@ impl<'a> Walker<'a> {
     /// Create an entity for a declaration node, if the spec declares one.
     fn declare(&mut self, node: Node<'_>) -> Option<EntityId> {
         let rule = self.spec.symbol_rule(node.kind())?;
-        let name = self.declaration_name(node, rule)?;
+        let name = self
+            .impl_block_name(node)
+            .or_else(|| self.declaration_name(node, rule))?;
         if name.is_empty() {
             return None;
         }
@@ -662,6 +664,23 @@ impl<'a> Walker<'a> {
             Evidence::Containment,
         ));
         Some(id)
+    }
+
+    /// The name of an `impl` block: the type it implements, read through generic wrappers, so
+    /// `impl<U: Copy> Pair<U>` declares `Pair` and not `Pair<U>`.
+    ///
+    /// The `type` field the symbol rule reads holds the whole type expression, generic
+    /// arguments included, while every consumer of the name — the scope its methods qualify
+    /// under, member lookup by owner — names the type. `None` for any other node, and for an
+    /// impl whose type cannot be reduced, so the caller falls back to the raw text.
+    fn impl_block_name(&self, node: Node<'_>) -> Option<String> {
+        let Some(InheritanceStyle::TraitBounds { impl_node, .. }) = self.spec.inheritance else {
+            return None;
+        };
+        if node.kind() != impl_node {
+            return None;
+        }
+        self.impl_type_name(node)
     }
 
     /// A signature, when the node has a parameters list and an optional return type.
@@ -1983,6 +2002,30 @@ mod tests {
                 entity.id.qualified_name()
             );
         }
+    }
+
+    #[test]
+    fn a_generic_impl_is_named_for_its_type() {
+        // The `type` field holds the whole type expression, generic arguments included, while
+        // every consumer of the name — the scope its methods qualify under, member lookup by
+        // owner — names the type.
+        let file = rust(
+            "pub struct W<T>(T);\nimpl<U: Copy> W<U> {\n    pub fn get(&self) -> u8 {\n        0\n    }\n}\n",
+        );
+        assert!(
+            file.entities.iter().any(|entity| {
+                entity.kind() == EntityKind::Module && entity.id.qualified_name() == "W"
+            }),
+            "the impl block is named for its type: {:?}",
+            qualified_names(&file)
+        );
+        assert!(
+            file.entities.iter().any(|entity| {
+                entity.kind() == EntityKind::Method && entity.id.qualified_name() == "W.get"
+            }),
+            "the method qualifies under the type: {:?}",
+            qualified_names(&file)
+        );
     }
 
     #[test]
