@@ -166,6 +166,10 @@ struct ScopeEntry {
     /// Whether the enclosing declaration is a type, which is what promotes a function declared
     /// inside it to a method.
     is_type: bool,
+    /// Whether the enclosing declaration is a module the module system can name (`mod`, not
+    /// `impl`): only such a scope defines what it holds, while any other scope only contains
+    /// it. This is what the `Defines` edge reads rather than the whole stack.
+    declares_module: bool,
 }
 
 /// The walker.
@@ -551,6 +555,7 @@ impl<'a> Walker<'a> {
                 name: id.name().to_owned(),
                 id,
                 is_type,
+                declares_module: self.spec.is_module_node(node.kind()),
             });
         }
 
@@ -631,11 +636,31 @@ impl<'a> Walker<'a> {
                 RelationKind::Contains,
                 parent,
                 id.clone(),
-                name,
+                name.clone(),
                 span,
                 Evidence::Containment,
             ));
         }
+        // `Defines` is the declaration question and `Contains` the position one: the definer
+        // is the innermost enclosing file or module, so a method in an impl block is defined
+        // by the file even though the block contains it, and a top-level `mod` is defined by
+        // the file even though it hangs off the layout module. Exactly one per declaration,
+        // by construction: this runs once per entity `declare` creates.
+        let definer = self
+            .scope
+            .iter()
+            .rev()
+            .find(|entry| entry.declares_module)
+            .map(|entry| entry.id.clone())
+            .unwrap_or_else(|| self.file_id.clone());
+        self.relations.push(Relation::resolved(
+            RelationKind::Defines,
+            definer,
+            id.clone(),
+            name,
+            span,
+            Evidence::Containment,
+        ));
         Some(id)
     }
 
@@ -1823,6 +1848,144 @@ mod tests {
     }
 
     #[test]
+    fn a_top_level_declaration_is_defined_by_its_file() {
+        // The discriminating half of the split: a file scope emits no `Contains` for what it
+        // holds, so a top-level declaration is found in the entity table and nowhere else until
+        // the extractor writes the `Defines` the contract requires.
+        let file = rust("pub const TOP: u8 = 1;\npub fn f() {}\n");
+        let top = file
+            .entities
+            .iter()
+            .find(|entity| entity.id.qualified_name() == "TOP")
+            .expect("the constant was extracted");
+        assert!(
+            file.relations.iter().all(|relation| {
+                relation.kind != RelationKind::Contains || relation.target.as_ref() != Some(&top.id)
+            }),
+            "no scope emits containment for a file-level declaration"
+        );
+        let edge = file
+            .relations
+            .iter()
+            .find(|relation| {
+                relation.kind == RelationKind::Defines && relation.target.as_ref() == Some(&top.id)
+            })
+            .expect("the file defines its top-level declaration");
+        assert_eq!(edge.source.kind(), EntityKind::File);
+    }
+
+    #[test]
+    fn a_nested_declaration_is_defined_by_its_module() {
+        // The other half: a module scope emits, so a nested declaration already carries a
+        // `Contains` from its definer, and the `Defines` lands on the same scope.
+        let file = rust("pub mod m {\n    pub fn nested() {}\n}\n");
+        let nested = file
+            .entities
+            .iter()
+            .find(|entity| entity.id.qualified_name() == "m.nested")
+            .expect("the nested function was extracted");
+        let contained = file
+            .relations
+            .iter()
+            .find(|relation| {
+                relation.kind == RelationKind::Contains
+                    && relation.target.as_ref() == Some(&nested.id)
+            })
+            .expect("the module contains its nested declaration");
+        assert_eq!(contained.source.qualified_name(), "m");
+        let defined = file
+            .relations
+            .iter()
+            .find(|relation| {
+                relation.kind == RelationKind::Defines
+                    && relation.target.as_ref() == Some(&nested.id)
+            })
+            .expect("the module defines its nested declaration");
+        assert_eq!(defined.source.qualified_name(), "m");
+        // The module itself is defined by the file, not by the layout module containing it.
+        let module = file
+            .entities
+            .iter()
+            .find(|entity| entity.kind() == EntityKind::Module && entity.id.qualified_name() == "m")
+            .expect("the module was extracted");
+        let module_defined = file
+            .relations
+            .iter()
+            .find(|relation| {
+                relation.kind == RelationKind::Defines
+                    && relation.target.as_ref() == Some(&module.id)
+            })
+            .expect("the file defines the module it declares");
+        assert_eq!(module_defined.source.kind(), EntityKind::File);
+    }
+
+    #[test]
+    fn an_impl_block_contains_but_does_not_define_its_methods() {
+        // The pair the contract keeps apart: an impl block is a scope, not a namespace, so the
+        // method keeps its `Contains` from the block and takes its `Defines` from the file.
+        let file = rust("struct S; impl S { fn m(&self) {} }");
+        let method = file
+            .entities
+            .iter()
+            .find(|entity| entity.id.qualified_name() == "S.m")
+            .expect("the method was extracted");
+        let contained = file
+            .relations
+            .iter()
+            .find(|relation| {
+                relation.kind == RelationKind::Contains
+                    && relation.target.as_ref() == Some(&method.id)
+            })
+            .expect("the method is contained in the impl block");
+        assert_eq!(contained.source.qualified_name(), "S");
+        assert!(
+            file.relations.iter().all(|relation| {
+                relation.kind != RelationKind::Defines
+                    || relation.source.qualified_name() != "S"
+                    || relation.target.as_ref() != Some(&method.id)
+            }),
+            "the impl block does not define its method"
+        );
+        let defined = file
+            .relations
+            .iter()
+            .find(|relation| {
+                relation.kind == RelationKind::Defines
+                    && relation.target.as_ref() == Some(&method.id)
+            })
+            .expect("the file defines the method");
+        assert_eq!(defined.source.kind(), EntityKind::File);
+    }
+
+    #[test]
+    fn every_declaration_carries_exactly_one_defines() {
+        // The completeness rule at the unit level: one `Defines` per declaration, whoever
+        // contains it. Layout modules and the file itself are structure, not declarations.
+        let file = rust(
+            "pub const TOP: u8 = 1;\npub struct S {\n    pub f: u8,\n}\nimpl S {\n    fn m(&self) {}\n}\npub mod m {\n    pub fn nested() {}\n}\n",
+        );
+        for entity in &file.entities {
+            if entity.kind() == EntityKind::File || file.module_ids.contains(&entity.id) {
+                continue;
+            }
+            let count = file
+                .relations
+                .iter()
+                .filter(|relation| {
+                    relation.kind == RelationKind::Defines
+                        && relation.target.as_ref() == Some(&entity.id)
+                })
+                .count();
+            assert_eq!(
+                count,
+                1,
+                "{} carries {count} `Defines` edges",
+                entity.id.qualified_name()
+            );
+        }
+    }
+
+    #[test]
     fn summary_helpers_count_by_kind() {
         let file = rust("struct S; fn f() { g(); } fn g() {}");
         let entities = file.entity_counts();
@@ -2085,14 +2248,24 @@ mod tests {
             vec![
                 "imports app.rs -> HashMap".to_owned(),
                 "imports app.rs -> Svc".to_owned(),
+                // Each declaration below carries its `Defines` beside its `Contains`: the
+                // declaration question the extractor now answers alongside the position one.
+                // No symbol, method or call was added — the declarations list above is
+                // unchanged — and a top-level declaration carries a `Defines` with no
+                // `Contains` at all.
+                "defines app.rs -> module payments".to_owned(),
                 "contains payments -> struct payments.Service".to_owned(),
+                "defines payments -> struct payments.Service".to_owned(),
                 "contains payments -> module payments.Service".to_owned(),
+                "defines payments -> module payments.Service".to_owned(),
                 "contains payments.Service -> method payments.Service.new".to_owned(),
+                "defines payments -> method payments.Service.new".to_owned(),
                 // `fn new() -> Service { Service }` names `Service` twice, once in the signature
                 // and once in the body, and both are uses: the enclosing `impl`'s own name is the
                 // one `Service` that is not.
                 "references payments.Service.new -> Service".to_owned(),
                 "references payments.Service.new -> Service".to_owned(),
+                "defines app.rs -> function main".to_owned(),
                 // The call comes before the references inside it, because a node is emitted before
                 // its children are walked.
                 "calls main -> new".to_owned(),
