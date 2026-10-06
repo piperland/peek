@@ -39,6 +39,7 @@
 //! nobody recomputes is a number that drifts; this way it cannot.
 
 mod binding;
+mod defines;
 mod expect;
 mod incremental;
 mod matrix;
@@ -916,6 +917,55 @@ fn the_class_reaches_every_relation_the_fixture_says_binds_nothing() {
             language.as_str(),
             outstanding.len(),
             outstanding.join("\n  ")
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Every labelled declaration has exactly one definer
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_labelled_identity_has_exactly_one_definer() {
+    // D-0037's completeness rule as a standing guard: every entity carries exactly one
+    // `Defines`, the place where its declaration is written. Counted over stored edges as one
+    // definer per labelled identity — two `impl` blocks for one type are two entities with two
+    // edges from the same file, which is one claim, not two — so a derivation that only exists
+    // at query time cannot satisfy it. That is what makes this the test that forces the
+    // extractor to emit the edge rather than leaving the file derivation in
+    // `traverse::membership` to cover it.
+    for (language, directory) in discovered() {
+        let (corpus, _scratch, graph) = measured(language, &directory);
+        let found = defines::definers(&graph);
+        let mut missing: Vec<String> = Vec::new();
+        let mut multiple: Vec<String> = Vec::new();
+        for key in corpus.distinct_symbols() {
+            match found.get(&key.render()) {
+                Some(definers) if definers.len() == 1 => {}
+                Some(definers) => multiple.push(format!(
+                    "{} is claimed by {}: {}",
+                    key.render(),
+                    definers.len(),
+                    definers.iter().cloned().collect::<Vec<_>>().join(", ")
+                )),
+                None => missing.push(key.render()),
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "{}: {} labelled declarations have no incoming `Defines` edge, so no stored edge \
+             says who declares them:\n  {}",
+            language.as_str(),
+            missing.len(),
+            missing.join("\n  ")
+        );
+        assert!(
+            multiple.is_empty(),
+            "{}: {} labelled declarations are claimed by several definers, so two scopes claim \
+             one declaration:\n  {}",
+            language.as_str(),
+            multiple.len(),
+            multiple.join("\n  ")
         );
     }
 }

@@ -264,7 +264,11 @@ pub struct Graph {
     pub relations: Vec<RelationRow>,
     /// Entity indices keyed by `path | kind | qualified_name`.
     by_key: BTreeMap<String, Vec<usize>>,
-    /// Keys with at least one incoming structural edge.
+    /// Keys with at least one incoming `Defines` edge.
+    ///
+    /// D-0037's population: `Defines(X, Y)` holds when Y's declaration is written where X is.
+    /// A `Contains` edge says where a declaration sits, not who declared it, so it does not
+    /// count — an impl block contains its methods without defining them.
     defined: BTreeSet<String>,
     /// Row indices that describe repository structure rather than a declaration.
     ///
@@ -305,7 +309,7 @@ impl Graph {
                 .expect("relations in state")
             {
                 let row = flatten(relation);
-                if matches!(row.kind, "contains" | "defines" | "owns")
+                if row.kind == "defines"
                     && let Some(target) = &row.target
                 {
                     graph.defined.insert(target.key().render());
@@ -382,7 +386,7 @@ impl Graph {
             .map(|index| &self.ids[*index])
     }
 
-    /// Whether an incoming structural edge points at this identity.
+    /// Whether an incoming `Defines` edge points at this identity.
     pub fn is_defined(&self, key: &Key) -> bool {
         self.defined.contains(&key.render())
     }

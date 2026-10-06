@@ -37,7 +37,7 @@ pub const MEANINGS: &[(&str, &str, &str)] = &[
     ),
     (
         "definitions",
-        "of the labelled declarations, how many an incoming structural edge points at",
+        "of the labelled declarations, how many an incoming `Defines` edge points at",
         "distinct labelled declaration identities",
     ),
     (
