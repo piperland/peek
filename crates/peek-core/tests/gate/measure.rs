@@ -460,17 +460,22 @@ impl Graph {
             .map(|index| &self.rows[*index])
     }
 
-    /// Every entity that directly encloses `key` through a structural edge.
+    /// Every entity that directly encloses `key` through a `contains` edge.
     ///
     /// **Containment, and never the qualified name.** `A.b.c` is declared inside
     /// `A.b`, so a qualified name says what a declaration is called while
     /// containment says what is inside it — and the two are not the same question.
     /// A file's own layout module is contained by the `File` row and an `impl`
     /// block by its parent scope, so only the edge tells the two apart.
+    ///
+    /// `Defines` is deliberately not read here: it says who declares an entity, not
+    /// what is lexically inside what, and reading it as scope would put a file's every
+    /// declaration — a sibling function's parameter among them — inside every use
+    /// written in that file.
     pub fn containers_of(&self, key: &Key) -> Vec<Key> {
         self.relations
             .iter()
-            .filter(|relation| matches!(relation.kind, "contains" | "defines" | "owns"))
+            .filter(|relation| relation.kind == "contains")
             .filter(|relation| {
                 relation.target.as_ref().is_some_and(|target| {
                     target.path == key.path
@@ -535,11 +540,13 @@ impl Graph {
         found
     }
 
-    /// Every entity directly enclosed by `owner` through a structural edge.
+    /// Every entity directly enclosed by `owner` through a `contains` edge: the lexical
+    /// scope, not the declaration table. See [`Self::containers_of`] for why `Defines`
+    /// is not read here.
     pub fn contained_by(&self, owner: &Key) -> Vec<Key> {
         self.relations
             .iter()
-            .filter(|relation| matches!(relation.kind, "contains" | "defines" | "owns"))
+            .filter(|relation| relation.kind == "contains")
             .filter(|relation| {
                 relation.source.path == owner.path
                     && relation.source.kind == owner.kind
