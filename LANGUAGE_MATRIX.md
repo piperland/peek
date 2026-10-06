@@ -21,7 +21,7 @@ rendering `1.00`.
 |---|---|---|
 | `symbol_precision` | of the declaration entities the engine emitted, how many the fixture labels | emitted declaration entities, with repository-structure entities held out and counted |
 | `symbol_recall` | of the declarations the fixture labels, how many the engine emitted | labelled declarations, counted with multiplicity |
-| `definitions` | of the labelled declarations, how many an incoming structural edge points at | distinct labelled declaration identities |
+| `definitions` | of the labelled declarations, how many an incoming `Defines` edge points at | distinct labelled declaration identities |
 | `calls` | of the labelled call sites, how many produced a call relation | labelled call sites, counted with multiplicity |
 | `references` | of the labelled uses of a name, how many produced a reference relation | labelled uses of a name |
 | `resolution_correctness` | of the decided relations the fixture says where they must point, how many point at the entity it names | labelled relations the engine placed in a `resolved` or `inferred` state; a relation left undecided is a gap and is counted beside this figure, never inside it |
@@ -43,7 +43,7 @@ rendering `1.00`.
 | typescript | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | javascript | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | python | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| rust | unverified | yes | 96.67 (87/90) | 96.67 (87/90) | 60.23 (53/88) | 97.50 (39/40) | 96.15 (25/26) | 66.67 (10/15) | 91.67 (22/24) |
+| rust | unverified | yes | 100.00 (90/90) | 100.00 (90/90) | 100.00 (88/88) | 97.50 (39/40) | 96.15 (25/26) | 66.67 (10/15) | 100.00 (24/24) |
 | go | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | java | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | csharp | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
@@ -74,7 +74,7 @@ rendering `1.00`.
 | typescript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | javascript | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | python | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| rust | 100.00 (5/5) | 100.00 (5/5) | 100.00 (14/14) | 100.00 (3/3) | 100.00 (52/52) | 100.00 (2288/2288) | 100.00 (30/30) | 100.00 (7/7) |
+| rust | 100.00 (5/5) | 100.00 (5/5) | 100.00 (14/14) | 100.00 (3/3) | 100.00 (52/52) | 100.00 (2762/2762) | 100.00 (30/30) | 100.00 (7/7) |
 | go | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | java | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | csharp | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
@@ -133,6 +133,7 @@ correct outcome for a name with two candidates and an incorrect one for `mod::f(
 
 | Language | Class | Total | Resolved | Inferred | Ambiguous | Unresolved | Pending |
 |---|---|---|---|---|---|---|---|
+| rust | `defines` | 90 | 90 | 0 | 0 | 0 | 0 |
 | rust | `contains` | 61 | 61 | 0 | 0 | 0 | 0 |
 | rust | `imports` | 15 | 10 | 3 | 0 | 2 | 0 |
 | rust | `references` | 192 | 72 | 21 | 6 | 93 | 0 |

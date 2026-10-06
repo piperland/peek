@@ -31,7 +31,7 @@
       "denominator": "labelled declarations, counted with multiplicity"
     },
     "definitions": {
-      "measures": "of the labelled declarations, how many an incoming structural edge points at",
+      "measures": "of the labelled declarations, how many an incoming `Defines` edge points at",
       "denominator": "distinct labelled declaration identities"
     },
     "calls": {
@@ -131,19 +131,19 @@
       },
       "measurements": {
         "symbol_precision": {
-          "numerator": 87,
+          "numerator": 90,
           "denominator": 90,
-          "percent": "96.67"
+          "percent": "100.00"
         },
         "symbol_recall": {
-          "numerator": 87,
+          "numerator": 90,
           "denominator": 90,
-          "percent": "96.67"
+          "percent": "100.00"
         },
         "definitions": {
-          "numerator": 53,
+          "numerator": 88,
           "denominator": 88,
-          "percent": "60.23"
+          "percent": "100.00"
         },
         "calls": {
           "numerator": 39,
@@ -171,9 +171,9 @@
           "percent": "0.00"
         },
         "members": {
-          "numerator": 22,
+          "numerator": 24,
           "denominator": 24,
-          "percent": "91.67"
+          "percent": "100.00"
         },
         "inheritance_subject": {
           "numerator": 5,
@@ -196,8 +196,8 @@
           "percent": "100.00"
         },
         "incremental": {
-          "numerator": 2288,
-          "denominator": 2288,
+          "numerator": 2762,
+          "denominator": 2762,
           "percent": "100.00"
         },
         "query": {
@@ -221,8 +221,8 @@
           "percent": "100.00"
         },
         "definitions": {
-          "basis_points": 6022,
-          "percent": "60.22"
+          "basis_points": 10000,
+          "percent": "100.00"
         },
         "imports": {
           "basis_points": 6666,
@@ -245,8 +245,8 @@
           "percent": "100.00"
         },
         "members": {
-          "basis_points": 9166,
-          "percent": "91.66"
+          "basis_points": 10000,
+          "percent": "100.00"
         },
         "negative_inheritance": {
           "basis_points": 10000,
@@ -269,12 +269,12 @@
           "percent": "75.00"
         },
         "symbol_precision": {
-          "basis_points": 9666,
-          "percent": "96.66"
+          "basis_points": 10000,
+          "percent": "100.00"
         },
         "symbol_recall": {
-          "basis_points": 9666,
-          "percent": "96.66"
+          "basis_points": 10000,
+          "percent": "100.00"
         }
       },
       "entity_counts": {
@@ -306,6 +306,9 @@
         "contains": {
           "resolved": 61
         },
+        "defines": {
+          "resolved": 90
+        },
         "implements": {
           "resolved": 4
         },
@@ -333,7 +336,7 @@
         "files_removed": 0,
         "entities_written": 101,
         "entities_removed": 0,
-        "relations_written": 312,
+        "relations_written": 402,
         "relations_undecided": 0,
         "tests_found": 0
       },
