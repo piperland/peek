@@ -674,15 +674,15 @@ context_ambiguous | format_line
 # fixture produces. Raising one is a reviewable act belonging to the commit that
 # improves the number.
 # ---------------------------------------------------------------------------
-floor | symbol_precision | 96.66
-floor | symbol_recall | 96.66
-floor | definitions | 60.22
+floor | symbol_precision | 100
+floor | symbol_recall | 100
+floor | definitions | 100
 floor | calls | 97.50
 floor | references | 96.14
 floor | resolution_correctness | 75.00
 floor | imports | 66.66
 floor | imports_module_retained | 0
-floor | members | 91.66
+floor | members | 100
 floor | inheritance_subject | 100
 floor | inheritance_base | 100
 floor | negative_references | 100
