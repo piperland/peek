@@ -1,4 +1,4 @@
-[notice] 2 relations (6%) have more than one candidate
+[notice] 2 relations (4%) have more than one candidate
         4 candidates are stored across them, ordered by evidence strength. These are not guesses: the relation is reported as undecided and its candidates are retrievable. A high share means the repository has many same-named symbols, which is a fact about the code rather than about this index
         try: adding module structure to the index disambiguates by scope; until then these are honestly undecided
 [pass] the index at <index> opened
@@ -13,18 +13,18 @@
         the index lives at <index>
 [pass] commits are durable when they return
         synchronous=FULL, so a commit that returned success is on disk. A power failure cannot lose a generation that was reported as written
-[pass] generation 2 covers 30 relations
-        27 entities and 30 relations, and the generation is non-zero, so the write path produced them
+[pass] generation 2 covers 49 relations
+        27 entities and 49 relations, and the generation is non-zero, so the write path produced them
 [pass] no relation points at a target that is missing
         checked by an anti-join against the entity table, not assumed from the foreign key
 [pass] every relation has been decided
         no relation is waiting on the resolver
 [pass] no committed frames are waiting to be folded into the database
-        the log is empty, against a 69632 byte database
+        the log is empty, against a 73728 byte database
 [pass] every file in the repository was indexable
         4 files yielded, none refused
 
-worst: 2 relations (6%) have more than one candidate
+worst: 2 relations (4%) have more than one candidate
 could not:
   this compared nothing against the working tree: it reports what the store holds and what a filesystem walk can read, not which files have changed since the last commit
   this reported files the walk refused as counts per reason and named none of them; `peek index` lists every skipped path with its reason
