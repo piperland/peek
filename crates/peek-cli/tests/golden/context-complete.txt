@@ -1,5 +1,5 @@
 peek context pack
-budget: 20000 tokens requested, 532 spent, 19468 remaining
+budget: 20000 tokens requested, 595 spent, 19405 remaining
 counted as: ceil(utf8 bytes / 3)
 status: complete
 dropped: nothing
@@ -11,6 +11,7 @@ function wallet_charge — src/ledger.rs:37
 This is the one declaration in the fixture whose qualified name is unique, which is what makes
 it addressable by name.
   included because: it is what you asked for.
+  <- defines src/ledger.rs::wallet_charge  [resolved (containment)]  src/ledger.rs:37
   -> calls src/ledger.rs::ledger_commit  [resolved (same_file)]  src/ledger.rs:39
   -> contains src/ledger.rs::wallet_charge.amount  [resolved (containment)]  src/ledger.rs:37
   -> references src/ledger.rs::Receipt  [resolved (same_file)]  src/ledger.rs:37
@@ -18,6 +19,8 @@ it addressable by name.
   -> references src/ledger.rs::wallet_charge.amount  [resolved (same_file)]  src/ledger.rs:39
   -> references src/ledger.rs::Receipt.charged  [resolved (same_file)]  src/ledger.rs:39
   -> references src/ledger.rs::ledger_commit  [resolved (same_file)]  src/ledger.rs:39
+file ledger.rs — src/ledger.rs
+  included because: `src/ledger.rs::ledger.rs` contains the target.
 function ledger_commit — src/ledger.rs:44
   signature: (amount: u64) -> u64
   doc: Commit an amount to the ledger.
@@ -30,9 +33,9 @@ field Receipt.charged — src/ledger.rs:30
   included because: `src/ledger.rs::wallet_charge` names it as a `references` target, 1 hop away.
 parameter wallet_charge.amount — src/ledger.rs:37
   included because: `src/ledger.rs::wallet_charge` names it as a `references` target, 1 hop away.
-candidates: 5 examined, 0 not reached
-note: the neighbourhood was exhausted with 19290 token(s) of budget unspent; there was nothing left worth adding
-note: the answer is complete: the neighbourhood was exhausted with 19420 token(s) of the budget unspent, so the budget was not what limited it
+candidates: 6 examined, 0 not reached
+note: the neighbourhood was exhausted with 19227 token(s) of budget unspent; there was nothing left worth adding
+note: the answer is complete: the neighbourhood was exhausted with 19357 token(s) of the budget unspent, so the budget was not what limited it
 could not:
   a unit is the index's own rendering of a declaration — kind, name, path, line, signature and doc comment — and not its body. Nothing here shows what is inside a function
   the pack is one hop from the target by construction. A larger budget does not reach further; it buys more of the same neighbourhood
