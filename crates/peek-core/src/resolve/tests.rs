@@ -4165,11 +4165,8 @@ fn the_shadow_clause_and_the_glob_refusal_run_ahead_of_the_module_lookup() {
     resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
 
     // The shadowed occurrence: refused by the scope rule, on a path whose lookup the guard changed.
-    let shadowed = references_from(
-        &relations_of(&store, RelationKind::References),
-        "make",
-        "entry",
-    );
+    let all = relations_of(&store, RelationKind::References);
+    let shadowed = references_from(&all, "make", "entry");
     assert_eq!(
         shadowed[0].target,
         Some(id("src/service.rs", EntityKind::Parameter, "make.entry")),
@@ -4185,7 +4182,6 @@ fn the_shadow_clause_and_the_glob_refusal_run_ahead_of_the_module_lookup() {
     );
 
     // The unshadowed occurrence, same binding, same path: the import answers, with the module.
-    let all = relations_of(&store, RelationKind::References);
     let elsewhere = references_from(&all, "other", "entry");
     assert_eq!(
         rung_name(&decided_by(&elsewhere[0])),
