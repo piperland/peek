@@ -37,9 +37,45 @@ use super::span::Span;
 #[serde(rename_all = "snake_case")]
 pub enum RelationKind {
     // ---- structural ----
-    /// A file or module declares an entity.
+    /// The file, or the innermost enclosing module, declares an entity.
+    ///
+    /// **The declarer is whoever holds the declaration, not a fixed kind of thing.** A `const`, an
+    /// `impl` and a `fn` each declare their own name; the scope that *holds* that declaration Defines
+    /// it. Saying only "a file or module" hid that, and a reader who took it literally looked for a
+    /// file or module to own a method and found the `impl` instead — which is the confusion this
+    /// vocabulary exists to prevent.
+    ///
+    /// `Defines` answers **where was this declared**. `Contains` answers **what is it inside**. Every
+    /// entity has exactly one `Defines` — the place its declaration is written — while containment is
+    /// a position fact that can hold of many things at once. The pairs are deliberately not
+    /// interchangeable:
+    ///
+    /// | pair | `Defines` | `Contains` |
+    /// |---|---|---|
+    /// | file -> top-level `fn`/`const`/`static`/alias | yes | **no edge** |
+    /// | file -> `mod inner { }` | yes | the file's layout module |
+    /// | module -> nested symbol | yes | yes |
+    /// | `impl` -> its method | **no** | yes |
+    /// | `fn` -> a local it binds | **no** | yes |
+    /// | package -> a member | **no** | **no** |
+    ///
+    /// An `impl` contains a method without declaring it, and a package is not a lexical scope at all:
+    /// membership there is `Owns`, which is a third and different fact.
+    ///
+    /// **The two are emitted by different rules, which is why a top-level symbol has `Defines` and no
+    /// `Contains` at all.** `Defines` takes the innermost enclosing module-declaring scope and falls
+    /// back to the file, so every declaration has exactly one. `Contains` takes the enclosing scope if
+    /// there is one, else the file's layout module when the declaration *is* a module, else nothing —
+    /// so a `fn` or `const` at the top of a file gets no containment edge, because there is no
+    /// lexical scope outside it to point at. Before `Defines` was emitted, that meant such a symbol
+    /// had no incoming structural edge of any kind and was unreachable from its own file.
     Defines,
-    /// An entity lexically encloses another.
+    /// An entity lexically encloses another — a fact about position, never about who declared what.
+    ///
+    /// Read this and `Defines` as two questions. A method inside an `impl` inside a file is contained
+    /// by the `impl` and **defined** by the file (or by the innermost enclosing module). The gate
+    /// measures containment through this kind only; counting declaration edges as scope was a real
+    /// defect, caught by measurement rather than review.
     Contains,
     /// An entity is a member of a type.
     Owns,
