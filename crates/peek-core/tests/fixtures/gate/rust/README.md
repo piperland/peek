@@ -69,8 +69,14 @@ None of them is a rounding artefact, and the two worth naming:
   file that mentions the module rather than the file that is it — and that hit ended the
   search before the path guess could name the module's own file. The lookup now falls
   through when the file it was handed holds nothing the caller is searching for, and all
-  three carry their module. The two remaining misses in `imports` are the glob and the
-  aliased binding, both labelled and both believed right to refuse; see `gate.expect`.
+  three carry their module. The two remaining misses in `imports` are untouched by this
+  rule: `use crate::traits::*;` is refused by design — a glob binds no name, so it is
+  `unresolved|unsupported` — and `use crate::model::Alias as Renamed;` is the aliased
+  shape, where the extractor records the module as the full item path
+  `crate::model::Alias` and asks for the module's **file row**; no file entity carries
+  that qualified name, R1 declines with nothing to search, and no later rung can place a
+  name the declaring file spells `Alias` rather than `Renamed`, so the edge is
+  `unresolved|no_candidate`. That is a gap, not a wrong edge, and it predates this change.
 
 `references` used to be the third, and it was not a rounding artefact either: the
 `References` class was **unreachable**, not rare. `spec::ReferenceRule::excluded_parents`
