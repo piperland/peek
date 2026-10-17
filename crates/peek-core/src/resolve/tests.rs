@@ -3900,7 +3900,10 @@ fn a_table_answer_holding_nothing_to_search_does_not_end_the_search() {
     let tree = TempTree::new("table-hit-holds-nothing");
     tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
     tree.write("crates/alpha/src/lib.rs", "pub mod model;\n");
-    tree.write("crates/alpha/src/model.rs", "pub struct Unused;\npub struct Thing;\n");
+    tree.write(
+        "crates/alpha/src/model.rs",
+        "pub struct Unused;\npub struct Thing;\n",
+    );
     tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
     tree.write("crates/beta/src/lib.rs", "pub mod thing;\n");
     tree.write(
@@ -3924,7 +3927,11 @@ fn a_table_answer_holding_nothing_to_search_does_not_end_the_search() {
         .expect("the import of Widget was extracted");
     assert_eq!(
         widget.target,
-        Some(id("crates/beta/src/thing/model.rs", EntityKind::Struct, "Widget")),
+        Some(id(
+            "crates/beta/src/thing/model.rs",
+            EntityKind::Struct,
+            "Widget"
+        )),
         "the file inside the referring file's own directory chain is where `Widget` is declared, \
          and the row the table reached first mentions `mod model;` without holding it: {}",
         state_of(&widget)
