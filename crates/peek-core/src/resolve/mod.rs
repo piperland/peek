@@ -165,8 +165,9 @@
 //! Turning a module path into a file is [`Resolver::module_files`], and it asks **both** routes —
 //! the module table and the path guess — because a controlled comparison across five repositories
 //! found the table worth +2.5pp of resolved relations on one and -1.1pp on another. The question it
-//! now answers first is *which spelling of the path* names a file, and the guess is what answers
-//! when no spelling does; the guess is also the only route that can express `super::`, a climb
+//! now answers first is *which spelling of the path* names a file **the caller can search with**,
+//! and the guess is what answers when no spelling does or when the file a spelling names holds
+//! nothing the lookup is after; the guess is also the only route that can express `super::`, a climb
 //! against the importer's own module. [`module_files`] states the rule and the counters that hold it
 //! up; the limits of the guess are documented at [`files_for_module`] because they are real.
 //!
@@ -673,6 +674,35 @@ fn is_crate_relative(module: &str, package: Option<&str>) -> bool {
         None => false,
         Some("") | Some("crate") | Some("self") => true,
         Some(head) => package == Some(head),
+    }
+}
+
+/// What the caller of [`Resolver::module_files`] keeps from a file the lookup names.
+///
+/// **The module lookup and its callers have to agree about this or the two are two rules.** Both
+/// read the file list to find the entity a module path points at — an unaliased import wants a
+/// declaration carrying the bound name, an aliased one wants the module's own file row, and a
+/// qualified call path wants a declaration carrying the callee's name — so this is the one predicate
+/// that says whether a file is worth returning at all. A file that holds none of it is a file the
+/// caller will search, find nothing in, and hand back an empty candidate list for; saying so before
+/// the list goes out is what lets the lookup try something else instead of ending the search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SearchedFor {
+    /// A declaration of this name.
+    Declaration(String),
+    /// The file entity itself, which is what `use a::b as c` binds.
+    File,
+}
+
+impl SearchedFor {
+    /// Whether this entity is what the caller is looking for.
+    fn keeps(&self, entity: &crate::model::Entity) -> bool {
+        match self {
+            SearchedFor::File => entity.kind() == EntityKind::File,
+            SearchedFor::Declaration(name) => {
+                entity.name == *name && is_declaration(entity.kind())
+            }
+        }
     }
 }
 
@@ -1609,15 +1639,17 @@ impl<'s> Resolver<'s> {
         if binding.local == GLOB {
             return Ok(Vec::new());
         }
-        let aliased = binding.alias.is_some();
+        let wanted = match &binding.alias {
+            Some(_) => SearchedFor::File,
+            None => SearchedFor::Declaration(binding.local.clone()),
+        };
+        // An aliased binding names a module rather than an item in one, so its last segment is
+        // part of the module path; an unaliased one may name either, so both readings are tried.
+        let strip_last = binding.alias.is_none();
         let mut found: Vec<EntityId> = Vec::new();
-        for file in self.module_files(&binding.module, importer, !aliased)? {
+        for file in self.module_files(&binding.module, importer, strip_last, &wanted)? {
             for entity in self.entities_in_file(&file)?.iter() {
-                let wanted = match &binding.alias {
-                    Some(_) => entity.kind() == EntityKind::File,
-                    None => is_declaration(entity.kind()) && entity.name == binding.local,
-                };
-                if wanted {
+                if wanted.keeps(entity) {
                     found.push(entity.id.clone());
                 }
             }
@@ -1625,8 +1657,8 @@ impl<'s> Resolver<'s> {
         Ok(found)
     }
 
-    /// The files a module path names: the guess's, if the guess can name one, and the
-    /// table's first answer otherwise.
+    /// The files a module path names: the guess's if it can name one, then the table's first
+    /// answer, then the guess's again if the table's answer holds nothing to search.
     ///
     /// The extractor writes a `Module` entity for every file it reads, with a qualified name that
     /// is the path from the package's source root. That turns "which file does `alpha::gateway`
@@ -1676,7 +1708,11 @@ impl<'s> Resolver<'s> {
     ///    `crates/beta/src/`. That is the whole of the table's recorded value — 4,593 more
     ///    `import_binding` proofs on `rust-lang/cargo` — and first-hit-wins is what stops the
     ///    cross-package *fallback* spelling from answering a path the package-prefixed spelling
-    ///    could answer.
+    ///    could answer. **A hit counts only if it names a file the caller can search with** — see
+    ///    [`Resolver::module_files`]'s guard and [`SearchedFor`]. A file that holds none of what the
+    ///    caller is looking for was not an answer, so it does not stop the search: the next spelling
+    ///    gets its turn, and after the spellings are spent so does the guess. Dropping that clause
+    ///    is what let the `mod model;` declaration row end a lookup for `Entry`.
     /// 3. **Whichever route was asked second gets its turn** if the first found nothing, because a
     ///    path one of them can place and the other cannot is the one case where the other's silence
     ///    is not an answer.
@@ -1708,11 +1744,64 @@ impl<'s> Resolver<'s> {
     /// arms of the measurement come out of one build. **The off arm is [`files_for_module`] alone,
     /// exactly as it was** — not the same rule with the table part removed — because a baseline
     /// that moves is not a baseline, and the recorded per-rung figures were read against it.
+    ///
+    /// ## The third thing that was wrong, and the one this guard fixes
+    ///
+    /// **A table answer that gives the caller nothing to search does not end the search.**
+    ///
+    /// The rule is stated at the level of the mechanism, because the mechanism is what was wrong
+    /// here and not this one path. It came from the gate fixture's `src/lib.rs`, which begins with
+    /// a crate-root `pub use model::Entry;`. The extractor records the module (`walker.rs` emits
+    /// `Evidence::ImportBinding { module: "model::Entry" }` for a `pub use` exactly as for a private
+    /// `use`), so the row is `inferred|unique_name` with **no module** rather than
+    /// `resolved|import_binding|module=model::Entry` — and the module is the fact the graph is
+    /// asked for. Why it lands there:
+    ///
+    /// * `package_of("src/lib.rs")` is `Unnamed` — the crate root's own layout module qualifies as
+    ///   the bare `src`, which has no `::` — so there is no package to prefix with.
+    /// * `is_crate_relative("model::Entry", None)` is false, so the table is asked first, and
+    ///   `module_qualified_names` offers the bare spellings `["model::Entry", "model"]`.
+    /// * The lookup for `model` **hits**: the extractor writes a `Module` row named `model` for the
+    ///   module `src/lib.rs` declares, and that row's path is `src/lib.rs` — the importing file.
+    /// * The old code returned on that first hit. The caller looked for a declaration named `Entry`
+    ///   in `src/lib.rs`, found none, and R1 handed back `None` — a route that had produced nothing
+    ///   usable, treated as a route that had produced an answer. The guess, which reads `["model"]`
+    ///   from the anchor `src` and names `src/model.rs`, was never asked.
+    /// * R4 found nothing and R5 placed `src/model.rs::Entry` — the *right* file, from evidence with
+    ///   no module in it. So the target was never wrong and never moved; only the rung and the
+    ///   retained module were. That is why the retention figure, not `resolution_correctness`, is
+    ///   what this measures: a saturated dimension cannot show a fix like this, only fail one.
+    ///
+    /// The shape is the same confusion recorded at [`Resolver::module_qualified_names`] and in
+    /// `.agent/EVIDENCE/MODULE-TABLE.md`: the table answered *"which file **is** module `model`?"*
+    /// with *"the file that **mentions** `mod model;`"*. Declare versus be. The guard does not try to
+    /// tell the two rows apart from their path — it asks the question the caller is actually asking,
+    /// whether the file holds the thing being searched for, and treats "no" as silence rather than
+    /// as an answer.
+    ///
+    /// ## What this deliberately does not do
+    ///
+    /// It is not keyed on re-exports, `pub use`, or `lib.rs`. Those are not the defect: the three
+    /// re-exports in the fixture are simply the only statements in it whose name is absent from the
+    /// file that the declaration row names. A private `use model::Entry;` in the same file behaves
+    /// identically, and a fix keyed on visibility would leave the general bug in place while passing
+    /// the same test.
+    ///
+    /// It does not touch [`Resolver::package_of`] either, and that was considered and rejected:
+    /// naming the crate root's package would not help, because `!crate_relative` still puts the
+    /// *bare* spelling first, so `model` reaches the declaration row before any prefixed spelling
+    /// does. Fixing the prefix would move the failure from this lookup to the ordering.
+    ///
+    /// And it does not carry a module onto a payload-free decided state. That would be a second,
+    /// different fix — it patches the symptom at the wire, needs an accepting reader for both
+    /// shapes, and would let every route that produces `unique_name` keep producing it. The rung
+    /// here was able to retain the module; it was prevented from doing so.
     fn module_files(
         &mut self,
         module: &str,
         importer: &RepoPath,
         strip_last: bool,
+        wanted: &SearchedFor,
     ) -> Result<Vec<RepoPath>, StoreError> {
         if !self.options.use_module_table {
             return Ok(files_for_module(module, importer, strip_last));
@@ -1762,10 +1851,11 @@ impl<'s> Resolver<'s> {
             }
         }
 
-        // The table, at the first spelling that names a file. First-hit-wins is what stops the
-        // cross-package *fallback* spelling from answering a path the package-prefixed spelling
-        // could answer; taking the union instead is what let a declaration site's `mod x;` row
-        // answer a path about the module's own file.
+        // The table, at the first spelling that names a file **and the importer could actually be
+        // looking for something in**. First-hit-wins is what stops the cross-package *fallback*
+        // spelling from answering a path the package-prefixed spelling could answer; taking the
+        // union instead is what let a declaration site's `mod x;` row answer a path about the
+        // module's own file.
         let mut asked = 0usize;
         for qualified in
             self.module_qualified_names(module, package_name, strip_last, crate_relative)
@@ -1780,19 +1870,42 @@ impl<'s> Resolver<'s> {
                     push_new(&mut found, entity.path().clone());
                 }
             }
+            // **A table answer ends the search only if it names a file the caller can search
+            // with.** `wanted` is [`SearchedFor`] — the caller's own keep condition, handed down —
+            // so this does not invent a second rule that could disagree with the first. A file that
+            // holds none of what the caller is looking for produces an empty candidate list
+            // downstream, which is silence, and silence must not end a search: the next spelling
+            // gets its turn, and after the spellings are spent so does the guess. Without this
+            // clause the `mod model;` **declaration** row answered a lookup for `Entry` — the row's
+            // path is the importing file, the declaration is not in it, R1 declined, and the edge
+            // fell to a rung that cannot carry the module. See the guard in this function's docs.
             if !found.is_empty() {
-                self.module_files.record(ModuleFileLookup {
-                    asked,
-                    outcome: ModuleFileOutcome::Table,
-                    package_known: package.is_some(),
-                    named: !crate_relative,
-                });
-                return Ok(found);
+                let mut searchable = false;
+                for file in &found {
+                    if self
+                        .entities_in_file(file)?
+                        .iter()
+                        .any(|entity| wanted.keeps(entity))
+                    {
+                        searchable = true;
+                        break;
+                    }
+                }
+                if searchable {
+                    self.module_files.record(ModuleFileLookup {
+                        asked,
+                        outcome: ModuleFileOutcome::Table,
+                        package_known: package.is_some(),
+                        named: !crate_relative,
+                    });
+                    return Ok(found);
+                }
             }
         }
 
-        // The table named nothing. The guess gets its turn, because a path it can place and the
-        // table cannot is the one case where the table's silence is not an answer.
+        // The table named nothing the caller could search with. The guess gets its turn, because a
+        // path it can place and the table cannot is the one case where the table's silence is not
+        // an answer.
         let guessed = match guessed {
             Some(files) => files,
             None => self.guessed_files(module, importer, strip_last)?,
@@ -2200,10 +2313,11 @@ impl<'s> Resolver<'s> {
         let evidence = Evidence::QualifiedNameInScope {
             scope: scope.to_owned(),
         };
+        let wanted = SearchedFor::Declaration(name.to_owned());
         let mut found: Vec<Found> = Vec::new();
-        for file in self.module_files(scope, relation.source.path(), true)? {
+        for file in self.module_files(scope, relation.source.path(), true, &wanted)? {
             for entity in self.entities_in_file(&file)?.iter() {
-                if entity.name == name && is_declaration(entity.kind()) {
+                if wanted.keeps(entity) {
                     found.push(Found {
                         id: entity.id.clone(),
                         by: evidence.clone(),
