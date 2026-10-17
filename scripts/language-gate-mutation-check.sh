@@ -263,7 +263,7 @@ if text.count(search) != 1:
     sys.exit(f"the search string appears {text.count(search)} times, expected exactly 1: {search!r}")
 open(path, "w", encoding="utf-8").write(text.replace(search, replacement))
 PY
-PLACEMENT_UNDER="$(measure resolution_correctness)"
+PLACEMENT_UNDER="$(measure resolution_correctness || true)"
 restore_file "$RESOLVER"
 touch "$RESOLVER"
 if [ "$PLACEMENT_UNDER" != "$BASE_PLACEMENT" ]; then
