@@ -699,9 +699,7 @@ impl SearchedFor {
     fn keeps(&self, entity: &crate::model::Entity) -> bool {
         match self {
             SearchedFor::File => entity.kind() == EntityKind::File,
-            SearchedFor::Declaration(name) => {
-                entity.name == *name && is_declaration(entity.kind())
-            }
+            SearchedFor::Declaration(name) => entity.name == *name && is_declaration(entity.kind()),
         }
     }
 }

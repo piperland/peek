@@ -3813,7 +3813,10 @@ fn a_relative_use_from_the_crate_root_keeps_the_module_it_named() {
         "src/model.rs",
         "pub struct Entry;\npub struct Ledger;\npub trait Clock {}\n",
     );
-    tree.write("src/traits.rs", "pub struct Saveable;\npub struct Ledger;\n");
+    tree.write(
+        "src/traits.rs",
+        "pub struct Saveable;\npub struct Ledger;\n",
+    );
     tree.write(
         "src/lib.rs",
         "pub mod model;\npub mod traits;\n\n\
@@ -3828,9 +3831,19 @@ fn a_relative_use_from_the_crate_root_keeps_the_module_it_named() {
 
     for (local, module, kind, path) in [
         ("Entry", "model::Entry", EntityKind::Struct, "src/model.rs"),
-        ("Ledger", "model::Ledger", EntityKind::Struct, "src/model.rs"),
+        (
+            "Ledger",
+            "model::Ledger",
+            EntityKind::Struct,
+            "src/model.rs",
+        ),
         ("Clock", "model::Clock", EntityKind::Trait, "src/model.rs"),
-        ("Saveable", "traits::Saveable", EntityKind::Struct, "src/traits.rs"),
+        (
+            "Saveable",
+            "traits::Saveable",
+            EntityKind::Struct,
+            "src/traits.rs",
+        ),
     ] {
         let import = relations_of(&store, RelationKind::Imports)
             .into_iter()
@@ -3868,8 +3881,9 @@ fn a_table_answer_holding_nothing_to_search_does_not_end_the_search() {
     // the rule:
     //
     // * **The table hits, and the hit is wrong.** `model` is the qualified name of the
-    //   `pub mod model;` declaration row in `alpha/src/lib.rs`, and a declaration row's path is the
-    //   file that *mentions* the module. That file declares no `Widget`.
+    //   `pub mod model;` **declaration** rows in `alpha/src/lib.rs` and `gamma/src/lib.rs`, and a
+    //   declaration row's path is the file that *mentions* the module. Neither of those two files
+    //   declares a `Widget`.
     // * **The guess hits, and the hit is right.** Anchored on `beta/src/thing/`, the path reads
     //   `model` and names `beta/src/thing/model.rs`, where `Widget` is declared.
     // * **Nothing downstream can rescue the wrong hit.** A second `Widget` lives in
@@ -3967,8 +3981,9 @@ fn a_table_answer_holding_nothing_to_search_does_not_end_the_search() {
     assert_eq!(
         cross,
         vec![RepoPath::new("crates/gamma/src/model.rs").expect("valid path")],
-        "the package the path named, reached by one seek — `src` is not a segment, so the guess \
-         cannot produce this file from `crates/beta/src/thing/`"
+        "the package the path named, by a reading the guess cannot produce — `src` is not a \
+         segment of a module path, so no anchor list builds this file from \
+         `crates/beta/src/thing/`"
     );
     assert_eq!(
         answered.module_files.table_answered_named, 1,
@@ -3977,9 +3992,10 @@ fn a_table_answer_holding_nothing_to_search_does_not_end_the_search() {
         answered.module_files
     );
     assert_eq!(
-        answered.module_files.asked, 2,
-        "and the cross-package path cost two seeks, not four — the first prefixed reading hit and \
-         the guard returned it: {:?}",
+        answered.module_files.asked, 3,
+        "and the cross-package path cost three seeks — the full path missed at both spellings, \
+         the stripped reading `gamma::model` hit, and the guard returned it because that file \
+         holds `Widget`: {:?}",
         answered.module_files
     );
 
