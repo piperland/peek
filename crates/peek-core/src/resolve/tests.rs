@@ -4172,28 +4172,28 @@ fn the_shadow_clause_and_the_glob_refusal_run_ahead_of_the_module_lookup() {
         Some(id("src/service.rs", EntityKind::Parameter, "make.entry")),
         "the parameter shadows the import inside the function that declares it, and the refusal \
          happens before any file list exists: {}",
-        state_of(&shadowed[0])
+        state_of(shadowed[0])
     );
     assert_eq!(
-        rung_name(&decided_by(&shadowed[0])),
+        rung_name(&decided_by(shadowed[0])),
         "same_file",
         "and the scope rule answered it, not the import: {}",
-        state_of(&shadowed[0])
+        state_of(shadowed[0])
     );
 
     // The unshadowed occurrence, same binding, same path: the import answers, with the module.
     let elsewhere = references_from(&all, "other", "entry");
     assert_eq!(
-        rung_name(&decided_by(&elsewhere[0])),
+        rung_name(&decided_by(elsewhere[0])),
         "import_binding",
         "and the same import still answers everywhere the parameter is not in scope: {}",
-        state_of(&elsewhere[0])
+        state_of(elsewhere[0])
     );
     assert_eq!(
-        import_module(&elsewhere[0]).as_deref(),
+        import_module(elsewhere[0]).as_deref(),
         Some("model::entry"),
         "with the module the statement wrote — the fact this guard exists to keep: {}",
-        state_of(&elsewhere[0])
+        state_of(elsewhere[0])
     );
 
     // The glob: refused at the head of `decide`, in exactly one row, and unsearchable by design.
