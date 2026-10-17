@@ -301,8 +301,14 @@ fn fixture() -> (Store, TempDir) {
             span(1300),
             Evidence::SameFile,
         ),
-        // Containment, which is the one structural edge the extractor really does emit, and the
-        // only thing that gives a top-level member a container.
+        // Containment: the edge that gives a member its container. This fixture points a method at
+        // the struct directly; a real extractor run points it at the `impl` block's own row
+        // instead. The query side asks only "a structural edge out of a container", never which
+        // container, so the shorter path stands in without changing what this test is about.
+        // Hand-built, so no `Defines` edge accompanies it: the extractor now emits one per
+        // declaration (D-0037) pointing at the innermost module-declaring scope - never at the
+        // impl or the struct - which is the whole distinction between the two kinds, and why
+        // membership is read through `Contains` alone.
         Relation::resolved(
             RelationKind::Contains,
             audit_trail_id(),
