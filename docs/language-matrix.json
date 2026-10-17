@@ -161,14 +161,14 @@
           "percent": "100.00"
         },
         "imports": {
-          "numerator": 10,
+          "numerator": 13,
           "denominator": 15,
-          "percent": "66.67"
+          "percent": "86.67"
         },
         "imports_module_retained": {
-          "numerator": 0,
+          "numerator": 3,
           "denominator": 3,
-          "percent": "0.00"
+          "percent": "100.00"
         },
         "members": {
           "numerator": 24,
@@ -225,12 +225,12 @@
           "percent": "100.00"
         },
         "imports": {
-          "basis_points": 6666,
-          "percent": "66.66"
+          "basis_points": 8666,
+          "percent": "86.66"
         },
         "imports_module_retained": {
-          "basis_points": 0,
-          "percent": "0.00"
+          "basis_points": 10000,
+          "percent": "100.00"
         },
         "incremental": {
           "basis_points": 10000,
@@ -313,8 +313,7 @@
           "resolved": 4
         },
         "imports": {
-          "inferred": 3,
-          "resolved": 10,
+          "resolved": 13,
           "unresolved": 2
         },
         "inherits": {
@@ -322,8 +321,8 @@
         },
         "references": {
           "ambiguous": 6,
-          "inferred": 21,
-          "resolved": 72,
+          "inferred": 19,
+          "resolved": 74,
           "unresolved": 93
         }
       },

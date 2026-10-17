@@ -43,7 +43,7 @@ rendering `1.00`.
 | typescript | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | javascript | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | python | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
-| rust | unverified | yes | 100.00 (90/90) | 100.00 (90/90) | 100.00 (88/88) | 97.50 (39/40) | 96.15 (25/26) | 66.67 (10/15) | 100.00 (24/24) |
+| rust | unverified | yes | 100.00 (90/90) | 100.00 (90/90) | 100.00 (88/88) | 97.50 (39/40) | 96.15 (25/26) | 86.67 (13/15) | 100.00 (24/24) |
 | go | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | java | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
 | csharp | unverified | none | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable | not extractable |
@@ -135,8 +135,8 @@ correct outcome for a name with two candidates and an incorrect one for `mod::f(
 |---|---|---|---|---|---|---|---|
 | rust | `defines` | 90 | 90 | 0 | 0 | 0 | 0 |
 | rust | `contains` | 61 | 61 | 0 | 0 | 0 | 0 |
-| rust | `imports` | 15 | 10 | 3 | 0 | 2 | 0 |
-| rust | `references` | 192 | 72 | 21 | 6 | 93 | 0 |
+| rust | `imports` | 15 | 13 | 0 | 0 | 2 | 0 |
+| rust | `references` | 192 | 74 | 19 | 6 | 93 | 0 |
 | rust | `calls` | 39 | 9 | 1 | 2 | 27 | 0 |
 | rust | `inherits` | 1 | 1 | 0 | 0 | 0 | 0 |
 | rust | `implements` | 4 | 4 | 0 | 0 | 0 | 0 |
