@@ -33,8 +33,8 @@ the figure the same run produced.
 | `calls` | 97.50% (39/40) | 97.50 |
 | `references` | 96.15% (25/26) | 96.14 |
 | `resolution_correctness` | 75.00% (36/48) | 75.00 |
-| `imports` | 66.67% (10/15) | 66.66 |
-| `imports_module_retained` | 0.00% (0/3) | 0.00 |
+| `imports` | 86.67% (13/15) | 86.66 |
+| `imports_module_retained` | 100.00% (3/3) | 100 |
 | `members` | 91.67% (22/24) | 91.66 |
 | `inheritance_subject` | 100.00% (5/5) | 100.00 |
 | `inheritance_base` | 100.00% (5/5) | 100.00 |
@@ -63,9 +63,14 @@ None of them is a rounding artefact, and the two worth naming:
   parent only when it declares a module; every other top-level symbol gets
   `parent: None` and so has no incoming structural edge. A `const`, a `static`, a
   function and a type alias at the top of a file are all unreachable from their file.
-- **`imports_module_retained` at 0 of 3.** The three imports in `lib.rs` are placed by
-  `UniqueName` rather than by their `ImportBinding`, so the module the statement named
-  is not in the decided state and cannot be read back out.
+- **`imports_module_retained` used to read 0 of 3.** The three imports in `lib.rs` were
+  placed by `UniqueName` rather than by their `ImportBinding`, because the module table
+  answered the bare spelling of the path with the `mod model;` **declaration** row — the
+  file that mentions the module rather than the file that is it — and that hit ended the
+  search before the path guess could name the module's own file. The lookup now falls
+  through when the file it was handed holds nothing the caller is searching for, and all
+  three carry their module. The two remaining misses in `imports` are the glob and the
+  aliased binding, both labelled and both believed right to refuse; see `gate.expect`.
 
 `references` used to be the third, and it was not a rounding artefact either: the
 `References` class was **unreachable**, not rare. `spec::ReferenceRule::excluded_parents`
