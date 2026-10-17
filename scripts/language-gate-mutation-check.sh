@@ -3,13 +3,13 @@
 #
 # # A gate that has never failed is not evidence of anything.
 #
-# This script mutates one rule — four in `src/extract/registry.rs`, one in
-# `src/resolve/mod.rs` — re-runs the gate, and asserts that the gate **fails**
+# This script mutates one rule - four in `src/extract/registry.rs`, two in
+# `src/resolve/mod.rs` - re-runs the gate, and asserts that the gate **fails**
 # and that it fails on the dimension the mutation should break. The mutation is
 # reverted afterwards, and the tree is checked afterwards, so a run leaves
 # nothing behind.
 #
-# Five mutations, chosen because each is a plausible mistake rather than a
+# Six mutations, chosen because each is a plausible mistake rather than a
 # nonsense one, and each should break a *different* dimension:
 #
 #   1. `macro_invocation` dropped from the call rules.
@@ -66,6 +66,27 @@
 #      column is for. The hazard the old mutation demonstrated is still real and still
 #      undefended by the fraction alone; what changed is that this fixture can no longer
 #      exhibit it.
+#
+#   6. The resolver's guard that "a table answer holding nothing to search does not end
+#      the lookup" forced to answer on the first hit regardless of what it holds.
+#      `imports_module_retained` reads 100.00 (3/3) with a floor of 100, so this is the
+#      mutation that proves the dimension measures the guard rather than something that
+#      happens to pass beside it. The edit is plausible — a flag that starts set — and
+#      it restores first-hit-wins: the `mod model;` **declaration** row answers
+#      `use model::Entry;`, R1 finds no `Entry` in that file and declines, and the edge
+#      falls to the rung that carries no module. `imports_module_retained` returns to
+#      0.00 (0/3), `imports` to 66.67, and the gate fails twice over: the floor
+#      assertion in `every_registered_language_meets_its_recorded_floor`, and the
+#      published-matrix equality in `the_published_matrix_is_the_current_measurement`,
+#      because a fresh measurement under the mutation cannot equal the committed matrix
+#      this branch regenerated. The resolver's own conformance tests for the rule —
+#      `resolve::tests::a_relative_use_from_the_crate_root_keeps_the_module_it_named`
+#      and `resolve::tests::a_table_answer_holding_nothing_to_search_does_not_end_the_search`
+#      in the lib target — fail on the same source, which is the assertion the brief's
+#      "which assertion fails" question is about. And the mutation must **not** move
+#      `resolution_correctness`: the same three targets are still placed, by a weaker
+#      rung. That is exactly why the retention figure and not the saturated fraction is
+#      the evidence of this fix.
 #
 # Usage:
 #   ./scripts/language-gate-mutation-check.sh
@@ -186,9 +207,10 @@ BASE_PRECISION="$(measure symbol_precision)"
 BASE_IMPORTS="$(measure imports)"
 BASE_REFERENCES="$(measure references)"
 BASE_PLACEMENT="$(measure resolution_correctness)"
+BASE_RETENTION="$(measure imports_module_retained)"
 for pair in "calls:$BASE_CALLS" "symbol_precision:$BASE_PRECISION" \
   "imports:$BASE_IMPORTS" "references:$BASE_REFERENCES" \
-  "resolution_correctness:$BASE_PLACEMENT"; do
+  "resolution_correctness:$BASE_PLACEMENT" "imports_module_retained:$BASE_RETENTION"; do
   case "$pair" in
     ?*:?*) ;;
     *) fail "cannot read a baseline for ${pair%%:*}; the gate printed nothing for it" ;;
@@ -214,6 +236,42 @@ mutate "$RESOLVER" \
                     && !is_binding(entity.kind())' \
   '                    && is_declaration(entity.kind())' \
   resolution_correctness "$BASE_PLACEMENT"
+
+# The sixth, and the one that belongs to this change. `if searchable {` is the guard:
+# the table's file list is returned only when it holds something the caller can search
+# with. Forcing the condition to `true` is first-hit-wins restored with the search
+# still performed — the plausible edit, not the nonsense one — and the retained-module
+# figure is the one that notices it. `resolution_correctness` is asserted unchanged in
+# the verification below: the three edges still land on the same targets, so a fix that
+# only moved the fraction would have tuned the wrong column.
+mutate "$RESOLVER" '                if searchable {' '                if true {' \
+  imports_module_retained "$BASE_RETENTION"
+
+# The same mutation, re-applied, read against the column that must *not* move: a
+# placement that was right stays right when the module is dropped. This is the guard
+# against tuning, and it is run separately because `mutate` requires the named
+# dimension to move — it cannot express "this one must not".
+step "the same mutation leaves resolution_correctness where it was"
+cp "$RESOLVER" "$RESOLVER.gate-mutation.bak"
+python3 - "$RESOLVER" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+search = "                if searchable {"
+replacement = "                if true {"
+if text.count(search) != 1:
+    sys.exit(f"the search string appears {text.count(search)} times, expected exactly 1: {search!r}")
+open(path, "w", encoding="utf-8").write(text.replace(search, replacement))
+PY
+PLACEMENT_UNDER="$(measure resolution_correctness)"
+restore_file "$RESOLVER"
+touch "$RESOLVER"
+if [ "$PLACEMENT_UNDER" != "$BASE_PLACEMENT" ]; then
+  fail "resolution_correctness moved to $PLACEMENT_UNDER under the retention mutation (baseline \
+$BASE_PLACEMENT); a fix that changed placements is not this rule"
+fi
+printf '  resolution_correctness held at %s under the mutation — only the module moved\n' \
+  "$PLACEMENT_UNDER"
 
 restore_registry
 trap - EXIT
