@@ -14,7 +14,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::{ResolutionOptions, resolve_all, resolve_paths, rule_name, rung_name};
+use super::{
+    ResolutionOptions, Resolver, SearchedFor, files_for_module, resolve_all, resolve_paths,
+    rule_name, rung_name,
+};
 use crate::discover::DiscoveryOptions;
 use crate::indexer::{IndexOutcome, build_full};
 use crate::model::entity::{EntityId, EntityKind};
@@ -3755,5 +3758,469 @@ fn the_module_file_counters_partition_the_lookups() {
         "and the summary carries them, because a number nobody can read is a number nobody reads: \
          {}",
         report.summary()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A table answer that holds nothing the caller wants does not end the search
+// ---------------------------------------------------------------------------
+
+/// The module an import relation was decided through, when its evidence names one.
+///
+/// `None` for every other class, which is the point: a decided edge placed by `unique_name` has no
+/// module at all, and an assertion that "it resolved" would not say so.
+fn import_module(relation: &crate::model::Relation) -> Option<String> {
+    match &relation.resolution {
+        ResolutionState::Resolved { by } | ResolutionState::Inferred { by, .. } => match by {
+            Evidence::ImportBinding { module, .. } => Some(module.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[test]
+fn a_relative_use_from_the_crate_root_keeps_the_module_it_named() {
+    // The instance, on the relative path specifically: `use model::Entry;` in a crate root, which is
+    // the gate fixture's own shape and the shape that made its three re-exports lose the module each
+    // statement named.
+    //
+    // Before the guard in [`Resolver::module_files`], each row below ended `inferred|unique_name`
+    // with **no module**: the table offered the bare spelling `model` first — and `model` *is* a row
+    // the index holds, the `pub mod model;` **declaration**, whose path is `src/lib.rs`, the
+    // importing file itself. Returning that row was a hit, so the path guess was never asked; the
+    // caller searched `src/lib.rs` for a declaration named `Entry`, found none, and R1 declined. R5
+    // then placed `src/model.rs::Entry` — the right *target*, from evidence that carries no module —
+    // which is why no placement figure ever moved and the retention figure read 0 of 3.
+    //
+    // **Why asserting the target alone is vacuous here.** The target was already correct before the
+    // change: `Entry` is unique in this tree, so R5 lands it on the right row by accident. An
+    // assertion that the edge points at `src/model.rs::Entry` passes either way and cannot tell a
+    // fix from luck. What has to be asserted is *which rung* decided it and *what that rung carried*
+    // — `import_binding`, with `module` spelling the path the author wrote — because the rung is the
+    // mechanism and the module is the fact the graph is asked for.
+    //
+    // **Why four names and not one.** `Ledger` is declared in two files, so the uniqueness rung had
+    // **nothing** to place it with: under the defect that row was `ambiguous` with two candidates,
+    // and the assertion below fails on it for a second, independent reason. A test with only the
+    // lucky name would pass a fix that rescued nothing else. And the `use` statements are private
+    // rather than `pub use`, on purpose: the defect is not about visibility, and a fix keyed on
+    // re-exports would pass a fixture written in `pub use` while leaving the general bug exactly
+    // where it is. `Ledger` and `Clock` are absent from the crate root, so R4 has nothing to answer
+    // with either, and the only rung left is the one this change is about.
+    let tree = TempTree::new("relative-crate-root");
+    tree.write(
+        "src/model.rs",
+        "pub struct Entry;\npub struct Ledger;\npub trait Clock {}\n",
+    );
+    tree.write(
+        "src/traits.rs",
+        "pub struct Saveable;\npub struct Ledger;\n",
+    );
+    tree.write(
+        "src/lib.rs",
+        "pub mod model;\npub mod traits;\n\n\
+         use model::Entry;\n\
+         use model::Ledger;\n\
+         pub use model::Clock;\n\
+         pub use traits::Saveable;\n\n\
+         pub fn make() -> Entry {\n    Entry\n}\n",
+    );
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    for (local, module, kind, path) in [
+        ("Entry", "model::Entry", EntityKind::Struct, "src/model.rs"),
+        (
+            "Ledger",
+            "model::Ledger",
+            EntityKind::Struct,
+            "src/model.rs",
+        ),
+        ("Clock", "model::Clock", EntityKind::Trait, "src/model.rs"),
+        (
+            "Saveable",
+            "traits::Saveable",
+            EntityKind::Struct,
+            "src/traits.rs",
+        ),
+    ] {
+        let import = relations_of(&store, RelationKind::Imports)
+            .into_iter()
+            .find(|relation| relation.target_name == local)
+            .unwrap_or_else(|| panic!("the binding for `{local}` was extracted"));
+        assert_eq!(
+            rung_name(&decided_by(&import)),
+            "import_binding",
+            "`{local}` must be decided by the author's own import, not by a repository-wide lookup \
+             that has no module to report: {}",
+            state_of(&import)
+        );
+        assert_eq!(
+            import_module(&import).as_deref(),
+            Some(module),
+            "and it must carry the module the statement named — the whole of what this relation is \
+             being asked for: {}",
+            state_of(&import)
+        );
+        assert_eq!(
+            import.target,
+            Some(id(path, kind, local)),
+            "and on the entity the module holds: {}",
+            state_of(&import)
+        );
+    }
+}
+
+#[test]
+fn a_table_answer_holding_nothing_to_search_does_not_end_the_search() {
+    // The mechanism, pinned without a crate root, without a re-export, and without a relative path —
+    // and asserted at the lookup itself, not only as the ladder reports it.
+    //
+    // `beta/src/thing/app.rs` writes `use model::Widget;`. Three facts make this one lookup decide
+    // the rule:
+    //
+    // * **The table hits, and the hit is wrong.** `model` is the qualified name of the
+    //   `pub mod model;` **declaration** rows in `alpha/src/lib.rs` and `gamma/src/lib.rs`, and a
+    //   declaration row's path is the file that *mentions* the module. Neither of those two files
+    //   declares a `Widget`.
+    // * **The guess hits, and the hit is right.** Anchored on `beta/src/thing/`, the path reads
+    //   `model` and names `beta/src/thing/model.rs`, where `Widget` is declared.
+    // * **Nothing downstream can rescue the wrong hit.** A second `Widget` lives in
+    //   `gamma/src/model.rs`, so the uniqueness rung sees two candidates and reports `Ambiguous`,
+    //   and the calling file declares no `Widget` of its own for R4. Under first-hit-wins the search
+    //   ended on the empty answer and this row was `ambiguous`; the guard makes the empty answer
+    //   silence, so the guess gets its turn. The assertions below therefore cannot pass without the
+    //   change — which is the half a target-only assertion could never show, since one of those two
+    //   `Widget`s was the right target all along.
+    //
+    // `is_crate_relative("model::Widget", Some("beta::"))` is false — the head is not the importer's
+    // own package — so the table is asked first, exactly as the conflict rule says. The guard is what
+    // lets the guess answer afterwards.
+    let tree = TempTree::new("table-hit-holds-nothing");
+    tree.write("crates/alpha/Cargo.toml", "[package]\nname = \"alpha\"\n");
+    tree.write("crates/alpha/src/lib.rs", "pub mod model;\n");
+    tree.write(
+        "crates/alpha/src/model.rs",
+        "pub struct Unused;\npub struct Thing;\n",
+    );
+    tree.write("crates/beta/Cargo.toml", "[package]\nname = \"beta\"\n");
+    tree.write("crates/beta/src/lib.rs", "pub mod thing;\n");
+    tree.write(
+        "crates/beta/src/thing/model.rs",
+        "pub struct Widget;\nimpl Widget {\n    pub fn build(&self) -> u8 {\n        1\n    }\n}\n",
+    );
+    tree.write("crates/gamma/Cargo.toml", "[package]\nname = \"gamma\"\n");
+    tree.write("crates/gamma/src/lib.rs", "pub mod model;\n");
+    tree.write("crates/gamma/src/model.rs", "pub struct Widget;\n");
+    tree.write(
+        "crates/beta/src/thing/app.rs",
+        "use model::Widget;\n\npub fn go(widget: Widget) -> Widget {\n    widget\n}\n",
+    );
+
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let widget = relations_of(&store, RelationKind::Imports)
+        .into_iter()
+        .find(|relation| relation.target_name == "Widget")
+        .expect("the import of Widget was extracted");
+    assert_eq!(
+        widget.target,
+        Some(id(
+            "crates/beta/src/thing/model.rs",
+            EntityKind::Struct,
+            "Widget"
+        )),
+        "the file inside the referring file's own directory chain is where `Widget` is declared, \
+         and the row the table reached first mentions `mod model;` without holding it: {}",
+        state_of(&widget)
+    );
+    assert_eq!(
+        rung_name(&decided_by(&widget)),
+        "import_binding",
+        "so the import rung answers it, which no other rung in this tree can: {}",
+        state_of(&widget)
+    );
+    assert_eq!(
+        import_module(&widget).as_deref(),
+        Some("model::Widget"),
+        "with the module the statement wrote: {}",
+        state_of(&widget)
+    );
+
+    // The same lookup asked directly, so the route is on record and not inferred from the placement.
+    let importer = RepoPath::new("crates/beta/src/thing/app.rs").expect("valid path");
+    let wanted = SearchedFor::Declaration("Widget".to_owned());
+    let mut resolver = Resolver::new(&store, ResolutionOptions::default());
+    let files = resolver
+        .module_files("model::Widget", &importer, true, &wanted)
+        .expect("the lookup the import above ran");
+    assert_eq!(
+        files,
+        vec![RepoPath::new("crates/beta/src/thing/model.rs").expect("valid path")],
+        "the guess's file, because the table's first hit holds nothing this caller wants"
+    );
+    assert_eq!(
+        resolver.module_files.guess_answered, 1,
+        "and the report says the guess answered — a pass that recorded this as a table answer \
+         ended the search on an empty file: {:?}",
+        resolver.module_files
+    );
+    assert_eq!(
+        resolver.module_files.table_answered, 0,
+        "with the table answering nothing in this lookup: {:?}",
+        resolver.module_files
+    );
+    assert_eq!(
+        resolver.module_files.asked, 4,
+        "and the guard did not stop asking spellings: full bare, full prefixed, the stripped bare \
+         hit and its prefixed twin, all four seeks spent before the guess: {:?}",
+        resolver.module_files
+    );
+
+    // The guard's other side, and the reason it is a guard rather than a ban: a table answer the
+    // caller *can* search with still ends the search, at the same cost as before.
+    let mut answered = Resolver::new(&store, ResolutionOptions::default());
+    let cross = answered
+        .module_files("gamma::model::Widget", &importer, true, &wanted)
+        .expect("a cross-package lookup whose file holds the name");
+    assert_eq!(
+        cross,
+        vec![RepoPath::new("crates/gamma/src/model.rs").expect("valid path")],
+        "the package the path named, by a reading the guess cannot produce — `src` is not a \
+         segment of a module path, so no anchor list builds this file from \
+         `crates/beta/src/thing/`"
+    );
+    assert_eq!(
+        answered.module_files.table_answered_named, 1,
+        "recorded as a table answer naming a package, which is the whole of the table's value: \
+         {:?}",
+        answered.module_files
+    );
+    assert_eq!(
+        answered.module_files.asked, 3,
+        "and the cross-package path cost three seeks — the full path missed at both spellings, \
+         the stripped reading `gamma::model` hit, and the guard returned it because that file \
+         holds `Widget`: {:?}",
+        answered.module_files
+    );
+
+    // The off arm, because a baseline that moves is not a baseline: with the table off, the lookup
+    // is `files_for_module` alone, exactly as it was before this change.
+    let mut off = Resolver::new(
+        &store,
+        ResolutionOptions {
+            use_module_table: false,
+            ..ResolutionOptions::default()
+        },
+    );
+    let guessed = off
+        .module_files("model::Widget", &importer, true, &wanted)
+        .expect("the same lookup with the table off");
+    assert_eq!(
+        guessed,
+        files_for_module("model::Widget", &importer, true),
+        "the off arm is the unguarded guess, filtered by nothing"
+    );
+    assert_eq!(
+        off.module_files.lookups, 0,
+        "and it records no lookup, as it always did: {:?}",
+        off.module_files
+    );
+}
+
+#[test]
+fn a_super_path_never_reaches_the_table_at_all() {
+    // Requirement 3 of the change: the fall-through must not weaken the `super` behaviour, and the
+    // behaviour itself says a path containing a climb is left to the guess *entirely* —
+    // [`Resolver::module_qualified_names`] returns no spelling for it rather than half-answering a
+    // path whose meaning depends on where the importer stands.
+    //
+    // The guard sits inside the loop over those spellings. On a `super` path the loop runs zero
+    // times, so there is no table hit to fall through *from*: the guard is unreachable here by
+    // construction, and this pins the construction rather than leaving it to be inferred. `asked`
+    // is the observable — zero seeks spent, whatever the table holds about the same module.
+    //
+    // And the tree makes the table's silence worth having: `src/inner.rs` carries an `impl Item`
+    // block, which the extractor indexes as a `Module` row named `Item`. A spelling of this path
+    // would have hit that row — a file that *does* hold the name, so the guard would have returned
+    // it and the ladder would never have learned that `super::inner` means something else. That is
+    // the hazard of half-spelling a climb, and it is why the refusal to spell stays.
+    let tree = TempTree::new("super-never-spelled");
+    tree.write(
+        "src/inner.rs",
+        "pub struct Item;\nimpl Item {\n    pub fn name(&self) -> u8 {\n        1\n    }\n}\n",
+    );
+    tree.write("src/lib.rs", "pub mod inner;\npub mod outer;\n");
+    tree.write(
+        "src/outer/mod.rs",
+        "use super::inner::Item;\n\npub fn name() -> u8 {\n    Item.name()\n}\n",
+    );
+    let store = tree.index_without_resolving();
+    let importer = RepoPath::new("src/outer/mod.rs").expect("valid path");
+    let wanted = SearchedFor::Declaration("Item".to_owned());
+
+    let mut resolver = Resolver::new(&store, ResolutionOptions::default());
+    let files = resolver
+        .module_files("super::inner::Item", &importer, true, &wanted)
+        .expect("a climb");
+    assert_eq!(
+        files,
+        vec![RepoPath::new("src/inner.rs").expect("valid path")],
+        "one anchor up from `src/outer/` reads `inner`, and that is the only file a climb can mean"
+    );
+    assert_eq!(
+        resolver.module_files.asked, 0,
+        "and no qualified name was sought: a `super` path does not reach the table: {:?}",
+        resolver.module_files
+    );
+    assert_eq!(
+        resolver.module_files.guess_answered, 1,
+        "the guess answers, as the documented rule says it must: {:?}",
+        resolver.module_files
+    );
+    assert_eq!(
+        resolver.module_files.table_answered, 0,
+        "with nothing attributed to the table, guard or no guard: {:?}",
+        resolver.module_files
+    );
+}
+
+#[test]
+fn a_super_path_is_answered_through_the_ladder_by_the_import_that_named_it() {
+    // The same rule one level up, because the lookup's counters say nothing about the edge a caller
+    // reads out of the index: the climb must still be decided by `import_binding`, carrying the
+    // spelled module, exactly as it was before the fall-through existed.
+    let tree = TempTree::new("super-through-the-ladder");
+    tree.write(
+        "src/inner.rs",
+        "pub struct Item;\nimpl Item {\n    pub fn name(&self) -> u8 {\n        1\n    }\n}\n",
+    );
+    tree.write("src/lib.rs", "pub mod inner;\npub mod outer;\n");
+    tree.write(
+        "src/outer/mod.rs",
+        "use super::inner::Item;\n\npub fn name() -> u8 {\n    Item.name()\n}\n",
+    );
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    let import = relations_of(&store, RelationKind::Imports)
+        .into_iter()
+        .find(|relation| relation.target_name == "Item")
+        .expect("the import of Item was extracted");
+    assert_eq!(
+        import.target,
+        Some(id("src/inner.rs", EntityKind::Struct, "Item")),
+        "the file the climb names: {}",
+        state_of(&import)
+    );
+    assert_eq!(
+        rung_name(&decided_by(&import)),
+        "import_binding",
+        "and the import answers it: {}",
+        state_of(&import)
+    );
+    assert_eq!(
+        import_module(&import).as_deref(),
+        Some("super::inner::Item"),
+        "with the climb spelled out in the module, unmodified: {}",
+        state_of(&import)
+    );
+}
+
+#[test]
+fn the_shadow_clause_and_the_glob_refusal_run_ahead_of_the_module_lookup() {
+    // Requirement 4: state whether the fall-through can reach `declare`'s shadow clause or the
+    // glob ordering, and pin what you find. What the code says is that **neither is reachable**,
+    // and both for a reason worth recording rather than assuming:
+    //
+    // * The shadow clause is asked **before the lookup exists**. [`Resolver::via_import_binding`]
+    //   declines when the occurrence's own scope declares the name, and that test runs over the
+    //   scope chain; `module_files` is not called until the rung has decided to search. The guard
+    //   changes what one binding's *file list* contains — it never adds or removes a binding, so a
+    //   shadowed name is refused exactly as often as it was. The `make` row below is the proof: a
+    //   bare relative import, whose lookup the guard *would* have fallen through, declined before
+    //   reaching it and stayed on the parameter.
+    // * The glob is refused **ahead of the ladder**: `decide` answers `unresolved|unsupported` for an
+    //   `Imports` whose local name is `*`, before R1, and `targets_of` refuses one too. A
+    //   fall-through cannot reach a relation that never gets to a rung — but the ordering is a claim
+    //   about `decide`'s shape, and an order is easy to reorder silently, so the state is pinned.
+    //
+    // `other` is the case the two clauses must not disturb from the other side: the name is *not*
+    // shadowed there, the import must still answer, and it must still answer with the module.
+    let tree = TempTree::new("scope-and-glob-ahead-of-the-guard");
+    tree.write(
+        "src/model.rs",
+        "pub struct Entry;\npub fn entry(value: u8) -> u8 {\n    value\n}\n",
+    );
+    tree.write("src/lib.rs", "pub mod model;\npub mod service;\n");
+    tree.write(
+        "src/service.rs",
+        "use model::entry;\nuse crate::model::*;\n\n\
+         pub fn make(entry: u8) -> u8 {\n    entry\n}\n\n\
+         pub fn other() -> u8 {\n    entry(1)\n}\n",
+    );
+    let mut store = tree.index_without_resolving();
+    resolve_all(&mut store, ResolutionOptions::default()).expect("resolve");
+
+    // The shadowed occurrence: refused by the scope rule, on a path whose lookup the guard changed.
+    let all = relations_of(&store, RelationKind::References);
+    let shadowed = references_from(&all, "make", "entry");
+    assert_eq!(
+        shadowed[0].target,
+        Some(id("src/service.rs", EntityKind::Parameter, "make.entry")),
+        "the parameter shadows the import inside the function that declares it, and the refusal \
+         happens before any file list exists: {}",
+        state_of(shadowed[0])
+    );
+    assert_eq!(
+        rung_name(&decided_by(shadowed[0])),
+        "same_file",
+        "and the scope rule answered it, not the import: {}",
+        state_of(shadowed[0])
+    );
+
+    // The unshadowed occurrence, same binding, same path: the import answers, with the module.
+    let elsewhere = references_from(&all, "other", "entry");
+    assert_eq!(
+        rung_name(&decided_by(elsewhere[0])),
+        "import_binding",
+        "and the same import still answers everywhere the parameter is not in scope: {}",
+        state_of(elsewhere[0])
+    );
+    assert_eq!(
+        import_module(elsewhere[0]).as_deref(),
+        Some("model::entry"),
+        "with the module the statement wrote — the fact this guard exists to keep: {}",
+        state_of(elsewhere[0])
+    );
+
+    // The glob: refused at the head of `decide`, in exactly one row, and unsearchable by design.
+    let globs: Vec<crate::model::Relation> = relations_of(&store, RelationKind::Imports)
+        .into_iter()
+        .filter(|relation| relation.target_name == "*")
+        .collect();
+    assert_eq!(
+        globs.len(),
+        1,
+        "one `use ...::*;` in this file, one row — a fall-through cannot turn a refused class into \
+         a second row or a decided one"
+    );
+    assert!(
+        matches!(
+            &globs[0].resolution,
+            ResolutionState::Unresolved {
+                reason: UnresolvedReason::Unsupported
+            }
+        ),
+        "a glob binds no name, so it is refused ahead of the ladder rather than searched through \
+         it: {}",
+        state_of(&globs[0])
+    );
+    assert!(
+        import_module(&globs[0]).is_none(),
+        "and it carries no decision a lookup could have produced: {}",
+        state_of(&globs[0])
     );
 }
