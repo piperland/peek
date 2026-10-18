@@ -273,16 +273,9 @@ mutate "$RESOLVER" '                if searchable {' '                if true {'
 # falls from 15/15 to 14/15 and the floor of 100 fails. Read the header note above for
 # what this dimension could not see without the label, and why the label is the honest
 # way to make the metric notice the rule.
-mutate "$REGISTRY" '        node_types: &[
-            "identifier",
-            "type_identifier",
-            "field_identifier",
-        ],' '        node_types: &[
-            "identifier",
-            "type_identifier",
-            "field_identifier",
-            "scoped_identifier",
-        ],' negative_references "$BASE_NEGATIVE"
+mutate "$REGISTRY" '        node_types: &["identifier", "type_identifier", "field_identifier"],' \
+  '        node_types: &["identifier", "type_identifier", "field_identifier", "scoped_identifier"],' \
+  negative_references "$BASE_NEGATIVE"
 
 # The same mutation, re-applied, read against the column that must *not* move: a
 # placement that was right stays right when the module is dropped. This is the guard
