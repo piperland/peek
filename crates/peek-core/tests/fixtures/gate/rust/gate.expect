@@ -237,6 +237,17 @@ reference | src/lib.rs | summarise | MAX_ROWS
 reference | src/lib.rs | summarise | entries
 reference | src/lib.rs | counted | body
 
+# `report::render(&kept, &mut out)` uses two names, and each is labelled because the
+# pass now records only them. **Two labelled additions, and they are evidence for the
+# reference rule's removal of `scoped_identifier`** (see its comment in
+# `src/extract/registry.rs`): the components' rows — `report`, resolved to this file's
+# module, and `render`, resolved to `report.rs`'s function — survive alone, so dropping
+# the whole-path row loses nothing the source named. The call edge goes through the call
+# rule, not the reference rule, and `call | src/lib.rs | function | summarise | render`
+# above already claims it.
+reference | src/lib.rs | summarise | report
+reference | src/lib.rs | summarise | render
+
 # Where those four must point. Read the source for each:
 #
 #   * `kept` and `out` are `let` bindings in the body of `summarise`. Nothing in
@@ -266,6 +277,17 @@ no_reference | src/lib.rs | summarise | lib.rs
 # declared inside a module inside a module, and its body names `super::super` and
 # `summarise` but never itself.
 no_reference | src/lib.rs | outer.inner.deep | deep
+
+# **A whole qualified path is not a reference occurrence.** `summarise` writes
+# `report::render(..)`; the names it uses are `report` and `render`, each labelled above,
+# and the path is their composition, not a third name. The reference rule stopped
+# declaring `scoped_identifier` for exactly this reason (see its comment in
+# `src/extract/registry.rs`), and this line is the control that lets the gate notice a
+# restoration: without it, no scored population contains the path rows at all, so the
+# metric cannot see the rule either way — which is written plainly in the header of
+# `scripts/language-gate-mutation-check.sh`. The call edge this source also writes is
+# claimed above by the `call` line, through the call rule.
+no_reference | src/lib.rs | summarise | report::render
 
 # ---------------------------------------------------------------------------
 # src/model.rs
@@ -678,7 +700,7 @@ floor | symbol_precision | 100
 floor | symbol_recall | 100
 floor | definitions | 100
 floor | calls | 97.50
-floor | references | 96.14
+floor | references | 96.42
 floor | resolution_correctness | 75.00
 floor | imports | 86.66
 floor | imports_module_retained | 100

@@ -31,14 +31,14 @@ the figure the same run produced.
 | `symbol_recall` | 96.67% (87/90) | 96.66 |
 | `definitions` | 60.23% (53/88) | 60.22 |
 | `calls` | 97.50% (39/40) | 97.50 |
-| `references` | 96.15% (25/26) | 96.14 |
+| `references` | 96.43% (27/28) | 96.42 |
 | `resolution_correctness` | 75.00% (36/48) | 75.00 |
 | `imports` | 86.67% (13/15) | 86.66 |
 | `imports_module_retained` | 100.00% (3/3) | 100 |
 | `members` | 91.67% (22/24) | 91.66 |
 | `inheritance_subject` | 100.00% (5/5) | 100.00 |
 | `inheritance_base` | 100.00% (5/5) | 100.00 |
-| `negative_references` | 100.00% (14/14) | 100.00 |
+| `negative_references` | 100.00% (15/15) | 100.00 |
 | `negative_inheritance` | 100.00% (3/3) | 100.00 |
 | `incremental` | 100.00% (2288/2288) | 100.00 |
 | `query` | 100.00% (30/30) | 100.00 |
@@ -89,7 +89,7 @@ a question about one node rather than about a subtree; `tests/reference_reachabi
 pins that against the engine directly, and `tests/reference_value.rs` measures what the
 edge is worth once it exists.
 
-The remaining 1 of 26 is `src/traits.rs`'s `Saveable.save | entry`, and the gate reports
+The remaining 1 of 28 is `src/traits.rs`'s `Saveable.save | entry`, and the gate reports
 it as a miss because that line is believed wrong: `Saveable.save` has no body, so `entry`
 occurs only as the parameter's binding. It is left in place rather than corrected — see
 the note at the top of `gate.expect` for why a miss is reported and a contradiction is
