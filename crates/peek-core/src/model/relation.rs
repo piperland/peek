@@ -62,10 +62,12 @@ pub enum RelationKind {
     /// An `impl` contains a method without declaring it, and a package is not a lexical scope at all,
     /// so neither kind applies to the package row - its members are reached through the modules it
     /// contains, not by a direct edge. `Owns` was added for exactly that third fact and **is never
-    /// emitted**: nothing in `extract/` constructs one, so no row in any index has ever carried it.
-    /// The variant is retained deliberately - see `.agent/RISKS.md` R-027 for the three options and
-    /// why none is taken yet - but a reader must not infer from this table that a package-member edge
-    /// exists. It does not, and the last sentence here claimed it did.
+    /// emitted**: nothing in `extract/` constructs one - no code path, no fixture - so no row in any
+    /// index has ever carried it, and every gate that looks at membership *excludes* this kind rather
+    /// than relying on it. It is a removal candidate, tracked as a contract item with its cost and
+    /// scope; the variant stays only so that the published kind vocabulary and this enum agree while
+    /// that is decided. A reader must not infer from this table that a package-member edge exists.
+    /// It does not, and an earlier draft of this comment claimed that one did.
     ///
     /// **The two are emitted by different rules, which is why a top-level symbol has `Defines` and no
     /// `Contains` at all.** `Defines` takes the innermost enclosing module-declaring scope and falls
