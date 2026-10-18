@@ -102,11 +102,14 @@
 #      restored scoped path row joins no scored population on its own: `references` is
 #      recall over labelled rows, `resolution_correctness` is over *decided* relations
 #      and these rows are never decided, and the row would sit in the printed
-#      unlabelled-reference count — a list, not a floor. Measured before this change:
-#      emitting the nine rows moved **no** published figure. The negative label is what
-#      makes the decision visible to a floor, and it is worth exactly that: a mutation
-#      that changes nothing is evidence about the metric, and the metric needed one
-#      addition before it could see this rule at all.
+#      unlabelled-reference count — a list, not a floor. Measured at `fe6dd69`: the nine
+#      rows moved **no dimension with a floor**. What they did move was the published
+#      relation-state counts (`references` 192 rows, 93 unresolved, against 183 and 84
+#      now, with the pass's `external` reason going from nine to zero), so a reader who
+#      looked at the matrix's state table could see them, but nothing would have failed.
+#      The negative label is what makes the decision visible to a floor, and it is worth
+#      exactly that: a mutation that changes no score is evidence about the metric, and
+#      the metric needed one label before it could see this rule at all.
 #
 # Usage:
 #   ./scripts/language-gate-mutation-check.sh
