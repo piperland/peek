@@ -273,10 +273,13 @@ pub fn sexp(text: &str) -> String {
 /// The node types the engine's own reference rule matches.
 ///
 /// **Read from the specification rather than written out here.** A copy would be a
-/// second place to forget `scoped_identifier`, and forgetting it does not reduce this
-/// measurement's population — it makes [`measure`] panic on the nine rows `super::…`
-/// writes, which is loud, but loud is not the same as right. `peek_core::extract` is
-/// public, so the measurement can ask the same table the walker asks.
+/// second place to forget a node type, and the two ways it can be wrong are not
+/// symmetric: a copy that omits a type the spec emits makes [`measure`] panic on the
+/// rows written with it — which is loud, but loud is not the same as right — while a
+/// copy that names a type the spec has dropped records occurrences no relation joins
+/// to, and that is silent. `peek_core::extract` is public, so the measurement can ask
+/// the same table the walker asks. The spec no longer declares `scoped_identifier`;
+/// see the rule's comment in `src/extract/registry.rs` for what that cost.
 fn reference_node_types() -> &'static [&'static str] {
     let spec = LanguageSpec::for_language(Language::Rust).expect("rust has a spec");
     spec.references
