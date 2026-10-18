@@ -249,11 +249,8 @@ mutate "$REGISTRY" 'type_scope_nodes: &["impl_item", "trait_item"],' \
 mutate "$REGISTRY" '        "use_declaration",
         Some("argument"),' '        "mod_item",
         Some("argument"),' imports "$BASE_IMPORTS"
-mutate "$REGISTRY" '        node_types: &[
-            "identifier",
-            "type_identifier",
-            "field_identifier",
-        ],' '        node_types: &[],' references "$BASE_REFERENCES"
+mutate "$REGISTRY" '        node_types: &["identifier", "type_identifier", "field_identifier"],' \
+  '        node_types: &[],' references "$BASE_REFERENCES"
 mutate "$RESOLVER" \
   '                    && is_declaration(entity.kind())
                     && !is_binding(entity.kind())' \

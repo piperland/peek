@@ -194,11 +194,7 @@ static RUST: LanguageSpec = LanguageSpec {
         // `negative_references` to fall. Without that label no dimension would notice the
         // restoration — the metric's blindness is recorded in the script's header, which is
         // where it belongs.
-        node_types: &[
-            "identifier",
-            "type_identifier",
-            "field_identifier",
-        ],
+        node_types: &["identifier", "type_identifier", "field_identifier"],
         // `sink.text` is a `field_expression`'s `field` slot and `Sink { text: .. }` is a
         // `field_initializer`'s. Both name a member of whatever the local holds, so a name in
         // that slot is not classified by the binder that binds the receiver. Without this the
