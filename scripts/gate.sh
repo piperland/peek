@@ -37,6 +37,22 @@ rustc --version
 cargo --version
 echo "root: $ROOT"
 
+# Which tree this run describes.
+#
+# A gate result is only evidence about the commit it built. Without the SHA in the output, a captured
+# log — pasted into an evidence file, quoted in a report, kept as the record that K1-K5 were green at
+# some SHA — cannot be tied to any tree at all, and "GATE OK" becomes a claim about a run rather than
+# about code. This is the same defect the local wrapper fixed for itself (it now refuses to continue
+# unless the sandbox's HEAD equals the candidate); this file is the tracked half of that guarantee, so
+# the proof survives in git history instead of only in an ignored directory.
+echo "head: $(git rev-parse HEAD 2>/dev/null || echo 'unknown (not a git checkout)')"
+echo "dirty: $(git status --porcelain 2>/dev/null | wc -l | tr -d ' ') tracked file(s) differ from HEAD"
+# Deliberately no branch name here. A synced sandbox sits on whatever local branch it created
+# when it was first cloned and force-moves that pointer to the ref under test, so the branch a
+# checkout *reports* is not the branch that was *requested* - it would be a provenance line that
+# reads authoritatively and is wrong exactly when the SHA and the branch disagree, which is the
+# situation this block exists to catch. The head SHA identifies the tree; nothing else is needed.
+
 TARGET="${1:-full}"
 
 case "$TARGET" in
