@@ -343,7 +343,17 @@ mod tests {
                 "{target} is a first-parity target but is not in ALL"
             );
         }
-        assert!(Language::FIRST_PARITY_TARGETS.len() >= 10);
+        // Pinned to the exact cohort rather than a floor. `>= 10` over an
+        // eleven-entry list passed even if a target were dropped, which is the
+        // one failure this check exists to catch: E2 names all eleven, and a
+        // target that quietly left the list would leave parity "passing" while
+        // the contract silently shrank.
+        assert_eq!(
+            Language::FIRST_PARITY_TARGETS.len(),
+            11,
+            "E2 names eleven first-parity languages; adding or dropping one changes \
+             the contract clause and must be a deliberate act"
+        );
     }
 
     #[test]
