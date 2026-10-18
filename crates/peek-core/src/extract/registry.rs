@@ -164,11 +164,40 @@ static RUST: LanguageSpec = LanguageSpec {
         impl_type_field: "type",
     }),
     references: Some(ReferenceRule {
+        // A **whole qualified path is not a reference node.** `scoped_identifier` was declared
+        // here until the 2026-10-18 pass removed it on this fixture's measurement, not on the
+        // earlier argument. The measured population at `fe6dd69` was nine `references` rows whose
+        // text was a path — `service::describe`, `String::new` (three sources write it),
+        // `Clock::now`, `Severity::Loud`, `report::render`, `super::super` and
+        // `super::super::summarise` — and all nine were `unresolved`: the resolution pass's
+        // `external` reason count read exactly nine. R1, R4 and R5 compare an entity's declared
+        // name with the relation's name by equality, and on this fixture no entity declares a
+        // name any of the nine matches; R3 answers only from the scope evidence a call carries,
+        // and `emit_reference` writes none.
+        //
+        // Seven of the nine were duplicates in the sense that matters: every segment already had
+        // its own row from the same source — `report::render` sits beside rows for `report` and
+        // `render`, both of which the resolver decides. A scoped *call* keeps its `calls` edge
+        // through the call rule, which decomposes the path and records the called name, so the
+        // path row was never the edge a consumer would follow. The eighth,
+        // `super::super::summarise`, is carried the same way by the leaf `summarise` — a placed
+        // reference and a placed call. The ninth, `super::super`, names nothing the components
+        // carry, because `super` is not a node type that emits and no entity is called `super`:
+        // it is the spelling of a relative path, and the use it spells is already on the page
+        // twice over. The graph loses no dependency and keeps no fact a query could ask for.
+        // What it stops paying for is nine unresolved edges that cost context-pack budget to
+        // print `unresolved (external)` — a claim a reader cannot act on.
+        //
+        // **The gate can see this decision.** `gate.expect` claims `report` and `render` as
+        // `summarise`'s references and `report::render` as *not* one, and the seventh claim in
+        // `scripts/language-gate-mutation-check.sh` restores this node type and requires
+        // `negative_references` to fall. Without that label no dimension would notice the
+        // restoration — the metric's blindness is recorded in the script's header, which is
+        // where it belongs.
         node_types: &[
             "identifier",
             "type_identifier",
             "field_identifier",
-            "scoped_identifier",
         ],
         // `sink.text` is a `field_expression`'s `field` slot and `Sink { text: .. }` is a
         // `field_initializer`'s. Both name a member of whatever the local holds, so a name in
