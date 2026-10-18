@@ -151,9 +151,9 @@
           "percent": "97.50"
         },
         "references": {
-          "numerator": 25,
-          "denominator": 26,
-          "percent": "96.15"
+          "numerator": 27,
+          "denominator": 28,
+          "percent": "96.43"
         },
         "resolution_correctness": {
           "numerator": 52,
@@ -186,8 +186,8 @@
           "percent": "100.00"
         },
         "negative_references": {
-          "numerator": 14,
-          "denominator": 14,
+          "numerator": 15,
+          "denominator": 15,
           "percent": "100.00"
         },
         "negative_inheritance": {
@@ -196,8 +196,8 @@
           "percent": "100.00"
         },
         "incremental": {
-          "numerator": 2762,
-          "denominator": 2762,
+          "numerator": 2708,
+          "denominator": 2708,
           "percent": "100.00"
         },
         "query": {
@@ -261,8 +261,8 @@
           "percent": "100.00"
         },
         "references": {
-          "basis_points": 9614,
-          "percent": "96.14"
+          "basis_points": 9642,
+          "percent": "96.42"
         },
         "resolution_correctness": {
           "basis_points": 7500,
@@ -323,7 +323,7 @@
           "ambiguous": 6,
           "inferred": 19,
           "resolved": 74,
-          "unresolved": 93
+          "unresolved": 84
         }
       },
       "index_report": {
@@ -335,7 +335,7 @@
         "files_removed": 0,
         "entities_written": 101,
         "entities_removed": 0,
-        "relations_written": 402,
+        "relations_written": 393,
         "relations_undecided": 0,
         "tests_found": 0
       },

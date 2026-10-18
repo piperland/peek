@@ -2312,12 +2312,12 @@ mod tests {
                 // The call comes before the references inside it, because a node is emitted before
                 // its children are walked.
                 "calls main -> new".to_owned(),
-                // `payments::Service::new()` names three nested paths and two bare names, and each
-                // is its own occurrence. The whole paths are here because `scoped_identifier` is a
-                // declared reference node type — a target name that no resolver rung can place, and
-                // a second row for a name its components already carry.
-                "references main -> payments::Service::new".to_owned(),
-                "references main -> payments::Service".to_owned(),
+                // `payments::Service::new()` is one call expression whose callee node nests two
+                // scoped paths around three bare names. The three names are each an occurrence;
+                // the two whole paths are not references, because `scoped_identifier` is not a
+                // declared reference node type — see the rule in `registry.rs`. Every segment
+                // the source means has a row of its own, and the call edge names the callee
+                // through the call rule, which decomposes the path rather than storing it.
                 "references main -> payments".to_owned(),
                 "references main -> Service".to_owned(),
                 "references main -> new".to_owned(),

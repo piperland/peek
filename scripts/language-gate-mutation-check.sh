@@ -3,13 +3,15 @@
 #
 # # A gate that has never failed is not evidence of anything.
 #
-# This script mutates one rule - four in `src/extract/registry.rs`, two in
-# `src/resolve/mod.rs` - re-runs the gate, and asserts that the gate **fails**
-# and that it fails on the dimension the mutation should break. The mutation is
+# This script mutates one rule - five in `src/extract/registry.rs`, four of them
+# breaking a rule and the fifth restoring `scoped_identifier` to the reference table
+# it was removed from, and two in `src/resolve/mod.rs` - re-runs the gate, and asserts
+# that the gate **fails** and that it fails on the dimension the mutation should break.
+# The mutation is
 # reverted afterwards, and the tree is checked afterwards, so a run leaves
 # nothing behind.
 #
-# Six mutations, chosen because each is a plausible mistake rather than a
+# Seven mutations, chosen because each is a plausible mistake rather than a
 # nonsense one, and each should break a *different* dimension:
 #
 #   1. `macro_invocation` dropped from the call rules.
@@ -87,6 +89,27 @@
 #      `resolution_correctness`: the same three targets are still placed, by a weaker
 #      rung. That is exactly why the retention figure and not the saturated fraction is
 #      the evidence of this fix.
+#
+#   7. `scoped_identifier` restored to the reference rule's node types.
+#      The rule was removed on measurement — nine whole-path `references` rows, all
+#      `unresolved`, none placeable by any rung, seven duplicating rows their head and
+#      tail segments already carried — and this claim proves the gate notices the rule
+#      coming back. It must fail `negative_references`, because `gate.expect` now claims
+#      `summarise | report::render` as a *non*-reference: the path is the components'
+#      composition, not a third name.
+#
+#      **What this dimension could not see without that label, said plainly.** A
+#      restored scoped path row joins no scored population on its own: `references` is
+#      recall over labelled rows, `resolution_correctness` is over *decided* relations
+#      and these rows are never decided, and the row would sit in the printed
+#      unlabelled-reference count — a list, not a floor. Measured at `fe6dd69`: the nine
+#      rows moved **no dimension with a floor**. What they did move was the published
+#      relation-state counts (`references` 192 rows, 93 unresolved, against 183 and 84
+#      now, with the pass's `external` reason going from nine to zero), so a reader who
+#      looked at the matrix's state table could see them, but nothing would have failed.
+#      The negative label is what makes the decision visible to a floor, and it is worth
+#      exactly that: a mutation that changes no score is evidence about the metric, and
+#      the metric needed one label before it could see this rule at all.
 #
 # Usage:
 #   ./scripts/language-gate-mutation-check.sh
@@ -208,9 +231,11 @@ BASE_IMPORTS="$(measure imports)"
 BASE_REFERENCES="$(measure references)"
 BASE_PLACEMENT="$(measure resolution_correctness)"
 BASE_RETENTION="$(measure imports_module_retained)"
+BASE_NEGATIVE="$(measure negative_references)"
 for pair in "calls:$BASE_CALLS" "symbol_precision:$BASE_PRECISION" \
   "imports:$BASE_IMPORTS" "references:$BASE_REFERENCES" \
-  "resolution_correctness:$BASE_PLACEMENT" "imports_module_retained:$BASE_RETENTION"; do
+  "resolution_correctness:$BASE_PLACEMENT" "imports_module_retained:$BASE_RETENTION" \
+  "negative_references:$BASE_NEGATIVE"; do
   case "$pair" in
     ?*:?*) ;;
     *) fail "cannot read a baseline for ${pair%%:*}; the gate printed nothing for it" ;;
@@ -218,6 +243,8 @@ for pair in "calls:$BASE_CALLS" "symbol_precision:$BASE_PRECISION" \
 done
 printf '  calls %s, symbol_precision %s, imports %s, references %s, resolution_correctness %s\n' \
   "$BASE_CALLS" "$BASE_PRECISION" "$BASE_IMPORTS" "$BASE_REFERENCES" "$BASE_PLACEMENT"
+printf '  imports_module_retained %s, negative_references %s\n' \
+  "$BASE_RETENTION" "$BASE_NEGATIVE"
 
 mutate "$REGISTRY" 'CallRule::new("macro_invocation", "macro"),' '' calls "$BASE_CALLS"
 mutate "$REGISTRY" 'type_scope_nodes: &["impl_item", "trait_item"],' \
@@ -225,12 +252,8 @@ mutate "$REGISTRY" 'type_scope_nodes: &["impl_item", "trait_item"],' \
 mutate "$REGISTRY" '        "use_declaration",
         Some("argument"),' '        "mod_item",
         Some("argument"),' imports "$BASE_IMPORTS"
-mutate "$REGISTRY" '        node_types: &[
-            "identifier",
-            "type_identifier",
-            "field_identifier",
-            "scoped_identifier",
-        ],' '        node_types: &[],' references "$BASE_REFERENCES"
+mutate "$REGISTRY" '        node_types: &["identifier", "type_identifier", "field_identifier"],' \
+  '        node_types: &[],' references "$BASE_REFERENCES"
 mutate "$RESOLVER" \
   '                    && is_declaration(entity.kind())
                     && !is_binding(entity.kind())' \
@@ -246,6 +269,16 @@ mutate "$RESOLVER" \
 # only moved the fraction would have tuned the wrong column.
 mutate "$RESOLVER" '                if searchable {' '                if true {' \
   imports_module_retained "$BASE_RETENTION"
+
+# The seventh, and the one that keeps a removal from being undone quietly. Restoring
+# `scoped_identifier` makes the walker emit a whole-path reference for `report::render`,
+# and `gate.expect` claims that occurrence as a non-reference — so `negative_references`
+# falls from 15/15 to 14/15 and the floor of 100 fails. Read the header note above for
+# what this dimension could not see without the label, and why the label is the honest
+# way to make the metric notice the rule.
+mutate "$REGISTRY" '        node_types: &["identifier", "type_identifier", "field_identifier"],' \
+  '        node_types: &["identifier", "type_identifier", "field_identifier", "scoped_identifier"],' \
+  negative_references "$BASE_NEGATIVE"
 
 # The same mutation, re-applied, read against the column that must *not* move: a
 # placement that was right stays right when the module is dropped. This is the guard
@@ -292,6 +325,10 @@ printf '  calls back at %s, matching the baseline\n' "$AFTER_ALL"
 
 printf '\n\033[1;32mMUTATION CHECK OK\033[0m\n'
 printf 'Each gate assertion failed when the rule behind it was removed.\n'
+printf 'The seventh removes nothing: it restores scoped_identifier, and the gate fails\n'
+printf 'on negative_references because a labelled non-reference is emitted again. That\n'
+printf 'label is the only thing that made the reference rule visible for whole paths;\n'
+printf 'the nine rows it replaced moved no other figure, exactly as the header says.\n'
 printf 'resolution_correctness FELL under its mutation, which is the column noticing a\n'
 printf 'placement rule being broken rather than a class of rows being withdrawn. It\n'
 printf 'reads 100.00 on this fixture, so the fraction is saturated and the wrong-edge\n'
